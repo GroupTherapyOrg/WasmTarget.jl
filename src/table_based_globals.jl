@@ -25,7 +25,7 @@ global binding) to its index and, when it has one, its constant initializer expr
                                      _imported_wasm_tables::WasmTableImporter)
         local self
         self = new(translator, _table_heap_type, LinkedHashMap{GlobalRef,Tuple{Int,Union{WasmBuilder.InstructionsBuilder,Nothing}}}(),
-            Late{WasmBuilder.TableBuilder}("dart2wasm/lib/table_based_globals.dart:38 TypeSpecificGlobalTable._definedWasmTable",
+            Late{WasmBuilder.TableBuilder}(late"dart2wasm/lib/table_based_globals.dart:38 TypeSpecificGlobalTable._definedWasmTable",
                 () -> WasmBuilder.define(main_module(self.translator).tables[], WasmBuilder.IR.RefType(self._table_heap_type; nullable = true), length(self._table))),
             _imported_wasm_tables)
         return self

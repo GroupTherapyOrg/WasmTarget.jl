@@ -2,12 +2,79 @@
 # and dart2wasm declare where an object's parts are built after it (a module and the functions that
 # point back to it, the translator and the collaborators it builds with itself).
 
+# A late field's anchor: dart's declaration of the field, written where the cell is made and resolved
+# when the package loads, as each @parity anchor is (L213, check_late_anchors). A cell takes only a
+# LateAnchor, and only the string macro below makes one, at its expansion while the package loads, so no
+# cell's anchor goes unread: a bare string is no anchor a cell takes.
+
+"""
+    LateAnchor
+
+A late field's anchor, `"<file>.dart:<line> <Class.field>"`, made by `late"…"` (`@late_str`) where it
+expands: its one constructor takes the module and line the anchor is written at and records the three in
+`LATE_ANCHORS` for the load's check, so no anchor is made unrecorded.
+
+precedent(julia: base/regex.jl:23 Regex), the value `r"…"` makes from its literal where the macro
+expands, its pattern compiled there so a bad one is refused before any code runs. Julia's differs: the
+anchor's resolution needs every file loaded and the pinned checkout, so the load resolves it
+(check_late_anchors), where Regex compiles at the literal.
+"""
+@quarantine pin"precedent(julia: base/regex.jl:23 Regex)" "a late field's anchor, a value the string macro makes where it expands, as Julia's r\"\" makes a Regex from its literal there; Julia differs: the anchor is resolved at the pin when the package loads, where Regex compiles at the literal" Base.push! struct LateAnchor
+    anchor::String
+    function LateAnchor(anchor::String, mod::Module, source::LineNumberNode)
+        push!(LATE_ANCHORS, (anchor, mod, something(source.file, :none), source.line))
+        return new(anchor)
+    end
+end
+
+"""
+    LATE_ANCHORS
+
+Every `late"…"` WasmTarget's files write: `(anchor, module, file, line)`, pushed where the macro expands,
+while the package loads, and read by `check_late_anchors` when it has loaded.
+"""
+@quarantine pin"precedent(julia: base/loading.jl:2315 _require_dependencies)" "the late anchors written while the package loads, a list the macro fills and the load's check reads, as Julia's loader fills _require_dependencies with each (module, path, ...) the files being precompiled include (precedent(julia: base/loading.jl:2315 _require_dependencies)) and reads it once the package is loaded; Julia differs: the entries are anchors, read against the pinned checkout" Core.Tuple const LATE_ANCHORS = Tuple{String,Module,Symbol,Int}[]
+
+"""
+    late"<file>.dart:<line> <Class.field>"
+
+The anchor of a late field (`LateAnchor`), recorded in `LATE_ANCHORS` where it is written; an anchor of
+any form but a dart file's is refused there, located. The load resolves each at the pin
+(check_late_anchors).
+"""
+@quarantine pin"precedent(julia: base/regex.jl:123 r_str)" "a late field's anchor is written as a string macro, which makes its value where it expands, as Julia's r_str makes a Regex there (precedent(julia: base/regex.jl:123 r_str)); Julia differs: the value records the anchor with its module and line, for the load to resolve at the pin" Core.throw macro late_str(anchor)
+    local a = parse_anchor(anchor)
+    (a !== nothing && a.pin === :dart) ||
+        throw(ConstructionViolation("late\"…\"", "$(_at(__source__)): $(repr(anchor)) reads as no dart anchor \"<file>.dart:<line> <Class.field>\""))
+    return LateAnchor(anchor, __module__, __source__)
+end
+
+"""
+    check_late_anchors(mod, sdk) -> Int
+
+The late fields' check: the anchor of every `late"…"` of `mod` or a submodule names a line that declares
+its field in `sdk`, the checkout of dart-lang/sdk at `PIN` (`_anchor_fault`, the @parity anchors' one
+reading); throws a `ConstructionViolation` listing each that does not, with its file and line.
+"""
+@quarantine pin"pkg/analyzer/lib/src/dart/resolver/comment_reference_resolver.dart:29 CommentReferenceResolver.resolve" "every late field's anchor resolves at the pin, as dart's analyzer resolves each reference to its declaration (pkg/analyzer/lib/src/dart/resolver/comment_reference_resolver.dart:29 CommentReferenceResolver.resolve); Julia differs: the anchor names a declaration of a pinned checkout, not of the same program, and one that does not resolve refuses the load" Base.empty! function check_late_anchors(mod::Module, sdk::String)::Int
+    local out = String[]
+    for (anchor, m, file, line) in unique(LATE_ANCHORS)
+        _within(m, mod) || continue
+        local f = _anchor_fault(sdk, anchor)
+        f === nothing || push!(out, "$(basename(string(file))):$line late\"$anchor\": $f")
+    end
+    empty!(_PIN_LINES)
+    isempty(out) || throw(ConstructionViolation("check_late_anchors", join(out, "; ")))
+    return 0
+end
+
 """
     Late{T}(anchor)
     Late{T}(anchor, init)
 
 A cell for a value of type `T`: dart's `late final` field, `anchor` the field's own
-`"<file>.dart:<line> <Class.field>"`. `c[] = v` assigns it once; `c[]` reads it.
+`late"<file>.dart:<line> <Class.field>"` (a `LateAnchor`, which only `@late_str` writes, so the load
+resolves every cell's anchor at the pin). `c[] = v` assigns it once; `c[]` reads it.
 
 `Late{T}(anchor)` is dart's `late final T x;`: a read before the assignment rejects as
 `Unported(anchor)`, since the code that assigns the field is the code not yet ported, and a second
@@ -26,13 +93,13 @@ the field's dart anchor when it is read unassigned.
 
 formal(dev/formal/LateCell.tla): a value kept once assigned, an init run to completion once, a cycle or misuse rejected
 """
-@quarantine "dart's `late final` field, which Julia's structs lack: a cell set once or initialized on first read" Core.Function mutable struct Late{T}
+@quarantine pin"precedent(dart: sdk/lib/_internal/js_runtime/lib/late_helper.dart:99 _InitializedCell)" "dart's `late final` field, which Julia's structs lack: a cell set once or initialized on first read, its value untyped, its initializer and the name a refusal names beside it, as dart2js lowers a late variable to a cell holding its name, its value and its initializer (precedent(dart: sdk/lib/_internal/js_runtime/lib/late_helper.dart:99 _InitializedCell), and _Cell at :48 for one without an initializer); Julia differs: one cell serves both forms, a state byte where dart's sentinel is the cell itself, and the name is the field's pinned anchor" Core.Function mutable struct Late{T}
     value::Any                       # T once assigned; held untyped so one compiled body serves every T
     state::UInt8                     # 0 unassigned, 1 its initializer running, 2 assigned
     anchor::String
     init::Union{Function,Nothing}
-    Late{T}(anchor::String) where {T} = new{T}(nothing, 0x00, anchor, nothing)
-    Late{T}(anchor::String, init::Function) where {T} = new{T}(nothing, 0x00, anchor, init)
+    Late{T}(anchor::LateAnchor) where {T} = new{T}(nothing, 0x00, anchor.anchor, nothing)
+    Late{T}(anchor::LateAnchor, init::Function) where {T} = new{T}(nothing, 0x00, anchor.anchor, init)
 end
 
 # the read and the assignment are each one compiled body over every Late, `T` passed as a value

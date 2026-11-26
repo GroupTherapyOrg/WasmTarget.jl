@@ -22,7 +22,7 @@
         # beyond dart's checks (D10): a name the name section writes is valid UTF-8, refused where it is recorded
         function_name === nothing || isvalid(function_name) || reject!(InvalidModule("wasm_builder/lib/src/builder/function.dart:19 FunctionBuilder: the function name $(repr(function_name)) is not valid UTF-8"), "FunctionBuilder")
         body = InstructionsBuilder(module_builder, type.inputs, type.outputs)
-        new(index, type, function_name, module_builder.module_, false, false, nothing, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> IR.Indexable__global_id(module_builder.module_)), module_builder, body, nothing)
+        new(index, type, function_name, module_builder.module_, false, false, nothing, Late{String}(late"wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), Late{Int}(late"wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> IR.Indexable__global_id(module_builder.module_)), module_builder, body, nothing)
     end
 end
 

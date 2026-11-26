@@ -13,10 +13,10 @@
     # the struct's one constructor, every field unassigned: dart's DataSegment and
     # DataSegment.uninitialized are the anchored functions below, each making the value through it
     DataSegment(::Val{:uninitialized}) = new(
-        Late{Int}("wasm_builder/lib/src/ir/data_segment.dart:12 BaseDataSegment.index"),
-        Late{Union{Memory,Nothing}}("wasm_builder/lib/src/ir/data_segment.dart:13 BaseDataSegment.memory"),
-        Late{Union{Int,Nothing}}("wasm_builder/lib/src/ir/data_segment.dart:14 BaseDataSegment.offset"),
-        Late{Vector{UInt8}}("wasm_builder/lib/src/ir/data_segment.dart:26 DataSegment.content"))
+        Late{Int}(late"wasm_builder/lib/src/ir/data_segment.dart:12 BaseDataSegment.index"),
+        Late{Union{Memory,Nothing}}(late"wasm_builder/lib/src/ir/data_segment.dart:13 BaseDataSegment.memory"),
+        Late{Union{Int,Nothing}}(late"wasm_builder/lib/src/ir/data_segment.dart:14 BaseDataSegment.offset"),
+        Late{Vector{UInt8}}(late"wasm_builder/lib/src/ir/data_segment.dart:26 DataSegment.content"))
 end
 
 # dart's constructors of the abstract class assign its fields, which DataSegment's struct holds;

@@ -24,8 +24,8 @@ positional and required. Its context is its callee, argument 1, when the callee 
             positional::Vector{Union{Nothing,NirConst}}, named::LinkedHashMap{String,Union{Nothing,NirConst}})
         local self
         self = new(type_param_count, positional, named, takes_context_or_receiver,
-                   Late{Vector{String}}("dart2wasm/lib/param_info.dart:26 ParameterInfo.names", () -> sort!(collect(keys(self.named)))),
-                   Late{Dict{String,Int}}("dart2wasm/lib/param_info.dart:28 ParameterInfo.nameIndex",
+                   Late{Vector{String}}(late"dart2wasm/lib/param_info.dart:26 ParameterInfo.names", () -> sort!(collect(keys(self.named)))),
+                   Late{Dict{String,Int}}(late"dart2wasm/lib/param_info.dart:28 ParameterInfo.nameIndex",
                        () -> Dict{String,Int}(n => length(self.positional) + i - 1 for (i, n) in enumerate(self.names[]))))
         return self
     end
@@ -39,7 +39,7 @@ a symbol `gensym` makes, which no program value is; a static `final`, a Late cel
 first read.
 """
 @parity "dart2wasm/lib/param_info.dart:35 ParameterInfo.defaultValueSentinel" const ParameterInfo_default_value_sentinel = Late{NirConst}(
-    "dart2wasm/lib/param_info.dart:35 ParameterInfo.defaultValueSentinel", () -> NirConst(Core.Const(gensym("Default value sentinel"))))
+    late"dart2wasm/lib/param_info.dart:35 ParameterInfo.defaultValueSentinel", () -> NirConst(Core.Const(gensym("Default value sentinel"))))
 
 @parity "dart2wasm/lib/param_info.dart:39 ParameterInfo.paramCount" param_count(self::ParameterInfo)::Int = length(self.positional) + length(self.named)
 

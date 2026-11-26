@@ -19,7 +19,7 @@ supertype of both; dart constructs none, each table being one of its two subclas
     const _id::Late{Int}
     # dart's constructor (line 21), the struct's one inner constructor
     Table(enclosing_module::AbstractModule, finalizable_index::Finalizable{Int}, type::RefType, min_size::Int, max_size::Union{Int,Nothing}) =
-        new(finalizable_index, type, min_size, max_size, enclosing_module, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> Indexable__global_id(enclosing_module)))
+        new(finalizable_index, type, min_size, max_size, enclosing_module, Late{String}(late"wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), Late{Int}(late"wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> Indexable__global_id(enclosing_module)))
 end
 
 """A table defined in a module."""
@@ -35,7 +35,7 @@ end
     const _id::Late{Int}
     # dart's constructor (line 49), the struct's one inner constructor
     DefinedTable(enclosing_module::AbstractModule, finalizable_index::Finalizable{Int}, type::RefType, min_size::Int, max_size::Union{Int,Nothing}) =
-        new(finalizable_index, type, min_size, max_size, enclosing_module, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> Indexable__global_id(enclosing_module)))
+        new(finalizable_index, type, min_size, max_size, enclosing_module, Late{String}(late"wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), Late{Int}(late"wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> Indexable__global_id(enclosing_module)))
 end
 
 """An imported table."""
@@ -52,7 +52,7 @@ end
     const _id::Late{Int}
     # dart's constructor (line 85), the struct's one inner constructor
     ImportedTable(enclosing_module::AbstractModule, module_::String, name::String, finalizable_index::Finalizable{Int}, type::RefType, min_size::Int, max_size::Union{Int,Nothing}) =
-        new(finalizable_index, type, min_size, max_size, enclosing_module, Late{String}("wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), module_, name, Late{Int}("wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> Indexable__global_id(enclosing_module)))
+        new(finalizable_index, type, min_size, max_size, enclosing_module, Late{String}(late"wasm_builder/lib/src/ir/exports.dart:10 Exportable.exportedName"), module_, name, Late{Int}(late"wasm_builder/lib/src/ir/indexable.dart:9 Indexable._id", () -> Indexable__global_id(enclosing_module)))
 end
 
 @parity "wasm_builder/lib/src/ir/table.dart:114 TableExport" struct TableExport <: Export

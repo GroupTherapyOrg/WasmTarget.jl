@@ -49,7 +49,7 @@ rejection(f) = try; f(); nothing; catch e; e isa W.RejectionError ? e.rejection 
     @test vtable.type == IR.RefType(layouter._vtable_base_struct_uninitialized[]; nullable = false) && !vtable.mutable
     local function_type = base.fields[D.FieldIndex_closure_runtime_type() + 1]
     @test function_type.type == layouter.function_type_type[] && !function_type.mutable
-    # an instantiation context's closure is a #ClosureBase (closures.dart:260)
+    # an instantiation context's closure is a #ClosureBase (closures.dart:273, the genericClosure field)
     @test layouter.instantiation_context_base_struct[].fields[D.FieldIndex_instantiation_context_inner() + 1].type == IR.RefType(base; nullable = false)
 end
 

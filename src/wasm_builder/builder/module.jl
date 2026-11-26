@@ -29,10 +29,10 @@
         isvalid(module_name) || reject!(InvalidModule("wasm_builder/lib/src/builder/module.dart:48 ModuleBuilder: the module name $(repr(module_name)) is not valid UTF-8"), "ModuleBuilder")
         local m = IR.Module_uninitialized()
         local b = new(m, module_name, source_map_url, watch_points,
-            Late{TypesBuilder}("wasm_builder/lib/src/builder/module.dart:30 ModuleBuilder.types"), Late{FunctionsBuilder}("wasm_builder/lib/src/builder/module.dart:31 ModuleBuilder.functions"),
-            Late{ElementsBuilder}("wasm_builder/lib/src/builder/module.dart:32 ModuleBuilder.elements"), Late{TablesBuilder}("wasm_builder/lib/src/builder/module.dart:33 ModuleBuilder.tables"),
-            Late{MemoriesBuilder}("wasm_builder/lib/src/builder/module.dart:34 ModuleBuilder.memories"), Late{TagsBuilder}("wasm_builder/lib/src/builder/module.dart:35 ModuleBuilder.tags"),
-            DataSegmentsBuilder(), Late{GlobalsBuilder}("wasm_builder/lib/src/builder/module.dart:37 ModuleBuilder.globals"), ExportsBuilder(), nothing,
+            Late{TypesBuilder}(late"wasm_builder/lib/src/builder/module.dart:30 ModuleBuilder.types"), Late{FunctionsBuilder}(late"wasm_builder/lib/src/builder/module.dart:31 ModuleBuilder.functions"),
+            Late{ElementsBuilder}(late"wasm_builder/lib/src/builder/module.dart:32 ModuleBuilder.elements"), Late{TablesBuilder}(late"wasm_builder/lib/src/builder/module.dart:33 ModuleBuilder.tables"),
+            Late{MemoriesBuilder}(late"wasm_builder/lib/src/builder/module.dart:34 ModuleBuilder.memories"), Late{TagsBuilder}(late"wasm_builder/lib/src/builder/module.dart:35 ModuleBuilder.tags"),
+            DataSegmentsBuilder(), Late{GlobalsBuilder}(late"wasm_builder/lib/src/builder/module.dart:37 ModuleBuilder.globals"), ExportsBuilder(), nothing,
             ExtraCustomSection[], nothing)
         b.functions[] = FunctionsBuilder(b)
         b.elements[] = ElementsBuilder(b)

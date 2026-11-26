@@ -56,13 +56,13 @@ A Julia function takes no type arguments, so in Julia `typeCount` is 0.
         new(vtable_base_index, type_count, max_positional_count, vtable_struct, closure_struct, _index_of_combination,
             instantiation_context_struct,
             IdDict{WasmBuilder.ModuleBuilder,Vector{WasmBuilder.IR.BaseFunction}}(),
-            Late{Function}("dart2wasm/lib/closures.dart:89 ClosureRepresentation._instantiationTrampolinesGenerator"),
+            Late{Function}(late"dart2wasm/lib/closures.dart:90 ClosureRepresentation._instantiationTrampolinesGenerator"),
             IdDict{WasmBuilder.ModuleBuilder,WasmBuilder.IR.BaseFunction}(),
-            Late{Function}("dart2wasm/lib/closures.dart:100 ClosureRepresentation._instantiationFunctionGenerator"),
+            Late{Function}(late"dart2wasm/lib/closures.dart:101 ClosureRepresentation._instantiationFunctionGenerator"),
             IdDict{WasmBuilder.ModuleBuilder,WasmBuilder.IR.BaseFunction}(),
-            Late{Function}("dart2wasm/lib/closures.dart:115 ClosureRepresentation._instantiationTypeComparisonFunctionGenerator"),
+            Late{Function}(late"dart2wasm/lib/closures.dart:116 ClosureRepresentation._instantiationTypeComparisonFunctionGenerator"),
             IdDict{WasmBuilder.ModuleBuilder,WasmBuilder.IR.BaseFunction}(),
-            Late{Function}("dart2wasm/lib/closures.dart:128 ClosureRepresentation._instantiationTypeHashFunctionGenerator"))
+            Late{Function}(late"dart2wasm/lib/closures.dart:129 ClosureRepresentation._instantiationTypeHashFunctionGenerator"))
 end
 
 """A sorted combination of named argument names, ordered by `compareTo`."""
@@ -118,13 +118,13 @@ metadata is Julia's inference, which the NIR holds, and the NIR has no constant 
         local ref(t::WasmBuilder.IR.DefType) = WasmBuilder.IR.RefType_def(t; nullable = false)
         local fixed(t::WasmBuilder.IR.StorageType) = WasmBuilder.IR.FieldType(t; mutable = false)
         self = new(translator,
-            Late{Vector{Vector{ClosureRepresentationsForParameterCount}}}("dart2wasm/lib/closures.dart:214 ClosureLayouter.representations"),
+            Late{Vector{Vector{ClosureRepresentationsForParameterCount}}}(late"dart2wasm/lib/closures.dart:214 ClosureLayouter.representations"),
             nothing,
-            Late{Bool}("dart2wasm/lib/closures.dart:222 ClosureLayouter.usesFunctionApplyWithNamedArguments"),
+            Late{Bool}(late"dart2wasm/lib/closures.dart:223 ClosureLayouter.usesFunctionApplyWithNamedArguments"),
             # Uninitialized (no field types added yet) struct for base vtable to allow cyclic types
-            Late{WasmBuilder.IR.StructType}("dart2wasm/lib/closures.dart:231 ClosureLayouter._vtableBaseStructUninitialized",
+            Late{WasmBuilder.IR.StructType}(late"dart2wasm/lib/closures.dart:231 ClosureLayouter._vtableBaseStructUninitialized",
                 () -> _define_struct(self, "#VtableBase")),
-            Late{WasmBuilder.IR.StructType}("dart2wasm/lib/closures.dart:234 ClosureLayouter.vtableBaseStruct", function ()
+            Late{WasmBuilder.IR.StructType}(late"dart2wasm/lib/closures.dart:243 ClosureLayouter.vtableBaseStruct", function ()
                 local vtable = self._vtable_base_struct_uninitialized[]
                 local index = length(vtable.fields)
                 if self.uses_function_apply_with_named_arguments[]
@@ -133,30 +133,30 @@ metadata is Julia's inference, which the NIR holds, and the NIR has no constant 
                 end
                 return vtable
             end),
-            Late{Union{Int,Nothing}}("dart2wasm/lib/closures.dart:255 ClosureLayouter.vtableDynamicClosureCallEntryIndex",
+            Late{Union{Int,Nothing}}(late"dart2wasm/lib/closures.dart:262 ClosureLayouter.vtableDynamicClosureCallEntryIndex",
                 () -> isempty(self.vtable_base_struct[].fields) ? nothing : length(self.vtable_base_struct[].fields) - 1),
-            Late{WasmBuilder.IR.StructType}("dart2wasm/lib/closures.dart:260 ClosureLayouter.instantiationContextBaseStruct",
+            Late{WasmBuilder.IR.StructType}(late"dart2wasm/lib/closures.dart:270 ClosureLayouter.instantiationContextBaseStruct",
                 () -> _define_struct(self, "#InstantiationClosureContextBase";
                     named_fields = ["genericClosure" => fixed(ref(self.closure_base_struct[]))], brand = true)),
-            Late{WasmBuilder.IR.StructType}("dart2wasm/lib/closures.dart:271 ClosureLayouter.nonGenericVtableBaseStruct",
+            Late{WasmBuilder.IR.StructType}(late"dart2wasm/lib/closures.dart:287 ClosureLayouter.nonGenericVtableBaseStruct",
                 () -> _define_struct(self, "#NonGenericVtableBase"; super_type = self.vtable_base_struct[])),
-            Late{WasmBuilder.IR.StructType}("dart2wasm/lib/closures.dart:277 ClosureLayouter.genericVtableBaseStruct",
+            Late{WasmBuilder.IR.StructType}(late"dart2wasm/lib/closures.dart:302 ClosureLayouter.genericVtableBaseStruct",
                 () -> _define_struct(self, "#GenericVtableBase"; named_fields = [
                         "closureEqualFun" => fixed(ref(self.instantiation_closure_type_comparison_function_type[])),
                         "closureHashCodeFun" => fixed(ref(self.instantiation_closure_type_hash_function_type[])),
                         "instantiateGenericClosureFun" => fixed(WasmBuilder.IR.RefType_func(; nullable = false))],
                     super_type = self.vtable_base_struct[])),
-            Late{Int}("dart2wasm/lib/closures.dart:306 ClosureLayouter.vtableInstantiationTypeComparisonFunctionIndex",
+            Late{Int}(late"dart2wasm/lib/closures.dart:327 ClosureLayouter.vtableInstantiationTypeComparisonFunctionIndex",
                 () -> length(self.generic_vtable_base_struct[].fields) - 3),
-            Late{Int}("dart2wasm/lib/closures.dart:309 ClosureLayouter.vtableInstantiationTypeHashFunctionIndex",
+            Late{Int}(late"dart2wasm/lib/closures.dart:329 ClosureLayouter.vtableInstantiationTypeHashFunctionIndex",
                 () -> length(self.generic_vtable_base_struct[].fields) - 2),
-            Late{Int}("dart2wasm/lib/closures.dart:312 ClosureLayouter.vtableInstantiationFunctionIndex",
+            Late{Int}(late"dart2wasm/lib/closures.dart:331 ClosureLayouter.vtableInstantiationFunctionIndex",
                 () -> length(self.generic_vtable_base_struct[].fields) - 1),
-            Late{WasmBuilder.IR.FunctionType}("dart2wasm/lib/closures.dart:327 ClosureLayouter.instantiationClosureTypeComparisonFunctionType",
+            Late{WasmBuilder.IR.FunctionType}(late"dart2wasm/lib/closures.dart:335 ClosureLayouter.instantiationClosureTypeComparisonFunctionType",
                 () -> WasmBuilder.define_function(types_builder(self.translator),
                     WasmBuilder.IR.ValueType[ref(self.instantiation_context_base_struct[]), ref(self.instantiation_context_base_struct[])],
                     WasmBuilder.IR.ValueType[WasmBuilder.IR.NumType_i32])),   # bool
-            Late{WasmBuilder.IR.FunctionType}("dart2wasm/lib/closures.dart:336 ClosureLayouter.instantiationClosureTypeHashFunctionType",
+            Late{WasmBuilder.IR.FunctionType}(late"dart2wasm/lib/closures.dart:344 ClosureLayouter.instantiationClosureTypeHashFunctionType",
                 () -> WasmBuilder.define_function(types_builder(self.translator),
                     WasmBuilder.IR.ValueType[ref(self.instantiation_context_base_struct[])],
                     WasmBuilder.IR.ValueType[WasmBuilder.IR.NumType_i64])),   # hash
@@ -167,7 +167,7 @@ metadata is Julia's inference, which the NIR holds, and the NIR has no constant 
             # and its struct is Any's two-field header, shared by every function object of the program; so the
             # context dart's _Closure declares is laid out here, ahead of the vtable, and #ClosureBase's
             # fields sit where dart's do, at FieldIndex.closureContext, closureVtable and closureRuntimeType
-            Late{WasmBuilder.IR.StructType}("dart2wasm/lib/closures.dart:345 ClosureLayouter.closureBaseStruct", function ()
+            Late{WasmBuilder.IR.StructType}(late"dart2wasm/lib/closures.dart:365 ClosureLayouter.closureBaseStruct", function ()
                 local closure_base = _define_struct(self, "#ClosureBase"; named_fields = [
                         "context" => WasmBuilder.IR.FieldType(closure_context_field_type(); mutable = false),
                         "vtable" => fixed(ref(self._vtable_base_struct_uninitialized[])),
@@ -176,7 +176,7 @@ metadata is Julia's inference, which the NIR holds, and the NIR has no constant 
                 # the fields codegen reads by FieldIndex.closureContext, closureVtable and closureRuntimeType, each
                 # where its constant says (dart's FieldIndex.validate row `closureClass, "context"`,
                 # class_info.dart:130, for all three): refused, located, where the struct laid out here holds another
-                local at = "dart2wasm/lib/closures.dart:345 ClosureLayouter.closureBaseStruct"
+                local at = "dart2wasm/lib/closures.dart:365 ClosureLayouter.closureBaseStruct"
                 for (index, name) in (FieldIndex_closure_context() => "context", FieldIndex_closure_vtable() => "vtable",
                                       FieldIndex_closure_runtime_type() => "functionType")
                     local actual = get(closure_base.field_names, index, nothing)
@@ -185,7 +185,7 @@ metadata is Julia's inference, which the NIR holds, and the NIR has no constant 
                 end
                 return closure_base
             end),
-            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/closures.dart:379 ClosureLayouter.functionTypeType",
+            Late{WasmBuilder.IR.RefType}(late"dart2wasm/lib/closures.dart:379 ClosureLayouter.functionTypeType",
                 function ()
                     # translator.functionTypeClass, KernelNodes' one answer (src/kernel_nodes.jl function_type_class)
                     local cls = function_type_class(self.translator)
@@ -256,7 +256,7 @@ closed world reaches the method as any other, so `Closures` creates no Lambda (s
     Lambda(::Val{:_}, function_node::NirBody, function_node_source::Symbol, enclosing_member::Core.MethodInstance,
            enclosing_member_closures::AbstractClosures, index::Int) =
         new(function_node, function_node_source, enclosing_member, enclosing_member_closures, index,
-            Late{LambdaCallTarget}("dart2wasm/lib/closures.dart:1337 Lambda.callTarget"))
+            Late{LambdaCallTarget}(late"dart2wasm/lib/closures.dart:1338 Lambda.callTarget"))
 end
 
 """
@@ -285,7 +285,7 @@ scope), laid out as any class (src/class_info.jl). A context's owner is the memb
     # LateInitializationError
     Context(::Val{:_}, owner::Core.MethodInstance, parent::Union{Context,Nothing}, contains_this::Bool) =
         new(owner, parent, ClassField[], TypeVar[], contains_this,
-            Late{WasmBuilder.IR.StructType}("dart2wasm/lib/closures.dart:1386 Context.struct"))
+            Late{WasmBuilder.IR.StructType}(late"dart2wasm/lib/closures.dart:1387 Context.struct"))
 end
 
 """
@@ -302,8 +302,8 @@ Julia's lowering gives a captured variable that is assigned).
     written::Bool
     # the struct's one constructor, tagged; dart's constructor at :1432 is its outer function
     Capture(::Val{:_}, variable::Union{ClassField,TypeVar}, is_in_initializer::Bool) =
-        new(variable, is_in_initializer, Late{Context}("dart2wasm/lib/closures.dart:1418 Capture.context"),
-            Late{Int}("dart2wasm/lib/closures.dart:1422 Capture.fieldIndex"), false)
+        new(variable, is_in_initializer, Late{Context}(late"dart2wasm/lib/closures.dart:1419 Capture.context"),
+            Late{Int}(late"dart2wasm/lib/closures.dart:1423 Capture.fieldIndex"), false)
 end
 
 """

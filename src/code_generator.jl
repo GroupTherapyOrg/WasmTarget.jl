@@ -72,11 +72,11 @@ SSAValue, so a used statement is a variable declaration and an unused one an exp
     function SynchronousProcedureCodeGenerator(::Val{:_}, translator::Translator, function_type::WasmBuilder.IR.FunctionType, member::Core.MethodInstance, body::NirBody)
         local self
         self = new(translator, function_type, member,
-            Late{WasmBuilder.InstructionsBuilder}("dart2wasm/lib/code_generator.dart:72 AstCodeGenerator.b"),
-            Late{Vector{WasmBuilder.IR.Local}}("dart2wasm/lib/code_generator.dart:73 AstCodeGenerator.paramLocals"),
-            Late{Union{Nothing,WasmBuilder.Label}}("dart2wasm/lib/code_generator.dart:74 AstCodeGenerator.returnLabel"),
-            Late{Intrinsifier}("dart2wasm/lib/code_generator.dart:76 AstCodeGenerator.intrinsifier", () -> Intrinsifier(self)),
-            Late{Closures}("dart2wasm/lib/code_generator.dart:82 AstCodeGenerator.closures"),
+            Late{WasmBuilder.InstructionsBuilder}(late"dart2wasm/lib/code_generator.dart:72 AstCodeGenerator.b"),
+            Late{Vector{WasmBuilder.IR.Local}}(late"dart2wasm/lib/code_generator.dart:73 AstCodeGenerator.paramLocals"),
+            Late{Union{Nothing,WasmBuilder.Label}}(late"dart2wasm/lib/code_generator.dart:74 AstCodeGenerator.returnLabel"),
+            Late{Intrinsifier}(late"dart2wasm/lib/code_generator.dart:76 AstCodeGenerator.intrinsifier", () -> Intrinsifier(self)),
+            Late{Closures}(late"dart2wasm/lib/code_generator.dart:82 AstCodeGenerator.closures"),
             false, Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}(), nothing, nothing, nothing,
             Dict{TypeVar,WasmBuilder.IR.Local}(), TryBlockFinalizer[],
             NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}[],
@@ -288,11 +288,11 @@ FieldReference (A62S1).
     function StaticFieldInitializerCodeGenerator(::Val{:_}, translator::Translator, function_type::WasmBuilder.IR.FunctionType, field::GlobalRef)
         local self
         self = new(translator, function_type, FieldReference(field, FieldReferenceKind_initializer),
-            Late{WasmBuilder.InstructionsBuilder}("dart2wasm/lib/code_generator.dart:72 AstCodeGenerator.b"),
-            Late{Vector{WasmBuilder.IR.Local}}("dart2wasm/lib/code_generator.dart:73 AstCodeGenerator.paramLocals"),
-            Late{Union{Nothing,WasmBuilder.Label}}("dart2wasm/lib/code_generator.dart:74 AstCodeGenerator.returnLabel"),
-            Late{Intrinsifier}("dart2wasm/lib/code_generator.dart:76 AstCodeGenerator.intrinsifier", () -> Intrinsifier(self)),
-            Late{Closures}("dart2wasm/lib/code_generator.dart:82 AstCodeGenerator.closures"),
+            Late{WasmBuilder.InstructionsBuilder}(late"dart2wasm/lib/code_generator.dart:72 AstCodeGenerator.b"),
+            Late{Vector{WasmBuilder.IR.Local}}(late"dart2wasm/lib/code_generator.dart:73 AstCodeGenerator.paramLocals"),
+            Late{Union{Nothing,WasmBuilder.Label}}(late"dart2wasm/lib/code_generator.dart:74 AstCodeGenerator.returnLabel"),
+            Late{Intrinsifier}(late"dart2wasm/lib/code_generator.dart:76 AstCodeGenerator.intrinsifier", () -> Intrinsifier(self)),
+            Late{Closures}(late"dart2wasm/lib/code_generator.dart:82 AstCodeGenerator.closures"),
             false, Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}(), nothing, nothing, nothing,
             Dict{TypeVar,WasmBuilder.IR.Local}(), TryBlockFinalizer[],
             NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}[],
@@ -365,11 +365,11 @@ SynchronousProcedureCodeGenerator does, the enclosing member the accessor's Fiel
     function StaticFieldImplicitAccessorCodeGenerator(::Val{:_}, translator::Translator, function_type::WasmBuilder.IR.FunctionType, field::GlobalRef, is_implicit_getter::Bool)
         local self
         self = new(translator, function_type, FieldReference(field, is_implicit_getter ? FieldReferenceKind_getter : FieldReferenceKind_setter),
-            Late{WasmBuilder.InstructionsBuilder}("dart2wasm/lib/code_generator.dart:72 AstCodeGenerator.b"),
-            Late{Vector{WasmBuilder.IR.Local}}("dart2wasm/lib/code_generator.dart:73 AstCodeGenerator.paramLocals"),
-            Late{Union{Nothing,WasmBuilder.Label}}("dart2wasm/lib/code_generator.dart:74 AstCodeGenerator.returnLabel"),
-            Late{Intrinsifier}("dart2wasm/lib/code_generator.dart:76 AstCodeGenerator.intrinsifier", () -> Intrinsifier(self)),
-            Late{Closures}("dart2wasm/lib/code_generator.dart:82 AstCodeGenerator.closures"),
+            Late{WasmBuilder.InstructionsBuilder}(late"dart2wasm/lib/code_generator.dart:72 AstCodeGenerator.b"),
+            Late{Vector{WasmBuilder.IR.Local}}(late"dart2wasm/lib/code_generator.dart:73 AstCodeGenerator.paramLocals"),
+            Late{Union{Nothing,WasmBuilder.Label}}(late"dart2wasm/lib/code_generator.dart:74 AstCodeGenerator.returnLabel"),
+            Late{Intrinsifier}(late"dart2wasm/lib/code_generator.dart:76 AstCodeGenerator.intrinsifier", () -> Intrinsifier(self)),
+            Late{Closures}(late"dart2wasm/lib/code_generator.dart:82 AstCodeGenerator.closures"),
             false, Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}(), nothing, nothing, nothing,
             Dict{TypeVar,WasmBuilder.IR.Local}(), TryBlockFinalizer[],
             NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}[],
@@ -415,11 +415,11 @@ a field access on a receiver Julia left abstract is dispatched (_virtualCall).
     function ImplicitFieldAccessorCodeGenerator(::Val{:_}, translator::Translator, function_type::WasmBuilder.IR.FunctionType, field::ClassField, is_implicit_getter::Bool, use_unchecked_entry::Bool)
         local self
         self = new(translator, function_type, FieldReference(field, is_implicit_getter ? FieldReferenceKind_getter : FieldReferenceKind_setter),
-            Late{WasmBuilder.InstructionsBuilder}("dart2wasm/lib/code_generator.dart:72 AstCodeGenerator.b"),
-            Late{Vector{WasmBuilder.IR.Local}}("dart2wasm/lib/code_generator.dart:73 AstCodeGenerator.paramLocals"),
-            Late{Union{Nothing,WasmBuilder.Label}}("dart2wasm/lib/code_generator.dart:74 AstCodeGenerator.returnLabel"),
-            Late{Intrinsifier}("dart2wasm/lib/code_generator.dart:76 AstCodeGenerator.intrinsifier", () -> Intrinsifier(self)),
-            Late{Closures}("dart2wasm/lib/code_generator.dart:82 AstCodeGenerator.closures"),
+            Late{WasmBuilder.InstructionsBuilder}(late"dart2wasm/lib/code_generator.dart:72 AstCodeGenerator.b"),
+            Late{Vector{WasmBuilder.IR.Local}}(late"dart2wasm/lib/code_generator.dart:73 AstCodeGenerator.paramLocals"),
+            Late{Union{Nothing,WasmBuilder.Label}}(late"dart2wasm/lib/code_generator.dart:74 AstCodeGenerator.returnLabel"),
+            Late{Intrinsifier}(late"dart2wasm/lib/code_generator.dart:76 AstCodeGenerator.intrinsifier", () -> Intrinsifier(self)),
+            Late{Closures}(late"dart2wasm/lib/code_generator.dart:82 AstCodeGenerator.closures"),
             false, Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}(), nothing, nothing, nothing,
             Dict{TypeVar,WasmBuilder.IR.Local}(), TryBlockFinalizer[],
             NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}[],
@@ -555,12 +555,12 @@ one that makes this, rejects Internal.
     # the struct's one constructor, tagged, its late fields unassigned and its nullable fields null, as
     # dart's are before its constructor body (:5229, the outer function) runs
     SwitchInfo(::Val{:_}) = new(
-        Late{WasmBuilder.IR.ValueType}("dart2wasm/lib/code_generator.dart:5197 SwitchInfo.nullableType"),
-        Late{WasmBuilder.IR.ValueType}("dart2wasm/lib/code_generator.dart:5201 SwitchInfo.nonNullableType"),
+        Late{WasmBuilder.IR.ValueType}(late"dart2wasm/lib/code_generator.dart:5197 SwitchInfo.nullableType"),
+        Late{WasmBuilder.IR.ValueType}(late"dart2wasm/lib/code_generator.dart:5201 SwitchInfo.nonNullableType"),
         nothing,
-        Late{Function}("dart2wasm/lib/code_generator.dart:5211 SwitchInfo.compare"),
-        Late{Union{Nothing,NoCounterpart}}("dart2wasm/lib/code_generator.dart:5219 SwitchInfo.defaultCase"),
-        Late{Union{Nothing,NoCounterpart}}("dart2wasm/lib/code_generator.dart:5222 SwitchInfo.nullCase"),
+        Late{Function}(late"dart2wasm/lib/code_generator.dart:5216 SwitchInfo.compare"),
+        Late{Union{Nothing,NoCounterpart}}(late"dart2wasm/lib/code_generator.dart:5219 SwitchInfo.defaultCase"),
+        Late{Union{Nothing,NoCounterpart}}(late"dart2wasm/lib/code_generator.dart:5222 SwitchInfo.nullCase"),
         nothing)
 end
 
@@ -598,9 +598,9 @@ translator's function collector holds each Lambda.
     function LambdaCallTarget(::Val{:_}, signature::WasmBuilder.IR.FunctionType, _translator::KernelNodes, _lambda::AbstractLambda)
         local self
         self = new(signature, _translator, _lambda,
-            Late{String}("dart2wasm/lib/code_generator.dart:6224 LambdaCallTarget.name",
+            Late{String}(late"dart2wasm/lib/code_generator.dart:6224 LambdaCallTarget.name",
                 () -> get_lambda_function_name(self._translator.functions[], self._lambda)),
-            Late{WasmBuilder.IR.BaseFunction}("dart2wasm/lib/code_generator.dart:6227 LambdaCallTarget.function",
+            Late{WasmBuilder.IR.BaseFunction}(late"dart2wasm/lib/code_generator.dart:6227 LambdaCallTarget.function",
                 () -> get_lambda_function(self._translator.functions[], self._lambda)))
         return self
     end

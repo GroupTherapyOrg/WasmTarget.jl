@@ -28,7 +28,7 @@ The member intrinsics by library, class and name, built on first read (dart's st
 library, class and name.
 """
 @parity "dart2wasm/lib/intrinsics.dart:75 MemberIntrinsic._lookup" const MemberIntrinsic__lookup = Late{Dict{String,Dict{Union{String,Nothing},Dict{String,MemberIntrinsic}}}}(
-    "dart2wasm/lib/intrinsics.dart:75 MemberIntrinsic._lookup", () -> MemberIntrinsic__populate_lookup())
+    late"dart2wasm/lib/intrinsics.dart:75 MemberIntrinsic._lookup", () -> MemberIntrinsic__populate_lookup())
 
 # dart files each intrinsic under its member's library, class and name; the members the runtime ports
 # are the ones a Julia method can be: Error._throw (errors_patch.dart:40, src/runtime/common)
@@ -57,7 +57,7 @@ library members are the runtime's ports of them (src/runtime/), so the map files
 member the runtime ports, each under its dart library, class and name, as MemberIntrinsic's does.
 """
 @parity "dart2wasm/lib/intrinsics.dart:401 StaticIntrinsic._lookup" const StaticIntrinsic__lookup = Late{Dict{String,Dict{Union{String,Nothing},Dict{String,StaticIntrinsic}}}}(
-    "dart2wasm/lib/intrinsics.dart:401 StaticIntrinsic._lookup", () -> StaticIntrinsic__populate_lookup())
+    late"dart2wasm/lib/intrinsics.dart:401 StaticIntrinsic._lookup", () -> StaticIntrinsic__populate_lookup())
 
 # dart files each intrinsic under its member's library, class and name; the members the runtime ports
 # are the ones a Julia method can be: ClassID.getID (class_id.dart:10), _isRecordClassId
@@ -105,7 +105,7 @@ end
 # (src/intrinsics.cpp), undefined behavior there, and Julia reaches them only behind its own checks
 # (its `div` and `rem` call checked_sdiv_int and kin, whose arm below raises DivideError first), so
 # the trap is unreachable, as wasm-opt's --traps-never-happen assumes
-@parity "dart2wasm/lib/intrinsics.dart:437 Intrinsifier._binaryOperatorMap" const Intrinsifier__binary_operator_map = Late{Dict{WasmBuilder.IR.ValueType,Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}}("dart2wasm/lib/intrinsics.dart:437 Intrinsifier._binaryOperatorMap", () -> Dict{WasmBuilder.IR.ValueType,Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}(
+@parity "dart2wasm/lib/intrinsics.dart:437 Intrinsifier._binaryOperatorMap" const Intrinsifier__binary_operator_map = Late{Dict{WasmBuilder.IR.ValueType,Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}}(late"dart2wasm/lib/intrinsics.dart:437 Intrinsifier._binaryOperatorMap", () -> Dict{WasmBuilder.IR.ValueType,Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}(
     WasmBuilder.IR.NumType_i32 => Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}(WasmBuilder.IR.NumType_i32 => Dict{Core.IntrinsicFunction,Function}(
         Core.Intrinsics.add_int => c -> WasmBuilder.i32_add(c.b[]),
         Core.Intrinsics.sub_int => c -> WasmBuilder.i32_sub(c.b[]),
@@ -187,7 +187,7 @@ end
 # as LLVM's WebAssembly backend expands it (llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp:11513
 # expandBSWAP): an i32 by its rotate path, wasm having rotr (t = x ^ rotr(x, 16), t &= 0xFF00FFFF,
 # t >>= 8, x = t ^ rotr(x, 8)), an i64 by its eight shifted and masked bytes
-@parity "dart2wasm/lib/intrinsics.dart:475 Intrinsifier._unaryOperatorMap" const Intrinsifier__unary_operator_map = Late{Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}("dart2wasm/lib/intrinsics.dart:475 Intrinsifier._unaryOperatorMap", () -> Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}(
+@parity "dart2wasm/lib/intrinsics.dart:475 Intrinsifier._unaryOperatorMap" const Intrinsifier__unary_operator_map = Late{Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}(late"dart2wasm/lib/intrinsics.dart:475 Intrinsifier._unaryOperatorMap", () -> Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}(
     WasmBuilder.IR.NumType_i32 => Dict{Core.IntrinsicFunction,Function}(
         Core.Intrinsics.neg_int => c -> (WasmBuilder.i32_const(c.b[], -1); WasmBuilder.i32_mul(c.b[])),
         Core.Intrinsics.not_int => c -> (WasmBuilder.i32_const(c.b[], -1); WasmBuilder.i32_xor(c.b[])),
@@ -262,7 +262,7 @@ complement, a float's negation and rounding (dart's `unary-`, `~`, `floorToDoubl
 answers. A static final, lazily initialized as dart's is (Late).
 """
 @parity "dart2wasm/lib/intrinsics.dart:506 Intrinsifier._inlineUnaryOperatorMap" const Intrinsifier__inline_unary_operator_map = Late{Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}(
-    "dart2wasm/lib/intrinsics.dart:506 Intrinsifier._inlineUnaryOperatorMap", () -> Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}(
+    late"dart2wasm/lib/intrinsics.dart:506 Intrinsifier._inlineUnaryOperatorMap", () -> Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}(
     WasmBuilder.IR.NumType_i64 => Dict{Core.IntrinsicFunction,Function}(
         Core.Intrinsics.neg_int => (c, receiver) -> begin
             local v = extract_int_value(receiver)
@@ -301,7 +301,7 @@ operand's own float type, and `toDouble` is a conversion (`sitofp`), so each rou
 f64 only as the operand's, as dart has it.
 """
 @parity "dart2wasm/lib/intrinsics.dart:578 Intrinsifier._unaryResultMap" const Intrinsifier__unary_result_map = Late{Dict{Core.IntrinsicFunction,WasmBuilder.IR.ValueType}}(
-    "dart2wasm/lib/intrinsics.dart:578 Intrinsifier._unaryResultMap", () -> Dict{Core.IntrinsicFunction,WasmBuilder.IR.ValueType}(
+    late"dart2wasm/lib/intrinsics.dart:578 Intrinsifier._unaryResultMap", () -> Dict{Core.IntrinsicFunction,WasmBuilder.IR.ValueType}(
         Core.Intrinsics.floor_llvm => WasmBuilder.IR.NumType_f64, Core.Intrinsics.ceil_llvm => WasmBuilder.IR.NumType_f64,
         Core.Intrinsics.trunc_llvm => WasmBuilder.IR.NumType_f64))
 

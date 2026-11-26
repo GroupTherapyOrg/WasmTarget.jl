@@ -22,7 +22,7 @@ end
     local_initialization_stack_height::Late{Int}
     # dart's constructor (line 52), the struct's one inner constructor: Label._, then its late fields
     function Expression(inputs::Vector{IR.ValueType}, outputs::Vector{IR.ValueType})
-        local l = new(inputs, outputs, Late{Union{Int,Nothing}}("wasm_builder/lib/src/builder/instructions.dart:35 Label.ordinal"), Late{Int}("wasm_builder/lib/src/builder/instructions.dart:36 Label.depth"), Late{Int}("wasm_builder/lib/src/builder/instructions.dart:37 Label.baseStackHeight"), Late{Bool}("wasm_builder/lib/src/builder/instructions.dart:38 Label.reachable"), Late{Int}("wasm_builder/lib/src/builder/instructions.dart:39 Label.localInitializationStackHeight"))
+        local l = new(inputs, outputs, Late{Union{Int,Nothing}}(late"wasm_builder/lib/src/builder/instructions.dart:35 Label.ordinal"), Late{Int}(late"wasm_builder/lib/src/builder/instructions.dart:36 Label.depth"), Late{Int}(late"wasm_builder/lib/src/builder/instructions.dart:37 Label.baseStackHeight"), Late{Bool}(late"wasm_builder/lib/src/builder/instructions.dart:38 Label.reachable"), Late{Int}(late"wasm_builder/lib/src/builder/instructions.dart:39 Label.localInitializationStackHeight"))
         l.ordinal[] = nothing
         l.depth[] = 0
         l.base_stack_height[] = 0
@@ -42,7 +42,7 @@ end
     local_initialization_stack_height::Late{Int}
     # dart's constructor (line 65), the struct's one inner constructor
     function Block(inputs::Vector{IR.ValueType}, outputs::Vector{IR.ValueType})
-        new(inputs, outputs, Late{Union{Int,Nothing}}("wasm_builder/lib/src/builder/instructions.dart:35 Label.ordinal"), Late{Int}("wasm_builder/lib/src/builder/instructions.dart:36 Label.depth"), Late{Int}("wasm_builder/lib/src/builder/instructions.dart:37 Label.baseStackHeight"), Late{Bool}("wasm_builder/lib/src/builder/instructions.dart:38 Label.reachable"), Late{Int}("wasm_builder/lib/src/builder/instructions.dart:39 Label.localInitializationStackHeight"))
+        new(inputs, outputs, Late{Union{Int,Nothing}}(late"wasm_builder/lib/src/builder/instructions.dart:35 Label.ordinal"), Late{Int}(late"wasm_builder/lib/src/builder/instructions.dart:36 Label.depth"), Late{Int}(late"wasm_builder/lib/src/builder/instructions.dart:37 Label.baseStackHeight"), Late{Bool}(late"wasm_builder/lib/src/builder/instructions.dart:38 Label.reachable"), Late{Int}(late"wasm_builder/lib/src/builder/instructions.dart:39 Label.localInitializationStackHeight"))
     end
 end
 
@@ -56,7 +56,7 @@ end
     local_initialization_stack_height::Late{Int}
     # dart's constructor (line 72), the struct's one inner constructor
     function Loop(inputs::Vector{IR.ValueType}, outputs::Vector{IR.ValueType})
-        new(inputs, outputs, Late{Union{Int,Nothing}}("wasm_builder/lib/src/builder/instructions.dart:35 Label.ordinal"), Late{Int}("wasm_builder/lib/src/builder/instructions.dart:36 Label.depth"), Late{Int}("wasm_builder/lib/src/builder/instructions.dart:37 Label.baseStackHeight"), Late{Bool}("wasm_builder/lib/src/builder/instructions.dart:38 Label.reachable"), Late{Int}("wasm_builder/lib/src/builder/instructions.dart:39 Label.localInitializationStackHeight"))
+        new(inputs, outputs, Late{Union{Int,Nothing}}(late"wasm_builder/lib/src/builder/instructions.dart:35 Label.ordinal"), Late{Int}(late"wasm_builder/lib/src/builder/instructions.dart:36 Label.depth"), Late{Int}(late"wasm_builder/lib/src/builder/instructions.dart:37 Label.baseStackHeight"), Late{Bool}(late"wasm_builder/lib/src/builder/instructions.dart:38 Label.reachable"), Late{Int}(late"wasm_builder/lib/src/builder/instructions.dart:39 Label.localInitializationStackHeight"))
     end
 end
 
@@ -71,7 +71,7 @@ end
     has_else::Bool
     # dart's constructor (line 81), the struct's one inner constructor
     function If(inputs::Vector{IR.ValueType}, outputs::Vector{IR.ValueType})
-        new(inputs, outputs, Late{Union{Int,Nothing}}("wasm_builder/lib/src/builder/instructions.dart:35 Label.ordinal"), Late{Int}("wasm_builder/lib/src/builder/instructions.dart:36 Label.depth"), Late{Int}("wasm_builder/lib/src/builder/instructions.dart:37 Label.baseStackHeight"), Late{Bool}("wasm_builder/lib/src/builder/instructions.dart:38 Label.reachable"), Late{Int}("wasm_builder/lib/src/builder/instructions.dart:39 Label.localInitializationStackHeight"), false)
+        new(inputs, outputs, Late{Union{Int,Nothing}}(late"wasm_builder/lib/src/builder/instructions.dart:35 Label.ordinal"), Late{Int}(late"wasm_builder/lib/src/builder/instructions.dart:36 Label.depth"), Late{Int}(late"wasm_builder/lib/src/builder/instructions.dart:37 Label.baseStackHeight"), Late{Bool}(late"wasm_builder/lib/src/builder/instructions.dart:38 Label.reachable"), Late{Int}(late"wasm_builder/lib/src/builder/instructions.dart:39 Label.localInitializationStackHeight"), false)
     end
 end
 
@@ -86,7 +86,7 @@ end
     has_catch::Bool
     # dart's constructor (line 90), the struct's one inner constructor
     function Try(inputs::Vector{IR.ValueType}, outputs::Vector{IR.ValueType})
-        new(inputs, outputs, Late{Union{Int,Nothing}}("wasm_builder/lib/src/builder/instructions.dart:35 Label.ordinal"), Late{Int}("wasm_builder/lib/src/builder/instructions.dart:36 Label.depth"), Late{Int}("wasm_builder/lib/src/builder/instructions.dart:37 Label.baseStackHeight"), Late{Bool}("wasm_builder/lib/src/builder/instructions.dart:38 Label.reachable"), Late{Int}("wasm_builder/lib/src/builder/instructions.dart:39 Label.localInitializationStackHeight"), false)
+        new(inputs, outputs, Late{Union{Int,Nothing}}(late"wasm_builder/lib/src/builder/instructions.dart:35 Label.ordinal"), Late{Int}(late"wasm_builder/lib/src/builder/instructions.dart:36 Label.depth"), Late{Int}(late"wasm_builder/lib/src/builder/instructions.dart:37 Label.baseStackHeight"), Late{Bool}(late"wasm_builder/lib/src/builder/instructions.dart:38 Label.reachable"), Late{Int}(late"wasm_builder/lib/src/builder/instructions.dart:39 Label.localInitializationStackHeight"), false)
     end
 end
 
@@ -101,7 +101,7 @@ end
     catches::Vector{TryTableCatch}
     # dart's constructor (line 99), the struct's one inner constructor
     function TryTable(inputs::Vector{IR.ValueType}, outputs::Vector{IR.ValueType}, catches::Vector{TryTableCatch})
-        new(inputs, outputs, Late{Union{Int,Nothing}}("wasm_builder/lib/src/builder/instructions.dart:35 Label.ordinal"), Late{Int}("wasm_builder/lib/src/builder/instructions.dart:36 Label.depth"), Late{Int}("wasm_builder/lib/src/builder/instructions.dart:37 Label.baseStackHeight"), Late{Bool}("wasm_builder/lib/src/builder/instructions.dart:38 Label.reachable"), Late{Int}("wasm_builder/lib/src/builder/instructions.dart:39 Label.localInitializationStackHeight"), catches)
+        new(inputs, outputs, Late{Union{Int,Nothing}}(late"wasm_builder/lib/src/builder/instructions.dart:35 Label.ordinal"), Late{Int}(late"wasm_builder/lib/src/builder/instructions.dart:36 Label.depth"), Late{Int}(late"wasm_builder/lib/src/builder/instructions.dart:37 Label.baseStackHeight"), Late{Bool}(late"wasm_builder/lib/src/builder/instructions.dart:38 Label.reachable"), Late{Int}(late"wasm_builder/lib/src/builder/instructions.dart:39 Label.localInitializationStackHeight"), catches)
     end
 end
 

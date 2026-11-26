@@ -57,10 +57,10 @@ Julia's classes, instances with their parameters bound, do not have. The transla
     # :406 is its outer function; the late masqueraded's initializer reads the collector itself
     function ClassInfoCollector(::Val{:_}, translator::KernelNodes)
         local self
-        self = new(translator, Late{ClassInfo}("dart2wasm/lib/class_info.dart:348 ClassInfoCollector.topInfo"),
+        self = new(translator, Late{ClassInfo}(late"dart2wasm/lib/class_info.dart:348 ClassInfoCollector.topInfo"),
                    Dict{Int,WasmBuilder.IR.StructType}(),
-                   Late{Base.IdSet{DataType}}("dart2wasm/lib/class_info.dart:357 ClassInfoCollector.masqueraded", () -> _compute_masquerades(self)),
-                   Late{WasmBuilder.IR.FieldType}("dart2wasm/lib/class_info.dart:401 ClassInfoCollector.typeType"))
+                   Late{Base.IdSet{DataType}}(late"dart2wasm/lib/class_info.dart:357 ClassInfoCollector.masqueraded", () -> _compute_masquerades(self)),
+                   Late{WasmBuilder.IR.FieldType}(late"dart2wasm/lib/class_info.dart:401 ClassInfoCollector.typeType"))
         return self
     end
 end
@@ -105,7 +105,7 @@ an is check pick one class for one tuple.
             _masqueraded::Base.IdSet{DataType}, dfs_order::Vector{DataType}, class_ids::IdDict{DataType,Int},
             max_concrete_class_id::Int, max_class_id::Int)
         local self
-        local cid = Late{Int}("dart2wasm/lib/class_info.dart:853 ClassIdNumbering.firstNonMasqueradedInterfaceClassCid", function ()
+        local cid = Late{Int}(late"dart2wasm/lib/class_info.dart:853 ClassIdNumbering.firstNonMasqueradedInterfaceClassCid", function ()
             local last_masqueraded_class_id = 0
             for cls in self._masqueraded
                 local ranges = get_concrete_class_id_range(self, cls)

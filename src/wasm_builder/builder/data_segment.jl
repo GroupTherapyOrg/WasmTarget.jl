@@ -11,11 +11,11 @@
     _built::Union{IR.DataSegment,Nothing}
     # dart's constructor (line 15), the struct's one inner constructor
     function DataSegmentBuilder(index::Int, initial_content::Vector{UInt8}, memory::Union{IR.Memory,Nothing}, offset::Union{Int,Nothing})
-        local index_cell = Late{Int}("wasm_builder/lib/src/ir/data_segment.dart:12 BaseDataSegment.index")
+        local index_cell = Late{Int}(late"wasm_builder/lib/src/ir/data_segment.dart:12 BaseDataSegment.index")
         index_cell[] = index
-        local memory_cell = Late{Union{IR.Memory,Nothing}}("wasm_builder/lib/src/ir/data_segment.dart:13 BaseDataSegment.memory")
+        local memory_cell = Late{Union{IR.Memory,Nothing}}(late"wasm_builder/lib/src/ir/data_segment.dart:13 BaseDataSegment.memory")
         memory_cell[] = memory
-        local offset_cell = Late{Union{Int,Nothing}}("wasm_builder/lib/src/ir/data_segment.dart:14 BaseDataSegment.offset")
+        local offset_cell = Late{Union{Int,Nothing}}(late"wasm_builder/lib/src/ir/data_segment.dart:14 BaseDataSegment.offset")
         offset_cell[] = offset
         new(index_cell, memory_cell, offset_cell, copy(initial_content), nothing)
     end

@@ -39,7 +39,7 @@ literal and record questions with, each cached on its first lookup. A class is a
     WasmTarget(::Val{:_}, remove_asserts::Bool, mode::Mode, enable_experimental_ffi::Bool, enable_experimental_wasm_interop::Bool) =
         new(remove_asserts, mode, enable_experimental_ffi, enable_experimental_wasm_interop,
             nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,
-            Late{Dict{RecordShape,DataType}}("dart2wasm/lib/target.dart:640 WasmTarget.recordClasses"))
+            Late{Dict{RecordShape,DataType}}(late"dart2wasm/lib/target.dart:640 WasmTarget.recordClasses"))
 end
 
 """dart's verification of the front end's output, Kernel's; nothing reads it in WasmTarget."""

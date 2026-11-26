@@ -16,7 +16,7 @@ does).
     function CrossModuleFunctionTable(::Val{:_}, translator::KernelNodes)
         local self
         self = new(translator, LinkedHashMap{WasmBuilder.IR.BaseFunction,Int}(),
-            Late{WasmBuilder.TableBuilder}("dart2wasm/lib/static_dispatch_table.dart:18 CrossModuleFunctionTable._definedWasmTable",
+            Late{WasmBuilder.TableBuilder}(late"dart2wasm/lib/static_dispatch_table.dart:18 CrossModuleFunctionTable._definedWasmTable",
                 () -> WasmBuilder.define(main_module(self.translator).tables[],
                                          WasmBuilder.IR.RefType(CrossModuleFunctionTable__table_heap_type(); nullable = true), length(self._table))),
             WasmTableImporter(translator, "cross-module-funcs-"))

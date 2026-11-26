@@ -105,17 +105,17 @@ runtime type representation is (types.dart).
         local self
         self = new(translator, Dict{Union{NirConst,DummyValueConstant,StringObject,HeldStrings},ConstantInfo}(), Dict{NirConst,LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Global}}(),
             LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.DataSegmentBuilder}(),
-            Late{ClassInfo}("dart2wasm/lib/constants.dart:157 Constants.typeInfo"),
-            Late{_ConstantAccessor}("dart2wasm/lib/constants.dart:159 Constants._constantAccessor", () -> _ConstantAccessor(self.translator)),
+            Late{ClassInfo}(late"dart2wasm/lib/constants.dart:157 Constants.typeInfo"),
+            Late{_ConstantAccessor}(late"dart2wasm/lib/constants.dart:159 Constants._constantAccessor", () -> _ConstantAccessor(self.translator)),
             Dict{WasmBuilder.IR.HeapType,DummyValueConstant}(), IdDict{Type,NirConst}(),
             # Julia's `true` and `false`, each Julia's one object of its value
-            Late{NirConst}("dart2wasm/lib/constants.dart:163 Constants._cachedTrueConstant", () -> NirConst(Core.Const(true))),
-            Late{NirConst}("dart2wasm/lib/constants.dart:164 Constants._cachedFalseConstant", () -> NirConst(Core.Const(false))),
-            Late{NirConst}("dart2wasm/lib/constants.dart:165 Constants._cachedDynamicType"), Late{NirConst}("dart2wasm/lib/constants.dart:168 Constants._cachedVoidType"),
-            Late{NirConst}("dart2wasm/lib/constants.dart:171 Constants._cachedNeverType"), Late{NirConst}("dart2wasm/lib/constants.dart:174 Constants._cachedNullType"),
-            Late{NirConst}("dart2wasm/lib/constants.dart:177 Constants._cachedNullableObjectType"), Late{NirConst}("dart2wasm/lib/constants.dart:180 Constants._cachedNonNullableObjectType"),
-            Late{NirConst}("dart2wasm/lib/constants.dart:182 Constants._cachedNullableFunctionType"), Late{NirConst}("dart2wasm/lib/constants.dart:186 Constants._cachedNonNullableFunctionType"),
-            Late{NirConst}("dart2wasm/lib/constants.dart:190 Constants._cachedNullableRecordType"), Late{NirConst}("dart2wasm/lib/constants.dart:194 Constants._cachedNonNullableRecordType"),
+            Late{NirConst}(late"dart2wasm/lib/constants.dart:163 Constants._cachedTrueConstant", () -> NirConst(Core.Const(true))),
+            Late{NirConst}(late"dart2wasm/lib/constants.dart:164 Constants._cachedFalseConstant", () -> NirConst(Core.Const(false))),
+            Late{NirConst}(late"dart2wasm/lib/constants.dart:165 Constants._cachedDynamicType"), Late{NirConst}(late"dart2wasm/lib/constants.dart:168 Constants._cachedVoidType"),
+            Late{NirConst}(late"dart2wasm/lib/constants.dart:171 Constants._cachedNeverType"), Late{NirConst}(late"dart2wasm/lib/constants.dart:174 Constants._cachedNullType"),
+            Late{NirConst}(late"dart2wasm/lib/constants.dart:177 Constants._cachedNullableObjectType"), Late{NirConst}(late"dart2wasm/lib/constants.dart:180 Constants._cachedNonNullableObjectType"),
+            Late{NirConst}(late"dart2wasm/lib/constants.dart:182 Constants._cachedNullableFunctionType"), Late{NirConst}(late"dart2wasm/lib/constants.dart:186 Constants._cachedNonNullableFunctionType"),
+            Late{NirConst}(late"dart2wasm/lib/constants.dart:190 Constants._cachedNullableRecordType"), Late{NirConst}(late"dart2wasm/lib/constants.dart:194 Constants._cachedNonNullableRecordType"),
             false)
         return self
     end
@@ -187,7 +187,7 @@ same type with null initializer.
     function _ConstantAccessor(::Val{:_}, translator::KernelNodes)
         local self
         self = new(translator, IdDict{ConstantInfo,LinkedHashSet{WasmBuilder.ModuleBuilder}}(), Dict{WasmBuilder.IR.RefType,WasmBuilder.TableBuilder}(),
-            Late{WasmTableImporter}("dart2wasm/lib/constants.dart:1836 _ConstantAccessor.tableImporter", () -> WasmTableImporter(self.translator, "constant-table")),
+            Late{WasmTableImporter}(late"dart2wasm/lib/constants.dart:1836 _ConstantAccessor.tableImporter", () -> WasmTableImporter(self.translator, "constant-table")),
             CompileStatics())
         return self
     end

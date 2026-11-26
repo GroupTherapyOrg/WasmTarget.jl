@@ -182,7 +182,7 @@ end
         # as having subtypes
         local depth = super_type === nothing ? 0 : super_type.depth + 1
         super_type === nothing || (super_type.has_any_subtypes = true)
-        local e = Late{FieldType}("wasm_builder/lib/src/ir/type.dart:1230 ArrayType.elementType")
+        local e = Late{FieldType}(late"wasm_builder/lib/src/ir/type.dart:1230 ArrayType.elementType")
         element_type === nothing || (e[] = element_type)
         new(nothing, super_type, depth, false, name, e)
     end

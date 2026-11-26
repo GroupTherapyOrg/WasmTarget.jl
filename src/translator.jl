@@ -218,33 +218,33 @@ the translator holds each collaborator.
             # the constructor's initializer list
             Symbols(minify(options)),
             component,
-            Late{ClosureLayouter}("dart2wasm/lib/translator.dart:147 Translator.closureLayouter"),
-            Late{ClassInfoCollector}("dart2wasm/lib/translator.dart:148 Translator.classInfoCollector"),
-            Late{CrossModuleFunctionTable}("dart2wasm/lib/translator.dart:149 Translator.crossModuleFunctionTable"),
-            Late{TableBasedGlobals}("dart2wasm/lib/translator.dart:150 Translator.tableBasedGlobals"),
-            Late{DispatchTable}("dart2wasm/lib/translator.dart:151 Translator.dispatchTable"),
-            Late{DynamicDispatchTable}("dart2wasm/lib/translator.dart:152 Translator.dynamicDispatchTable"),
-            Late{Globals}("dart2wasm/lib/translator.dart:153 Translator.globals"),
-            Late{DartGlobals}("dart2wasm/lib/translator.dart:154 Translator.dartGlobals"),
-            Late{Constants}("dart2wasm/lib/translator.dart:155 Translator.constants"),
-            Late{Types}("dart2wasm/lib/translator.dart:156 Translator.types"),
-            Late{ExceptionTags}("dart2wasm/lib/translator.dart:157 Translator._exceptionTags"),
-            Late{CompilationQueue}("dart2wasm/lib/translator.dart:158 Translator.compilationQueue"),
-            Late{FunctionCollector}("dart2wasm/lib/translator.dart:159 Translator.functions"),
+            Late{ClosureLayouter}(late"dart2wasm/lib/translator.dart:147 Translator.closureLayouter"),
+            Late{ClassInfoCollector}(late"dart2wasm/lib/translator.dart:148 Translator.classInfoCollector"),
+            Late{CrossModuleFunctionTable}(late"dart2wasm/lib/translator.dart:149 Translator.crossModuleFunctionTable"),
+            Late{TableBasedGlobals}(late"dart2wasm/lib/translator.dart:150 Translator.tableBasedGlobals"),
+            Late{DispatchTable}(late"dart2wasm/lib/translator.dart:151 Translator.dispatchTable"),
+            Late{DynamicDispatchTable}(late"dart2wasm/lib/translator.dart:152 Translator.dynamicDispatchTable"),
+            Late{Globals}(late"dart2wasm/lib/translator.dart:153 Translator.globals"),
+            Late{DartGlobals}(late"dart2wasm/lib/translator.dart:154 Translator.dartGlobals"),
+            Late{Constants}(late"dart2wasm/lib/translator.dart:155 Translator.constants"),
+            Late{Types}(late"dart2wasm/lib/translator.dart:156 Translator.types"),
+            Late{ExceptionTags}(late"dart2wasm/lib/translator.dart:157 Translator._exceptionTags"),
+            Late{CompilationQueue}(late"dart2wasm/lib/translator.dart:158 Translator.compilationQueue"),
+            Late{FunctionCollector}(late"dart2wasm/lib/translator.dart:159 Translator.functions"),
             # the constructor's initializer list
             Namer(; minify = minify(options)),
-            Late{InteropMemberNamer}("dart2wasm/lib/translator.dart:164 Translator.interopMemberNamer"),
-            Late{Vector{ClassInfo}}("dart2wasm/lib/translator.dart:174 Translator.classes"),
-            Late{Vector{ClassInfo}}("dart2wasm/lib/translator.dart:180 Translator.classesSupersFirst"),
-            Late{ClassIdNumbering}("dart2wasm/lib/translator.dart:182 Translator.classIdNumbering"),
+            Late{InteropMemberNamer}(late"dart2wasm/lib/translator.dart:164 Translator.interopMemberNamer"),
+            Late{Vector{ClassInfo}}(late"dart2wasm/lib/translator.dart:174 Translator.classes"),
+            Late{Vector{ClassInfo}}(late"dart2wasm/lib/translator.dart:180 Translator.classesSupersFirst"),
+            Late{ClassIdNumbering}(late"dart2wasm/lib/translator.dart:182 Translator.classIdNumbering"),
             IdDict{DataType,ClassInfo}(), String[], Dict{Tuple{WasmBuilder.ModuleBuilder,String},WasmBuilder.IR.Global}(),
             Dict{WasmBuilder.IR.HeapType,ClassInfo}(), Dict{ClassField,Int}(), IdDict{TypeVar,Int}(),
             IdDict{Reference,ParameterInfo}(), Dict{ClassField,WasmBuilder.IR.AbstractTable}(),
-            Late{WasmTableImporter}("dart2wasm/lib/translator.dart:198 Translator._importedFieldTables",
+            Late{WasmTableImporter}(late"dart2wasm/lib/translator.dart:198 Translator._importedFieldTables",
                 () -> WasmTableImporter(self, "fieldTable")),
             Base.IdSet{Core.MethodInstance}(), Base.IdSet{Reference}(),
             IdDict{Core.MethodInstance,Closures}(), IdDict{Core.MethodInstance,ConstructorInfo}(),
-            Late{WasmBuilder.IR.ValueType}("dart2wasm/lib/translator.dart:206 Translator.voidMarker",
+            Late{WasmBuilder.IR.ValueType}(late"dart2wasm/lib/translator.dart:206 Translator.voidMarker",
                 () -> WasmBuilder.IR.RefType_def(WasmBuilder.IR.StructType("void"); nullable = true)),
             IdDict{Core.MethodInstance,WasmBuilder.IR.Memory}(),
             # Lazily import FFI memory if used.
@@ -256,14 +256,14 @@ the translator holds each collaborator.
             IdDict{NirBody,IdDict{WasmBuilder.ModuleBuilder,ClosureImplementation}}(),
             # Some convenience accessors for commonly used values.
             # dart's `Object`, the class every class extends: Julia's `Any`, ClassInfoCollector's Object
-            Late{ClassInfo}("dart2wasm/lib/translator.dart:241 Translator.objectInfo", function ()
+            Late{ClassInfo}(late"dart2wasm/lib/translator.dart:241 Translator.objectInfo", function ()
                 local info = get(self.class_info, Any, nothing)
                 info === nothing && reject!(Internal("dart2wasm/lib/translator.dart:241 Translator.objectInfo: Any is no class of the closed world"), "Translator.objectInfo")
                 return info
             end),
             # dart's `_Closure`, the class every closure extends: Julia's `Function`, every function
             # object's supertype, a closure's among them
-            Late{ClassInfo}("dart2wasm/lib/translator.dart:242 Translator.closureInfo", function ()
+            Late{ClassInfo}(late"dart2wasm/lib/translator.dart:242 Translator.closureInfo", function ()
                 local info = get(self.class_info, Function, nothing)
                 info === nothing && reject!(Internal("dart2wasm/lib/translator.dart:242 Translator.closureInfo: Function is no class of the closed world"), "Translator.closureInfo")
                 return info
@@ -271,47 +271,47 @@ the translator holds each collaborator.
             # dart's StackTrace, an abstract class of dart:core: in a standalone module its one
             # implementation, the standalone runtime's _EmbedderStackTrace; the JS runtime's,
             # JavaScriptStack, not ported
-            Late{ClassInfo}("dart2wasm/lib/translator.dart:243 Translator.stackTraceInfo", function ()
+            Late{ClassInfo}(late"dart2wasm/lib/translator.dart:243 Translator.stackTraceInfo", function ()
                 is_standalone(self) ||
                     reject!(Unported("sdk/lib/_internal/wasm/js_common/js_helper.dart:830 JavaScriptStack"), "Translator.stackTraceInfo: the stack trace class outside standalone mode")
                 local info = get(self.class_info, Runtime._EmbedderStackTrace, nothing)
                 info === nothing && reject!(Internal("dart2wasm/lib/translator.dart:243 Translator.stackTraceInfo: _EmbedderStackTrace is no class of the closed world"), "Translator.stackTraceInfo")
                 return info
             end),
-            Late{ClassInfo}("dart2wasm/lib/translator.dart:244 Translator.recordInfo"),
+            Late{ClassInfo}(late"dart2wasm/lib/translator.dart:244 Translator.recordInfo"),
             # dart's `_Type`, a type as a value: Julia's `Type` (translateStorageType)
-            Late{WasmBuilder.IR.ArrayType}("dart2wasm/lib/translator.dart:245 Translator.typeArrayType",
+            Late{WasmBuilder.IR.ArrayType}(late"dart2wasm/lib/translator.dart:245 Translator.typeArrayType",
                 () -> array_type_for_dart_type(self, Type; mutable_ = true)),
-            Late{WasmBuilder.IR.ArrayType}("dart2wasm/lib/translator.dart:249 Translator.listArrayType"),
+            Late{WasmBuilder.IR.ArrayType}(late"dart2wasm/lib/translator.dart:249 Translator.listArrayType"),
             # dart's `Object?`, Julia's `Any`, which holds `nothing`
-            Late{WasmBuilder.IR.ArrayType}("dart2wasm/lib/translator.dart:254 Translator.nullableObjectArrayType",
+            Late{WasmBuilder.IR.ArrayType}(late"dart2wasm/lib/translator.dart:254 Translator.nullableObjectArrayType",
                 () -> array_type_for_dart_type(self, Any; mutable_ = true)),
-            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:258 Translator.typeArrayTypeRef", () -> ref(self.type_array_type[])),
-            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:262 Translator.nullableObjectArrayTypeRef", () -> ref(self.nullable_object_array_type[])),
-            Late{Type}("dart2wasm/lib/translator.dart:267 Translator.boxedIntType"),
-            Late{Type}("dart2wasm/lib/translator.dart:271 Translator.boxedDoubleType"),
+            Late{WasmBuilder.IR.RefType}(late"dart2wasm/lib/translator.dart:258 Translator.typeArrayTypeRef", () -> ref(self.type_array_type[])),
+            Late{WasmBuilder.IR.RefType}(late"dart2wasm/lib/translator.dart:262 Translator.nullableObjectArrayTypeRef", () -> ref(self.nullable_object_array_type[])),
+            Late{Type}(late"dart2wasm/lib/translator.dart:267 Translator.boxedIntType"),
+            Late{Type}(late"dart2wasm/lib/translator.dart:271 Translator.boxedDoubleType"),
             # The wasm type used to hold values of Dart top types (e.g. `Object?`, `dynamic`)
-            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:278 Translator.topType", () -> self.classes[][1].nullable_type),
+            Late{WasmBuilder.IR.RefType}(late"dart2wasm/lib/translator.dart:278 Translator.topType", () -> self.classes[][1].nullable_type),
             # The wasm type used to hold values of Dart top types excluding null (e.g. `Object`)
-            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:282 Translator.topTypeNonNullable", () -> WasmBuilder.with_nullability(self.top_type[], false)),
+            Late{WasmBuilder.IR.RefType}(late"dart2wasm/lib/translator.dart:282 Translator.topTypeNonNullable", () -> WasmBuilder.with_nullability(self.top_type[], false)),
             # The wasm type used to hold values of `StackTrace`
-            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:285 Translator.stackTraceType",
+            Late{WasmBuilder.IR.RefType}(late"dart2wasm/lib/translator.dart:285 Translator.stackTraceType",
                 () -> translate_type(self, self.stack_trace_info[].cls)::WasmBuilder.IR.RefType),
             # The wasm type used to hold values of `StackTrace?`
-            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:289 Translator.stackTraceTypeNullable", () -> WasmBuilder.with_nullability(self.stack_trace_type[], true)),
+            Late{WasmBuilder.IR.RefType}(late"dart2wasm/lib/translator.dart:289 Translator.stackTraceTypeNullable", () -> WasmBuilder.with_nullability(self.stack_trace_type[], true)),
             # The wasm type used to hold values of `Type`
-            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:294 Translator.runtimeTypeType", () -> translate_type(self, Type)::WasmBuilder.IR.RefType),
+            Late{WasmBuilder.IR.RefType}(late"dart2wasm/lib/translator.dart:294 Translator.runtimeTypeType", () -> translate_type(self, Type)::WasmBuilder.IR.RefType),
             # The wasm type used to hold values of `Type?`
-            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:298 Translator.runtimeTypeTypeNullable", () -> WasmBuilder.with_nullability(self.runtime_type_type[], true)),
+            Late{WasmBuilder.IR.RefType}(late"dart2wasm/lib/translator.dart:298 Translator.runtimeTypeTypeNullable", () -> WasmBuilder.with_nullability(self.runtime_type_type[], true)),
             # The wasm type used to hold values of `String`
-            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:302 Translator.stringType", () -> translate_type(self, String)::WasmBuilder.IR.RefType),
+            Late{WasmBuilder.IR.RefType}(late"dart2wasm/lib/translator.dart:302 Translator.stringType", () -> translate_type(self, String)::WasmBuilder.IR.RefType),
             # The wasm type used to hold values of `String?`
-            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:306 Translator.stringTypeNullable", () -> WasmBuilder.with_nullability(self.string_type[], true)),
+            Late{WasmBuilder.IR.RefType}(late"dart2wasm/lib/translator.dart:306 Translator.stringTypeNullable", () -> WasmBuilder.with_nullability(self.string_type[], true)),
             # The wasm type used to hold values of `Invocation`
-            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:309 Translator.invocationType"),
+            Late{WasmBuilder.IR.RefType}(late"dart2wasm/lib/translator.dart:309 Translator.invocationType"),
             IdDict{WasmBuilder.ModuleBuilder,PartialInstantiator}(), IdDict{WasmBuilder.ModuleBuilder,PolymorphicDispatchers}(),
             IdDict{WasmBuilder.ModuleBuilder,DynamicDispatchers}(), LinkedHashMap{WasmBuilder.ModuleBuilder,DummyValuesCollector}(),
-            Late{IdDict{DataType,WasmBuilder.IR.StorageType}}("dart2wasm/lib/translator.dart:344 Translator.builtinTypes", () -> IdDict{DataType,WasmBuilder.IR.StorageType}(
+            Late{IdDict{DataType,WasmBuilder.IR.StorageType}}(late"dart2wasm/lib/translator.dart:344 Translator.builtinTypes", () -> IdDict{DataType,WasmBuilder.IR.StorageType}(
                 Bool => WasmBuilder.IR.NumType_i32,
                 Int8 => WasmBuilder.IR.PackedType_i8, UInt8 => WasmBuilder.IR.PackedType_i8,
                 Int16 => WasmBuilder.IR.PackedType_i16, UInt16 => WasmBuilder.IR.PackedType_i16,
@@ -322,12 +322,12 @@ the translator holds each collaborator.
                 WasmF32 => WasmBuilder.IR.NumType_f32, WasmF64 => WasmBuilder.IR.NumType_f64,
                 WasmExternRef => WasmBuilder.IR.RefType_extern(; nullable = false),
                 WasmEqRef => WasmBuilder.IR.RefType_eq(; nullable = false))),
-            Late{Dict{WasmBuilder.IR.ValueType,DataType}}("dart2wasm/lib/translator.dart:374 Translator.boxedClasses"),
-            Late{Base.IdSet{DataType}}("dart2wasm/lib/translator.dart:380 Translator.boxClasses"),
-            Late{IdDict{DataType,DataType}}("dart2wasm/lib/translator.dart:389 Translator.valueClasses"),
+            Late{Dict{WasmBuilder.IR.ValueType,DataType}}(late"dart2wasm/lib/translator.dart:374 Translator.boxedClasses"),
+            Late{Base.IdSet{DataType}}(late"dart2wasm/lib/translator.dart:380 Translator.boxClasses"),
+            Late{IdDict{DataType,DataType}}(late"dart2wasm/lib/translator.dart:389 Translator.valueClasses"),
             # Type for vtable entries for dynamic calls. These entries are used in
             # dynamic invocations and `Function.apply`.
-            Late{WasmBuilder.IR.FunctionType}("dart2wasm/lib/translator.dart:398 Translator.dynamicCallVtableEntryFunctionType",
+            Late{WasmBuilder.IR.FunctionType}(late"dart2wasm/lib/translator.dart:398 Translator.dynamicCallVtableEntryFunctionType",
                 () -> WasmBuilder.define_function(types_builder(self), WasmBuilder.IR.ValueType[
                         # Closure
                         ref(self.closure_layouter[].closure_base_struct[]),
@@ -341,7 +341,7 @@ the translator holds each collaborator.
             _module_output_data, LinkedHashMap{ModuleMetadata,WasmBuilder.ModuleBuilder}(),
             LinkedHashMap{WasmBuilder.ModuleBuilder,ModuleMetadata}(), Dict{WasmBuilder.IR.Module,WasmBuilder.ModuleBuilder}(),
             IdDict{Core.MethodInstance,Closures}(), Function[],
-            Late{WasmMemoryImporter}("dart2wasm/lib/translator.dart:866 Translator._importedMemories",
+            Late{WasmMemoryImporter}(late"dart2wasm/lib/translator.dart:866 Translator._importedMemories",
                 () -> WasmMemoryImporter(self, "memory")),
             IdDict{WasmBuilder.ModuleBuilder,IdDict{ClosureRepresentation,WasmBuilder.IR.BaseFunction}}(),
             IdDict{Core.MethodInstance,Bool}())
@@ -508,7 +508,7 @@ id then the selector's inputs, its function defined in the calling module on fir
             use_unchecked_entry::Bool, signature::WasmBuilder.IR.FunctionType)
         local self
         self = new(signature, translator, selector, calling_module, use_unchecked_entry,
-            Late{WasmBuilder.IR.BaseFunction}("dart2wasm/lib/translator.dart:3757 PolymorphicDispatcherCallTarget.function", function ()
+            Late{WasmBuilder.IR.BaseFunction}(late"dart2wasm/lib/translator.dart:3757 PolymorphicDispatcherCallTarget.function", function ()
                 local function_ = WasmBuilder.define(self.calling_module.functions[], self.signature, name(self))
                 add(self.translator.compilation_queue[], CompilationTask(function_, inlining_code_gen(self)))
                 return function_
@@ -543,7 +543,7 @@ declares it and, at the pin, neither assigns nor reads it.
     DummyValuesCollector(::Val{:_}, translator::KernelNodes, module_::WasmBuilder.ModuleBuilder) =
         new(module_, translator, LinkedHashMap{WasmBuilder.IR.FunctionType,WasmBuilder.IR.BaseFunction}(),
             LinkedHashMap{WasmBuilder.IR.HeapType,WasmBuilder.IR.Global}(),
-            Late{WasmBuilder.IR.Global}("dart2wasm/lib/translator.dart:3841 DummyValuesCollector.dummyStructGlobal"))
+            Late{WasmBuilder.IR.Global}(late"dart2wasm/lib/translator.dart:3841 DummyValuesCollector.dummyStructGlobal"))
 end
 
 @parity "dart2wasm/lib/translator.dart:3925 _WasmImporter" abstract type _WasmImporter end

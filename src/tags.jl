@@ -20,8 +20,8 @@ _EmbedderStackTrace (src/runtime/standalone/stack_trace_patch.jl).
     function ExceptionTags(translator::KernelNodes)
         local self = Ref{ExceptionTags}()
         local tags = new(translator,
-            Late{WasmBuilder.IR.Tag}("dart2wasm/lib/tags.dart:11 ExceptionTags._definedDartTag", () -> _define_dart_exception_tag(self[])),
-            Late{WasmBuilder.IR.Tag}("dart2wasm/lib/tags.dart:12 ExceptionTags._importedJsTag", () -> _import_js_exception_tag(self[])),
+            Late{WasmBuilder.IR.Tag}(late"dart2wasm/lib/tags.dart:12 ExceptionTags._definedDartTag", () -> _define_dart_exception_tag(self[])),
+            Late{WasmBuilder.IR.Tag}(late"dart2wasm/lib/tags.dart:14 ExceptionTags._importedJsTag", () -> _import_js_exception_tag(self[])),
             WasmTagImporter(translator, "exception"))
         self[] = tags
         return tags

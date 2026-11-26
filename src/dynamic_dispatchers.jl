@@ -36,7 +36,7 @@ end
             call_shape::CallShape, calling_module::WasmBuilder.ModuleBuilder)
         local self
         self = new(signature, translator, call_shape, calling_module,
-            Late{WasmBuilder.IR.BaseFunction}("dart2wasm/lib/dynamic_dispatchers.dart:53 _DynamicDispatcherCallTarget.function", function ()
+            Late{WasmBuilder.IR.BaseFunction}(late"dart2wasm/lib/dynamic_dispatchers.dart:53 _DynamicDispatcherCallTarget.function", function ()
                 local function_ = WasmBuilder.define(self.calling_module.functions[], self.signature, name(self))
                 local dispatcher = _DynamicDispatcherCodeGenerator(self.translator, self.call_shape, function_)
                 add(self.translator.compilation_queue[], CompilationTask(function_, dispatcher))

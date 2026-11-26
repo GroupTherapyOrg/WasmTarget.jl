@@ -15,7 +15,7 @@ connected component of the type graph, branded where groups would otherwise be e
     # reads the value being made, so it reaches it through a reference set once the value exists
     function _RecGroupBuilder()
         local self = Ref{_RecGroupBuilder}()
-        local b = new(Late{Vector{Vector{IR.DefType}}}("wasm_builder/lib/src/builder/types.dart:77 _RecGroupBuilder._allRecursiveGroups", () -> _create_all_recursive_groups(self[])),
+        local b = new(Late{Vector{Vector{IR.DefType}}}(late"wasm_builder/lib/src/builder/types.dart:77 _RecGroupBuilder._allRecursiveGroups", () -> _create_all_recursive_groups(self[])),
                       IR.DefType[], LinkedHashSet{IR.StructType}())
         self[] = b
         return b
@@ -51,7 +51,7 @@ end
 # The field values brand types are built from. dart's top-level const list; its values are IR
 # constants, which load after the builder's files (include_dart loads DART_FILES in order), so the
 # list is a cell built on its first read, the value dart's const has.
-@parity "wasm_builder/lib/src/builder/types.dart:10 _brandTypeFieldValues" const _brandTypeFieldValues = Late{Vector{IR.StorageType}}("wasm_builder/lib/src/builder/types.dart:10 _brandTypeFieldValues", () -> IR.StorageType[
+@parity "wasm_builder/lib/src/builder/types.dart:10 _brandTypeFieldValues" const _brandTypeFieldValues = Late{Vector{IR.StorageType}}(late"wasm_builder/lib/src/builder/types.dart:10 _brandTypeFieldValues", () -> IR.StorageType[
     IR.NumType_i32,
     IR.NumType_i64,
     IR.NumType_f32,

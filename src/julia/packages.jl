@@ -83,15 +83,15 @@ end
 
 @quarantine unpinned "Julia has no per-file namespace; dart's wasm_builder package is a module" Core.Module module WasmBuilder
 # ---- WasmBuilder's imports, written by dev/skeleton.jl write ----
-import ..@dart_export, ..@parity, ..@quarantine, ..AbstractInstructionsBuilder, ..AbstractModule,
-       ..AbstractModuleBuilder, ..Internal, ..InvalidModule, ..Late, ..LinkedHashMap,
-       ..LinkedHashSet, ..Unported, ..reject!, ..strongly_connected_components
+import ..@dart_export, ..@late_str, ..@parity, ..@quarantine, ..AbstractInstructionsBuilder,
+       ..AbstractModule, ..AbstractModuleBuilder, ..Internal, ..InvalidModule, ..Late,
+       ..LinkedHashMap, ..LinkedHashSet, ..Unported, ..reject!, ..strongly_connected_components
 import Base: @nospecializeinfer
 # ---- end of WasmBuilder's imports ----
 @quarantine unpinned "dart's builder and serializer import ir under the prefix ir; a prefix is a module in Julia" Core.Module module IR
 # ---- IR's imports, written by dev/skeleton.jl write ----
-import ...@closed, ...@dart_export, ...@parity, ...AbstractModule, ...Internal, ...InvalidModule,
-       ...Late, ...LinkedHashMap, ...Unported, ...reject!
+import ...@closed, ...@dart_export, ...@late_str, ...@parity, ...AbstractModule, ...Internal,
+       ...InvalidModule, ...Late, ...LinkedHashMap, ...Unported, ...reject!
 import ..WasmBuilder
 # ---- end of IR's imports ----
 end
@@ -99,7 +99,7 @@ end
 
 @quarantine pin"pkg/dart2wasm/lib/dart2wasm.dart:298 main" "Julia has no per-file namespace; dart's dart2wasm package, its library entered at pkg/dart2wasm/lib/dart2wasm.dart:298 main, is a module" Core.Module module Dart2Wasm
 # ---- Dart2Wasm's imports, written by dev/skeleton.jl write ----
-import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..AbstractClosures,
+import ..@closed, ..@exhaustive, ..@late_str, ..@parity, ..@quarantine, ..AbstractClosures,
        ..AbstractDispatchTable, ..AbstractLambda, ..BLOCK, ..BLOCK_TYPE_CATCH, ..BLOCK_TYPE_EXNREF,
        ..BLOCK_TYPE_RESULTS, ..BLOCK_TYPE_VOID, ..BR, ..BR_IF, ..BR_TABLE, ..BR_UNLESS, ..CATCH,
        ..CATCH_ALL_REF, ..CONST_I32, ..COPY, ..ClassField, ..ClosedWorld, ..CompileStatics,

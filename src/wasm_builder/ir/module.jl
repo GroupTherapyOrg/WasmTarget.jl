@@ -27,21 +27,21 @@
     const _extra_custom_sections::Late{Vector{WasmBuilder.ExtraCustomSection}}
     # dart's Module.uninitialized (line 42), the struct's one inner constructor
     Module(::Val{:uninitialized}) = new(false, 0,
-            Late{Union{String,Nothing}}("wasm_builder/lib/src/ir/module.dart:25 Module._moduleName"),
-            Late{Functions}("wasm_builder/lib/src/ir/module.dart:26 Module._functions"),
-            Late{Union{BaseFunction,Nothing}}("wasm_builder/lib/src/ir/module.dart:27 Module._start"),
-            Late{Tables}("wasm_builder/lib/src/ir/module.dart:28 Module._tables"),
-            Late{Elements}("wasm_builder/lib/src/ir/module.dart:29 Module._elements"),
-            Late{Tags}("wasm_builder/lib/src/ir/module.dart:30 Module._tags"),
-            Late{Memories}("wasm_builder/lib/src/ir/module.dart:31 Module._memories"),
-            Late{Exports}("wasm_builder/lib/src/ir/module.dart:32 Module._exports"),
-            Late{Globals}("wasm_builder/lib/src/ir/module.dart:33 Module._globals"),
-            Late{Types}("wasm_builder/lib/src/ir/module.dart:34 Module._types"),
-            Late{DataSegments}("wasm_builder/lib/src/ir/module.dart:35 Module._dataSegments"),
-            Late{Imports}("wasm_builder/lib/src/ir/module.dart:36 Module._imports"),
-            Late{Vector{Int}}("wasm_builder/lib/src/ir/module.dart:37 Module._watchPoints"),
-            Late{Union{String,Nothing}}("wasm_builder/lib/src/ir/module.dart:39 Module.sourceMapUrl"),
-            Late{Vector{WasmBuilder.ExtraCustomSection}}("wasm_builder/lib/src/ir/module.dart:40 Module._extraCustomSections"))
+            Late{Union{String,Nothing}}(late"wasm_builder/lib/src/ir/module.dart:25 Module._moduleName"),
+            Late{Functions}(late"wasm_builder/lib/src/ir/module.dart:26 Module._functions"),
+            Late{Union{BaseFunction,Nothing}}(late"wasm_builder/lib/src/ir/module.dart:27 Module._start"),
+            Late{Tables}(late"wasm_builder/lib/src/ir/module.dart:28 Module._tables"),
+            Late{Elements}(late"wasm_builder/lib/src/ir/module.dart:29 Module._elements"),
+            Late{Tags}(late"wasm_builder/lib/src/ir/module.dart:30 Module._tags"),
+            Late{Memories}(late"wasm_builder/lib/src/ir/module.dart:31 Module._memories"),
+            Late{Exports}(late"wasm_builder/lib/src/ir/module.dart:32 Module._exports"),
+            Late{Globals}(late"wasm_builder/lib/src/ir/module.dart:33 Module._globals"),
+            Late{Types}(late"wasm_builder/lib/src/ir/module.dart:34 Module._types"),
+            Late{DataSegments}(late"wasm_builder/lib/src/ir/module.dart:35 Module._dataSegments"),
+            Late{Imports}(late"wasm_builder/lib/src/ir/module.dart:36 Module._imports"),
+            Late{Vector{Int}}(late"wasm_builder/lib/src/ir/module.dart:37 Module._watchPoints"),
+            Late{Union{String,Nothing}}(late"wasm_builder/lib/src/ir/module.dart:39 Module.sourceMapUrl"),
+            Late{Vector{WasmBuilder.ExtraCustomSection}}(late"wasm_builder/lib/src/ir/module.dart:40 Module._extraCustomSections"))
 end
 
 @parity "wasm_builder/lib/src/ir/module.dart:42 Module.uninitialized" Module_uninitialized()::Module = Module(Val(:uninitialized))

@@ -38,15 +38,15 @@ answer. If the subset ever admitted dynamic calls, the same code would fill it.
             is_setter::Bool, is_index_setter::Bool)
         local self
         self = new(dispatch_table, id, call_count,
-            Late{ParameterInfo}("dart2wasm/lib/dispatch_table.dart:41 SelectorInfo.paramInfo"),
+            Late{ParameterInfo}(late"dart2wasm/lib/dispatch_table.dart:42 SelectorInfo.paramInfo"),
             is_setter, is_index_setter,
-            Late{Bool}("dart2wasm/lib/dispatch_table.dart:53 SelectorInfo.useMultipleEntryPoints"),
-            Late{Bool}("dart2wasm/lib/dispatch_table.dart:57 SelectorInfo._useSentinelForOptionalParameters"),
-            Late{WasmBuilder.IR.FunctionType}("dart2wasm/lib/dispatch_table.dart:62 SelectorInfo.signature", () -> _compute_signature(self)),
-            Late{Bool}("dart2wasm/lib/dispatch_table.dart:67 SelectorInfo.synthesizeNullReturnValue"),
-            Late{Bool}("dart2wasm/lib/dispatch_table.dart:73 SelectorInfo.synthesizeNoReturn"),
+            Late{Bool}(late"dart2wasm/lib/dispatch_table.dart:54 SelectorInfo.useMultipleEntryPoints"),
+            Late{Bool}(late"dart2wasm/lib/dispatch_table.dart:58 SelectorInfo._useSentinelForOptionalParameters"),
+            Late{WasmBuilder.IR.FunctionType}(late"dart2wasm/lib/dispatch_table.dart:63 SelectorInfo.signature", () -> _compute_signature(self)),
+            Late{Bool}(late"dart2wasm/lib/dispatch_table.dart:68 SelectorInfo.synthesizeNullReturnValue"),
+            Late{Bool}(late"dart2wasm/lib/dispatch_table.dart:74 SelectorInfo.synthesizeNoReturn"),
             name, nothing, nothing, nothing, Reference[],
-            Late{Base.IdSet{Reference}}("dart2wasm/lib/dispatch_table.dart:287 SelectorInfo._targetSet", function ()
+            Late{Base.IdSet{Reference}}(late"dart2wasm/lib/dispatch_table.dart:287 SelectorInfo._targetSet", function ()
                 # dart's `!` reads, located rejections
                 local present(t::Union{SelectorTargets,Nothing})::SelectorTargets = t === nothing ?
                     reject!(Internal("dart2wasm/lib/dispatch_table.dart:287 SelectorInfo._targetSet: $(self.name)'s targets are not set"), "SelectorInfo._targetSet") : t
@@ -72,7 +72,7 @@ table and the ones called directly; the selector's offset in the table once plac
             static_dispatch_ranges::Vector{NamedTuple{(:range, :target),Tuple{Range,Reference}}})
         local self
         self = new(all_target_ranges, _dispatch_table_ranges, static_dispatch_ranges, nothing,
-                   Late{Base.IdSet{Reference}}("dart2wasm/lib/dispatch_table.dart:392 SelectorTargets._targetSet",
+                   Late{Base.IdSet{Reference}}(late"dart2wasm/lib/dispatch_table.dart:390 SelectorTargets._targetSet",
                        () -> Base.IdSet{Reference}(e.target for e in self.all_target_ranges)))
         return self
     end
@@ -109,10 +109,10 @@ member never reads): `procedureAttributeMetadata` :399, `_selectorMetadata` :403
     function DispatchTable(::Val{:_}, translator::KernelNodes)
         local self
         self = new(Dict{Union{FieldAccessSite,FieldReference},Int}(), translator, LinkedHashMap{Int,SelectorInfo}(),
-            Late{Vector{Union{Reference,Nothing}}}("dart2wasm/lib/dispatch_table.dart:409 DispatchTable._table"),
-            Late{IdDict{Reference,Int}}("dart2wasm/lib/dispatch_table.dart:413 DispatchTable._tableIndexForReference"),
-            Late{WasmBuilder.TableBuilder}("dart2wasm/lib/dispatch_table.dart:415 DispatchTable._definedWasmTable"),
-            Late{WasmTableImporter}("dart2wasm/lib/dispatch_table.dart:416 DispatchTable._importedWasmTables",
+            Late{Vector{Union{Reference,Nothing}}}(late"dart2wasm/lib/dispatch_table.dart:411 DispatchTable._table"),
+            Late{IdDict{Reference,Int}}(late"dart2wasm/lib/dispatch_table.dart:415 DispatchTable._tableIndexForReference"),
+            Late{WasmBuilder.TableBuilder}(late"dart2wasm/lib/dispatch_table.dart:417 DispatchTable._definedWasmTable"),
+            Late{WasmTableImporter}(late"dart2wasm/lib/dispatch_table.dart:418 DispatchTable._importedWasmTables",
                 () -> WasmTableImporter(self.translator, "dispatch")))
         return self
     end
@@ -129,7 +129,7 @@ and the runtime type table's (superclass id, substitution index) pair (types.dar
     offset::Late{Int}
     # the struct's one constructor, tagged; dart's constructor at :1045 is its outer function
     Row{V}(::Val{:_}, values::Vector{NamedTuple{(:index, :value),Tuple{Int,V}}}) where {V<:Union{Reference,TableEntry,Tuple{Int,Int}}} =
-        new{V}(values, Late{Int}("dart2wasm/lib/dispatch_table.dart:1058 Row.offset"))
+        new{V}(values, Late{Int}(late"dart2wasm/lib/dispatch_table.dart:1058 Row.offset"))
 end
 
 @parity "dart2wasm/lib/dispatch_table.dart:33 SelectorInfo.translator" translator(self::SelectorInfo)::KernelNodes = self.dispatch_table.translator

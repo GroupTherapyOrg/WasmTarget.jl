@@ -24,9 +24,9 @@ type parameters (its parameters are bound), so `initializerTypeParameters` is em
     # assigns the late fields
     ConstructorInfo(::Val{:_}, constructor::Core.MethodInstance, translator::KernelNodes, all_parameters::Vector{NirArgument}) =
         new(constructor, translator, all_parameters,
-            Late{Vector{TypeVar}}("dart2wasm/lib/constructor_info.dart:22 ConstructorInfo.initializerTypeParameters"),
-            Late{Vector{NirArgument}}("dart2wasm/lib/constructor_info.dart:23 ConstructorInfo.initializerParameters"),
-            Late{Vector{NirArgument}}("dart2wasm/lib/constructor_info.dart:30 ConstructorInfo.bodyParameters"),
+            Late{Vector{TypeVar}}(late"dart2wasm/lib/constructor_info.dart:22 ConstructorInfo.initializerTypeParameters"),
+            Late{Vector{NirArgument}}(late"dart2wasm/lib/constructor_info.dart:23 ConstructorInfo.initializerParameters"),
+            Late{Vector{NirArgument}}(late"dart2wasm/lib/constructor_info.dart:30 ConstructorInfo.bodyParameters"),
             Dict{Union{NirSSA,NirArgument},ClassField}())
 end
 

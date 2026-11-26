@@ -27,14 +27,14 @@ fill them.
     function DynamicDispatchTable(::Val{:_}, translator::KernelNodes)
         local self
         self = new(translator,
-            Late{WasmBuilder.TableBuilder}("dart2wasm/lib/dynamic_dispatch_table.dart:28 DynamicDispatchTable._definedTargetsTable"),
-            Late{WasmTableImporter}("dart2wasm/lib/dynamic_dispatch_table.dart:29 DynamicDispatchTable._importedTargetsTable",
+            Late{WasmBuilder.TableBuilder}(late"dart2wasm/lib/dynamic_dispatch_table.dart:28 DynamicDispatchTable._definedTargetsTable"),
+            Late{WasmTableImporter}(late"dart2wasm/lib/dynamic_dispatch_table.dart:29 DynamicDispatchTable._importedTargetsTable",
                 () -> WasmTableImporter(self.translator, "dynamicDispatchTargets")),
-            Late{WasmBuilder.TableBuilder}("dart2wasm/lib/dynamic_dispatch_table.dart:34 DynamicDispatchTable._definedClassIdsTable"),
-            Late{WasmTableImporter}("dart2wasm/lib/dynamic_dispatch_table.dart:35 DynamicDispatchTable._importedClassIdsTable",
+            Late{WasmBuilder.TableBuilder}(late"dart2wasm/lib/dynamic_dispatch_table.dart:34 DynamicDispatchTable._definedClassIdsTable"),
+            Late{WasmTableImporter}(late"dart2wasm/lib/dynamic_dispatch_table.dart:35 DynamicDispatchTable._importedClassIdsTable",
                 () -> WasmTableImporter(self.translator, "dynamicDispatchClassIds")),
-            Late{Vector{Union{TableEntry,Nothing}}}("dart2wasm/lib/dynamic_dispatch_table.dart:40 DynamicDispatchTable._table"),
-            Late{LinkedHashMap{CallShape,DynamicSelector}}("dart2wasm/lib/dynamic_dispatch_table.dart:42 DynamicDispatchTable.dynamicSelectors"))
+            Late{Vector{Union{TableEntry,Nothing}}}(late"dart2wasm/lib/dynamic_dispatch_table.dart:40 DynamicDispatchTable._table"),
+            Late{LinkedHashMap{CallShape,DynamicSelector}}(late"dart2wasm/lib/dynamic_dispatch_table.dart:42 DynamicDispatchTable.dynamicSelectors"))
         return self
     end
 end
@@ -52,8 +52,8 @@ so DynamicDispatchTable.build makes none in a Julia program. Equal by shape, as 
     # the struct's one constructor, tagged; dart's constructor at :337 is its outer function, and the
     # late targets and offset are assigned by build
     DynamicSelector(::Val{:_}, shape::CallShape, signature::WasmBuilder.IR.FunctionType) =
-        new(shape, signature, Late{LinkedHashMap{Int,Core.MethodInstance}}("dart2wasm/lib/dynamic_dispatch_table.dart:333 DynamicSelector.targets"),
-            Late{Union{Int,Nothing}}("dart2wasm/lib/dynamic_dispatch_table.dart:335 DynamicSelector.offset"))
+        new(shape, signature, Late{LinkedHashMap{Int,Core.MethodInstance}}(late"dart2wasm/lib/dynamic_dispatch_table.dart:333 DynamicSelector.targets"),
+            Late{Union{Int,Nothing}}(late"dart2wasm/lib/dynamic_dispatch_table.dart:335 DynamicSelector.offset"))
 end
 
 """The call shapes of the program's dynamic call sites, dart's recursive visitor over the component."""

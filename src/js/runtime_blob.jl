@@ -26,7 +26,7 @@ end
 # Julia's triple-quoted raw strings, as dart's r''' strings: the first newline dropped and, each
 # string's least indented line at column 0, no indentation removed, so the text is dart's byte for byte.
 # A top-level `final` is dart's lazily initialized variable, a Late cell with its initializer.
-@parity "dart2wasm/lib/js/runtime_blob.dart:5 jsRuntimeBlobTemplate" const js_runtime_blob_template = Late{Template}("dart2wasm/lib/js/runtime_blob.dart:5 jsRuntimeBlobTemplate", () -> Template(raw"""
+@parity "dart2wasm/lib/js/runtime_blob.dart:5 jsRuntimeBlobTemplate" const js_runtime_blob_template = Late{Template}(late"dart2wasm/lib/js/runtime_blob.dart:5 jsRuntimeBlobTemplate", () -> Template(raw"""
 // Compiles a dart2wasm-generated main module from `source` which can then
 // be instantiated via the `instantiate` method.
 //
@@ -192,7 +192,7 @@ const jsStringPolyfill = {
     };
 """
 
-@parity "dart2wasm/lib/js/runtime_blob.dart:171 moduleLoadingHelperTemplate" const module_loading_helper_template = Late{Template}("dart2wasm/lib/js/runtime_blob.dart:171 moduleLoadingHelperTemplate", () -> Template(raw"""
+@parity "dart2wasm/lib/js/runtime_blob.dart:171 moduleLoadingHelperTemplate" const module_loading_helper_template = Late{Template}(late"dart2wasm/lib/js/runtime_blob.dart:171 moduleLoadingHelperTemplate", () -> Template(raw"""
     async function handleDeferredModuleBytes(moduleName, source) {
       const builtins = this.builtins;
       const module = await ((source instanceof Response)
@@ -222,7 +222,7 @@ const jsStringPolyfill = {
 """))
 
 # a static `final`, dart's lazily initialized field, a Late cell with its initializer
-@parity "dart2wasm/lib/js/runtime_blob.dart:201 Template._templateVariableRegExp" const Template__template_variable_reg_exp = Late{Regex}("dart2wasm/lib/js/runtime_blob.dart:201 Template._templateVariableRegExp", () -> r"<<(?<varname>[A-Z_]+)>>")
+@parity "dart2wasm/lib/js/runtime_blob.dart:201 Template._templateVariableRegExp" const Template__template_variable_reg_exp = Late{Regex}(late"dart2wasm/lib/js/runtime_blob.dart:201 Template._templateVariableRegExp", () -> r"<<(?<varname>[A-Z_]+)>>")
 
 @parity "dart2wasm/lib/js/runtime_blob.dart:204 Template" function Template(string_template::String)::Template
     local self = Template(Val(:_))

@@ -553,7 +553,7 @@ ports of what Julia forces are anchored at the C that defines it, as the stackif
     "julia/base/dict", "julia/base/reinterpretarray", "julia/src/staticdata",
     "julia/src/ast", "julia/src/flisp/julia_extensions", "julia/src/flisp/julia_opsuffs", "julia/src/support/utf8",
     "julia/src/julia-parser", "julia/src/support/strtod", "julia/src/jltypes", "julia/src/llvm-late-gc-lowering",
-    "julia/src/iddict", "julia/src/support/htable", "julia/base/iddict",
+    "julia/src/iddict", "julia/src/support/htable", "julia/base/iddict", "julia/base/regex",
 )
 
 """
@@ -1511,7 +1511,7 @@ end
         "no checkout of dart-lang/sdk at $PIN at ~/.cache/wasmtarget/dart-sdk: bash dev/fetch_dart_sdk.sh"))
     local debt = _quarantine_debt(joinpath(dirname(SRC), "dev", "quarantine_unpinned.txt"))
     local exempt = check_no_counterpart(@__MODULE__, SRC, sdk, joinpath(dirname(SRC), "dev", "quarantine_no_counterpart.txt"), debt)
-    return check_anchors_resolve(@__MODULE__, sdk) + check_precedent_kinds(@__MODULE__, SRC) +
+    return check_anchors_resolve(@__MODULE__, sdk) + check_late_anchors(@__MODULE__, sdk) + check_precedent_kinds(@__MODULE__, SRC) +
            check_quarantine_pinned(@__MODULE__, SRC, sdk, vcat(debt, exempt))
 end
 

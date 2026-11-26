@@ -72,21 +72,21 @@ parameters, a `UnionAll`, and its `TypeVar`. The translator is held as `KernelNo
         end
         local none(anchor::String, why::String) = () -> reject!(Internal("$anchor: $why"), anchor)
         self = new(translator,
-            Late{ClassInfo}("dart2wasm/lib/types.dart:44 Types.typeClassInfo",
+            Late{ClassInfo}(late"dart2wasm/lib/types.dart:44 Types.typeClassInfo",
                 () -> info(supertype(DataType), "dart2wasm/lib/types.dart:44 Types.typeClassInfo")),
-            Late{ClassInfo}("dart2wasm/lib/types.dart:48 Types.namedParameterClassInfo",
+            Late{ClassInfo}(late"dart2wasm/lib/types.dart:48 Types.namedParameterClassInfo",
                 none("dart2wasm/lib/types.dart:48 Types.namedParameterClassInfo", "a Julia function type is a method signature, a Tuple type of positional parameters; keyword arguments are Core.kwcall's own method, so no named parameter")),
-            Late{WasmBuilder.IR.ValueType}("dart2wasm/lib/types.dart:52 Types.typeListExpectedType",
+            Late{WasmBuilder.IR.ValueType}(late"dart2wasm/lib/types.dart:52 Types.typeListExpectedType",
                 () -> info(Core.SimpleVector, "dart2wasm/lib/types.dart:52 Types.typeListExpectedType").non_nullable_type),
-            Late{WasmBuilder.IR.ArrayType}("dart2wasm/lib/types.dart:56 Types.typeArrayArrayType",
+            Late{WasmBuilder.IR.ArrayType}(late"dart2wasm/lib/types.dart:56 Types.typeArrayArrayType",
                 () -> array_type_for_dart_type(self.translator, type_type(self); mutable_ = true)),
-            Late{WasmBuilder.IR.ValueType}("dart2wasm/lib/types.dart:62 Types.typeArrayExpectedType",
+            Late{WasmBuilder.IR.ValueType}(late"dart2wasm/lib/types.dart:62 Types.typeArrayExpectedType",
                 () -> WasmBuilder.IR.RefType_def(self.type_array_array_type[]; nullable = false)),
-            Late{WasmBuilder.IR.ValueType}("dart2wasm/lib/types.dart:68 Types.namedParametersExpectedType",
+            Late{WasmBuilder.IR.ValueType}(late"dart2wasm/lib/types.dart:68 Types.namedParametersExpectedType",
                 none("dart2wasm/lib/types.dart:68 Types.namedParametersExpectedType", "a Julia function type is a method signature, a Tuple type of positional parameters; keyword arguments are Core.kwcall's own method, so no named parameters")),
-            Late{WasmBuilder.IR.ValueType}("dart2wasm/lib/types.dart:74 Types.recordTypeNamesFieldExpectedType",
+            Late{WasmBuilder.IR.ValueType}(late"dart2wasm/lib/types.dart:74 Types.recordTypeNamesFieldExpectedType",
                 none("dart2wasm/lib/types.dart:74 Types.recordTypeNamesFieldExpectedType", "Julia's records are Tuple and NamedTuple types, DataTypes with no names field")),
-            Late{RuntimeTypeInformation}("dart2wasm/lib/types.dart:79 Types.rtt", () -> RuntimeTypeInformation(self.translator)),
+            Late{RuntimeTypeInformation}(late"dart2wasm/lib/types.dart:79 Types.rtt", () -> RuntimeTypeInformation(self.translator)),
             InterfaceTypeEnvironment(), IdDict{UnionAll,Int}(), IdDict{TypeVar,Int}(),
             IdDict{WasmBuilder.ModuleBuilder,AsCheckers}(), IdDict{WasmBuilder.ModuleBuilder,IsCheckers}())
         return self
@@ -163,7 +163,7 @@ compilation.
             check_arguments::Bool, argument_count::Int)
         local self
         self = new(signature, translator, calling_module, tested_against_type, operand_is_nullable, check_arguments, argument_count,
-            Late{WasmBuilder.IR.BaseFunction}("dart2wasm/lib/types.dart:877 IsCheckerCallTarget.function", function ()
+            Late{WasmBuilder.IR.BaseFunction}(late"dart2wasm/lib/types.dart:877 IsCheckerCallTarget.function", function ()
                 local function_ = WasmBuilder.define(self.calling_module.functions[],
                     WasmBuilder.define_function(types_builder(self.translator), self.signature.inputs, self.signature.outputs), name(self))
                 function_.is_pure = true
@@ -210,7 +210,7 @@ itself, defined on its first read and queued for compilation.
             check_arguments::Bool, argument_count::Int)
         local self
         self = new(signature, translator, calling_module, tested_against_type, operand_is_nullable, check_arguments, argument_count,
-            Late{WasmBuilder.IR.BaseFunction}("dart2wasm/lib/types.dart:1047 AsCheckerCallTarget.function", function ()
+            Late{WasmBuilder.IR.BaseFunction}(late"dart2wasm/lib/types.dart:1047 AsCheckerCallTarget.function", function ()
                 local function_ = WasmBuilder.define(self.calling_module.functions[],
                     WasmBuilder.define_function(types_builder(self.translator), self.signature.inputs, self.signature.outputs), name(self))
                 add(self.translator.compilation_queue[], CompilationTask(function_,
@@ -269,15 +269,15 @@ its class hierarchy. dart's maps iterate in insertion order, and so the rows do:
     # :1217, which builds the rules and the tables, is its outer function
     RuntimeTypeInformation(::Val{:_}, translator::KernelNodes) =
         new(translator,
-            Late{LinkedHashMap{Int,LinkedHashMap{Int,Int}}}("dart2wasm/lib/types.dart:1200 RuntimeTypeInformation._substitutionSubclassToSuperclass"),
-            Late{LinkedHashMap{Int,LinkedHashMap{Int,Int}}}("dart2wasm/lib/types.dart:1201 RuntimeTypeInformation._substitutionSuperclassToSubclass"),
-            Late{Dict{InstanceConstant,Int}}("dart2wasm/lib/types.dart:1202 RuntimeTypeInformation._substitutionTable"),
-            Late{Vector{InstanceConstant}}("dart2wasm/lib/types.dart:1203 RuntimeTypeInformation._substitutionTableByIndex"),
-            Late{NirConst}("dart2wasm/lib/types.dart:1205 RuntimeTypeInformation.typeRowDisplacementOffsets"),
-            Late{NirConst}("dart2wasm/lib/types.dart:1206 RuntimeTypeInformation.typeRowDisplacementTable"),
-            Late{NirConst}("dart2wasm/lib/types.dart:1207 RuntimeTypeInformation.typeRowDisplacementSubstTable"),
-            Late{NirConst}("dart2wasm/lib/types.dart:1208 RuntimeTypeInformation.canonicalSubstitutionTable"),
-            Late{NirConst}("dart2wasm/lib/types.dart:1209 RuntimeTypeInformation.typeNames"),
+            Late{LinkedHashMap{Int,LinkedHashMap{Int,Int}}}(late"dart2wasm/lib/types.dart:1200 RuntimeTypeInformation._substitutionSubclassToSuperclass"),
+            Late{LinkedHashMap{Int,LinkedHashMap{Int,Int}}}(late"dart2wasm/lib/types.dart:1201 RuntimeTypeInformation._substitutionSuperclassToSubclass"),
+            Late{Dict{InstanceConstant,Int}}(late"dart2wasm/lib/types.dart:1202 RuntimeTypeInformation._substitutionTable"),
+            Late{Vector{InstanceConstant}}(late"dart2wasm/lib/types.dart:1203 RuntimeTypeInformation._substitutionTableByIndex"),
+            Late{NirConst}(late"dart2wasm/lib/types.dart:1205 RuntimeTypeInformation.typeRowDisplacementOffsets"),
+            Late{NirConst}(late"dart2wasm/lib/types.dart:1206 RuntimeTypeInformation.typeRowDisplacementTable"),
+            Late{NirConst}(late"dart2wasm/lib/types.dart:1207 RuntimeTypeInformation.typeRowDisplacementSubstTable"),
+            Late{NirConst}(late"dart2wasm/lib/types.dart:1208 RuntimeTypeInformation.canonicalSubstitutionTable"),
+            Late{NirConst}(late"dart2wasm/lib/types.dart:1209 RuntimeTypeInformation.typeNames"),
             String[],
             Dict{Int,Bool}())
 end

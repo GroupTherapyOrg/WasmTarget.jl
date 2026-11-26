@@ -692,7 +692,7 @@ end
 
 # the host's modules, read once from the template (host_modules), as dart's runtime generator holds
 # its template once
-@quarantine "the host's modules are read once, the template being fixed (pkg/dart2wasm/lib/js/runtime_blob.dart:5 jsRuntimeBlobTemplate)" Core.String const HOST_MODULES = Late{Vector{String}}("src/julia/runtime/rtutils.jl HOST_MODULES", host_modules)
+@quarantine "the host's modules are read once, the template being fixed (pkg/dart2wasm/lib/js/runtime_blob.dart:5 jsRuntimeBlobTemplate)" Core.String const HOST_MODULES = Late{Vector{String}}(late"dart2wasm/lib/js/runtime_blob.dart:5 jsRuntimeBlobTemplate", host_modules)
 
 """
     NirForeignImport
