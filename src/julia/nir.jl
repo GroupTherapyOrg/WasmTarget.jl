@@ -389,12 +389,16 @@ substitutes a known one), so a name read through one is read as computed at run 
             v === nothing && return nothing
             push!(vals, something(v))
         end
-        # a builtin, whose answer no world changes (codegen runs it in world 1)
-        return try
-            Some{Any}(something(f)(vals...))
+        # a builtin, whose answer no world changes (codegen runs it in world 1). The catch is Julia's own:
+        # static_eval applies the builtin under JL_TRY and answers NULL, not static, for anything it throws
+        # (julia/src/codegen.cpp:3009-3013, `JL_TRY { result = jl_apply(v, n+1); } JL_CATCH { result = NULL; }`),
+        # around the application alone; a name it leaves unknown rejects, located, in _nir_ccall_name
+        local result = try
+            something(f)(vals...)
         catch
-            nothing
+            return nothing
         end
+        return Some{Any}(result)
     end
     return nothing
 end
