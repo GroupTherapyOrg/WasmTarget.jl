@@ -276,8 +276,8 @@ end
     precision::Int
     sizeInBits::Int
 end
-@quarantine pin"precedent(llvm: llvm/include/llvm/ADT/APFloat.h:1005 fltSemantics)" "IEEE single's semantics, APFloat's semIEEEsingle {127, -126, 24, 32}" Core.Int const APFLOAT_SEM_IEEESINGLE = APFloatSemantics(Int(127), Int(-126), Int(24), Int(32))
-@quarantine pin"precedent(llvm: llvm/include/llvm/ADT/APFloat.h:1005 fltSemantics)" "IEEE double's semantics, APFloat's semIEEEdouble {1023, -1022, 53, 64}" Core.Int const APFLOAT_SEM_IEEEDOUBLE = APFloatSemantics(Int(1023), Int(-1022), Int(53), Int(64))
+@quarantine pin"precedent(llvm: llvm/include/llvm/ADT/APFloat.h:270 APFloatBase::semIEEEsingle)" "IEEE single's semantics, APFloat's semIEEEsingle, which APFloat.cpp:73 defines as {127, -126, 24, 32}" WasmTarget.APFloatSemantics const APFLOAT_SEM_IEEESINGLE = APFloatSemantics(127, -126, 24, 32)
+@quarantine pin"precedent(llvm: llvm/include/llvm/ADT/APFloat.h:271 APFloatBase::semIEEEdouble)" "IEEE double's semantics, APFloat's semIEEEdouble, which APFloat.cpp:74 defines as {1023, -1022, 53, 64}" WasmTarget.APFloatSemantics const APFLOAT_SEM_IEEEDOUBLE = APFloatSemantics(1023, -1022, 53, 64)
 
 # APFloat.h:461 IEEEFloat: a sign, a category (fcInfinity, fcNaN, fcNormal, fcZero: APFloat.h's fltCategory,
 # 0-3), an exponent and a significand of partCount() words, partCountForBits(precision + 1) (APFloat.cpp:1152)
@@ -289,25 +289,22 @@ end
     sign::Bool
 end
 
-# APFloat.h's fltCategory, opStatus and lostFraction values, and the rounding modes, named as LLVM names them;
-# each is pinned at the function that reads it
-@quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:1560 IEEEFloat::normalize)" "APFloat's fltCategory fcInfinity, which normalize reads" Core.Int const APF_fcInfinity::Int = 0
-@quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:1560 IEEEFloat::normalize)" "APFloat's fltCategory fcNaN, which normalize reads" Core.Int const APF_fcNaN::Int = 1
-@quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:1560 IEEEFloat::normalize)" "APFloat's fltCategory fcNormal, which normalize reads" Core.Int const APF_fcNormal::Int = 2
-@quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:1560 IEEEFloat::normalize)" "APFloat's fltCategory fcZero, which normalize reads" Core.Int const APF_fcZero::Int = 3
-@quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:1560 IEEEFloat::normalize)" "APFloat's opStatus opOK, which normalize returns" Core.Int const APF_opOK::Int = 0x00
-@quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:1560 IEEEFloat::normalize)" "APFloat's opStatus opOverflow, which normalize returns" Core.Int const APF_opOverflow::Int = 0x04
-@quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:1560 IEEEFloat::normalize)" "APFloat's opStatus opUnderflow, which normalize returns" Core.Int const APF_opUnderflow::Int = 0x08
-@quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:1560 IEEEFloat::normalize)" "APFloat's opStatus opInexact, which normalize returns" Core.Int const APF_opInexact::Int = 0x10
-@quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:580 lostFractionThroughTruncation)" "APFloat's lostFraction lfExactlyZero, which lostFractionThroughTruncation returns" Core.Int const APF_lfExactlyZero::Int = 0
-@quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:580 lostFractionThroughTruncation)" "APFloat's lostFraction lfLessThanHalf, which lostFractionThroughTruncation returns" Core.Int const APF_lfLessThanHalf::Int = 1
-@quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:580 lostFractionThroughTruncation)" "APFloat's lostFraction lfExactlyHalf, which lostFractionThroughTruncation returns" Core.Int const APF_lfExactlyHalf::Int = 2
-@quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:580 lostFractionThroughTruncation)" "APFloat's lostFraction lfMoreThanHalf, which lostFractionThroughTruncation returns" Core.Int const APF_lfMoreThanHalf::Int = 3
-@quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:1522 IEEEFloat::roundAwayFromZero)" "the rounding mode toward zero, which roundAwayFromZero's switch names" Core.Int const APF_rmTowardZero::Int = 0
-@quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:1522 IEEEFloat::roundAwayFromZero)" "the rounding mode to nearest, ties to even, which roundAwayFromZero's switch names" Core.Int const APF_rmNearestTiesToEven::Int = 1
-@quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:1522 IEEEFloat::roundAwayFromZero)" "the rounding mode toward positive, which roundAwayFromZero's switch names" Core.Int const APF_rmTowardPositive::Int = 2
-@quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:1522 IEEEFloat::roundAwayFromZero)" "the rounding mode toward negative, which roundAwayFromZero's switch names" Core.Int const APF_rmTowardNegative::Int = 3
-@quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:1522 IEEEFloat::roundAwayFromZero)" "the rounding mode to nearest, ties away, which roundAwayFromZero's switch names" Core.Int const APF_rmNearestTiesToAway::Int = 4
+# APFloat.h's fltCategory, opStatus and lostFraction and its rounding modes, each enum one table of its
+# enumerators' names and values in LLVM's order: fltCategory's and lostFraction's numbered from zero, as C++
+# numbers enumerators without initializers ([dcl.enum]p2), opStatus's as APFloat.h:361 writes them, and the
+# rounding modes llvm::RoundingMode's (llvm/include/llvm/ADT/FloatingPointMode.h), which APFloatBase names
+# at APFloat.h:345-350. lostFraction is a top-level enum (APFloat.h:51), which no anchor form resolves, so
+# its table is pinned at the function that returns it. Julia differs: an enumerator is an Int, the type of
+# the field that holds it (APFloatIEEE.category) and of the opStatus a function returns, read by name from
+# its table (APF_fltCategory.fcZero for C++'s fcZero)
+@quarantine pin"precedent(llvm: llvm/include/llvm/ADT/APFloat.h:371 APFloatBase::fltCategory)" "APFloat's fltCategory, its enumerators by name" Core.NamedTuple const APF_fltCategory =
+    NamedTuple{(:fcInfinity, :fcNaN, :fcNormal, :fcZero)}((0, 1, 2, 3))
+@quarantine pin"precedent(llvm: llvm/include/llvm/ADT/APFloat.h:361 APFloatBase::opStatus)" "APFloat's opStatus, its enumerators by name" Core.NamedTuple const APF_opStatus =
+    NamedTuple{(:opOK, :opInvalidOp, :opDivByZero, :opOverflow, :opUnderflow, :opInexact)}((0, 1, 2, 4, 8, 16))
+@quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:580 lostFractionThroughTruncation)" "APFloat's lostFraction, its enumerators by name" Core.NamedTuple const APF_lostFraction =
+    NamedTuple{(:lfExactlyZero, :lfLessThanHalf, :lfExactlyHalf, :lfMoreThanHalf)}((0, 1, 2, 3))
+@quarantine pin"precedent(llvm: llvm/include/llvm/ADT/APFloat.h:343 APFloatBase::roundingMode)" "APFloat's rounding modes, its roundingMode constants by name" Core.NamedTuple const APF_roundingMode =
+    NamedTuple{(:rmTowardZero, :rmNearestTiesToEven, :rmTowardPositive, :rmTowardNegative, :rmNearestTiesToAway)}((0, 1, 2, 3, 4))
 
 # APFloat.cpp:231-236 maxExponent, maxPrecision and maxPowerOfFiveParts: 2 + ((16383 + 113 - 1) * 815) /
 # (351 * 64), the parts powerOf5's tables hold
@@ -323,7 +320,7 @@ end
 
 # APFloat.cpp:1125 the IEEEFloat(semantics) constructor: initialize (APFloat.cpp:826) and a positive zero
 @quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:1125 IEEEFloat::IEEEFloat)" "a float of a semantics, zero, as APFloat's IEEEFloat constructor makes it" Base.:- apfloat_new(sem::APFloatSemantics)::APFloatIEEE =
-    APFloatIEEE(sem, zeros(UInt64, apfloat_partCount(sem)), sem.minExponent - 1, APF_fcZero, false)
+    APFloatIEEE(sem, zeros(UInt64, apfloat_partCount(sem)), sem.minExponent - 1, APF_fltCategory.fcZero, false)
 
 # APFloat.cpp:341 decDigitValue: c - '0', unsigned, so a non-digit reads 10 or more
 @quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:341 decDigitValue)" "a decimal digit's value, as APFloat's decDigitValue reads it" Base.:- apfloat_decDigitValue(c::UInt8)::UInt32 =
@@ -461,8 +458,8 @@ end
 
 # APFloat.cpp:551 trailingHexadecimalFraction: the fraction a hexadecimal significand loses past the bits it holds
 @quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:551 trailingHexadecimalFraction)" "the fraction lost past a hexadecimal significand's held digits, as APFloat's trailingHexadecimalFraction finds it" Base.:> function apfloat_trailingHexadecimalFraction(s::String, p::Int, e::Int, digitValue::UInt64)::Int
-    digitValue > 8 && return APF_lfMoreThanHalf
-    digitValue < 8 && digitValue > 0 && return APF_lfLessThanHalf
+    digitValue > 8 && return APF_lostFraction.lfMoreThanHalf
+    digitValue < 8 && digitValue > 0 && return APF_lostFraction.lfLessThanHalf
     # otherwise we need to find the first non-zero digit
     while p != e && (codeunit(s, p + 1) == UInt8('0') || codeunit(s, p + 1) == UInt8('.'))
         p += 1
@@ -470,18 +467,18 @@ end
     p == e && throw(ErrorException("WasmTarget: APFloat trailingHexadecimalFraction (llvm/lib/Support/APFloat.cpp): Invalid trailing hexadecimal fraction!"))
     local hexDigit = apfloat_hexDigitValue(codeunit(s, p + 1))
     # if we ran off the end it is exactly zero or one-half, otherwise a little more
-    return hexDigit == typemax(UInt32) ? (digitValue == 0 ? APF_lfExactlyZero : APF_lfExactlyHalf) :
-                                         (digitValue == 0 ? APF_lfLessThanHalf : APF_lfMoreThanHalf)
+    return hexDigit == typemax(UInt32) ? (digitValue == 0 ? APF_lostFraction.lfExactlyZero : APF_lostFraction.lfExactlyHalf) :
+                                         (digitValue == 0 ? APF_lostFraction.lfLessThanHalf : APF_lostFraction.lfMoreThanHalf)
 end
 
 # APFloat.cpp:580 lostFractionThroughTruncation: the fraction lost were a bignum truncated of its BITS low bits
 @quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:580 lostFractionThroughTruncation)" "the fraction a truncation loses, as APFloat's lostFractionThroughTruncation classifies it" Base.:<= function apfloat_lostFractionThroughTruncation(parts::Vector{UInt64}, p::Int, partCount::Int, bits::UInt32)::Int
     local lsb = apint_tcLSB(parts, p, partCount)
     # this is guaranteed true if bits == 0, or lsb == UINT_MAX
-    bits <= lsb && return APF_lfExactlyZero
-    bits == lsb + UInt32(1) && return APF_lfExactlyHalf
-    bits <= UInt32(partCount * 64) && apint_tcExtractBit(parts, p, bits - UInt32(1)) != 0 && return APF_lfMoreThanHalf
-    return APF_lfLessThanHalf
+    bits <= lsb && return APF_lostFraction.lfExactlyZero
+    bits == lsb + UInt32(1) && return APF_lostFraction.lfExactlyHalf
+    bits <= UInt32(partCount * 64) && apint_tcExtractBit(parts, p, bits - UInt32(1)) != 0 && return APF_lostFraction.lfMoreThanHalf
+    return APF_lostFraction.lfLessThanHalf
 end
 
 # APFloat.cpp:600 shiftRight: a bignum shifted right BITS bits, the fraction lost returned
@@ -493,11 +490,11 @@ end
 
 # APFloat.cpp:611 combineLostFractions: a more significant lost fraction made inexact by a less significant one
 @quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:611 combineLostFractions)" "two lost fractions combined, as APFloat's combineLostFractions combines them" Base.:(==) function apfloat_combineLostFractions(moreSignificant::Int, lessSignificant::Int)::Int
-    if lessSignificant != APF_lfExactlyZero
-        if moreSignificant == APF_lfExactlyZero
-            moreSignificant = APF_lfLessThanHalf
-        elseif moreSignificant == APF_lfExactlyHalf
-            moreSignificant = APF_lfMoreThanHalf
+    if lessSignificant != APF_lostFraction.lfExactlyZero
+        if moreSignificant == APF_lostFraction.lfExactlyZero
+            moreSignificant = APF_lostFraction.lfLessThanHalf
+        elseif moreSignificant == APF_lostFraction.lfExactlyHalf
+            moreSignificant = APF_lostFraction.lfMoreThanHalf
         end
     end
     return moreSignificant
@@ -603,7 +600,7 @@ end
     local fullSignificand = zeros(UInt64, max(newPartsCount, 4))
     local partsCount = length(f.significand)
     apint_tcFullMultiply!(fullSignificand, 0, f.significand, 0, rhs.significand, 0, partsCount, partsCount)
-    local lost_fraction = APF_lfExactlyZero
+    local lost_fraction = APF_lostFraction.lfExactlyZero
     # one, not zero, based MSB
     local omsb = apint_tcMSB(fullSignificand, 0, newPartsCount) + UInt32(1)
     f.exponent += rhs.exponent
@@ -665,10 +662,10 @@ end
     end
     # figure out the lost fraction
     local cmp = apint_tcCompare(dividend, 0, dividend, divisor, partsCount)
-    cmp > 0 && return APF_lfMoreThanHalf
-    cmp == 0 && return APF_lfExactlyHalf
-    apint_tcIsZero(dividend, 0, partsCount) && return APF_lfExactlyZero
-    return APF_lfLessThanHalf
+    cmp > 0 && return APF_lostFraction.lfMoreThanHalf
+    cmp == 0 && return APF_lostFraction.lfExactlyHalf
+    apint_tcIsZero(dividend, 0, partsCount) && return APF_lostFraction.lfExactlyZero
+    return APF_lostFraction.lfLessThanHalf
 end
 
 # APFloat.cpp:1426 IEEEFloat::shiftSignificandRight: a zero result is not normalized to fcZero
@@ -689,13 +686,13 @@ end
 # APFloat.cpp:1490 IEEEFloat::handleOverflow: infinity where the rounding mode rounds away, else the largest
 # finite number (tcSetLeastSignificantBits, APFloat.cpp:1476), the sign kept
 @quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:1490 IEEEFloat::handleOverflow)" "an overflow made infinity or the largest finite number, as APFloat's handleOverflow makes it" Base.:(==) function apfloat_handleOverflow!(f::APFloatIEEE, rounding_mode::Int)::Int
-    if rounding_mode == APF_rmNearestTiesToEven || rounding_mode == APF_rmNearestTiesToAway ||
-       (rounding_mode == APF_rmTowardPositive && !f.sign) || (rounding_mode == APF_rmTowardNegative && f.sign)
-        f.category = APF_fcInfinity
-        return APF_opOverflow | APF_opInexact
+    if rounding_mode == APF_roundingMode.rmNearestTiesToEven || rounding_mode == APF_roundingMode.rmNearestTiesToAway ||
+       (rounding_mode == APF_roundingMode.rmTowardPositive && !f.sign) || (rounding_mode == APF_roundingMode.rmTowardNegative && f.sign)
+        f.category = APF_fltCategory.fcInfinity
+        return APF_opStatus.opOverflow | APF_opStatus.opInexact
     end
     # otherwise we become the largest finite number
-    f.category = APF_fcNormal
+    f.category = APF_fltCategory.fcNormal
     f.exponent = f.semantics.maxExponent
     local bits = f.semantics.precision
     local i = 0
@@ -712,25 +709,25 @@ end
         f.significand[i + 1] = UInt64(0)
         i += 1
     end
-    return APF_opInexact
+    return APF_opStatus.opInexact
 end
 
 # APFloat.cpp:1522 IEEEFloat::roundAwayFromZero: whether truncating at bit BIT with the lost fraction rounds
 # away from zero under the rounding mode; its callers never pass lfExactlyZero
 @quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:1522 IEEEFloat::roundAwayFromZero)" "whether a truncation rounds away from zero, as APFloat's roundAwayFromZero decides it" Base.:(==) function apfloat_roundAwayFromZero(f::APFloatIEEE, rounding_mode::Int, lost_fraction::Int, bit::UInt32)::Bool
-    lost_fraction != APF_lfExactlyZero || throw(ErrorException("WasmTarget: APFloat roundAwayFromZero (llvm/lib/Support/APFloat.cpp): an exact fraction"))
-    if rounding_mode == APF_rmNearestTiesToAway
-        return lost_fraction == APF_lfExactlyHalf || lost_fraction == APF_lfMoreThanHalf
-    elseif rounding_mode == APF_rmNearestTiesToEven
-        lost_fraction == APF_lfMoreThanHalf && return true
+    lost_fraction != APF_lostFraction.lfExactlyZero || throw(ErrorException("WasmTarget: APFloat roundAwayFromZero (llvm/lib/Support/APFloat.cpp): an exact fraction"))
+    if rounding_mode == APF_roundingMode.rmNearestTiesToAway
+        return lost_fraction == APF_lostFraction.lfExactlyHalf || lost_fraction == APF_lostFraction.lfMoreThanHalf
+    elseif rounding_mode == APF_roundingMode.rmNearestTiesToEven
+        lost_fraction == APF_lostFraction.lfMoreThanHalf && return true
         # our zeroes don't have a significand to test
-        lost_fraction == APF_lfExactlyHalf && f.category != APF_fcZero && return apint_tcExtractBit(f.significand, 0, bit) != 0
+        lost_fraction == APF_lostFraction.lfExactlyHalf && f.category != APF_fltCategory.fcZero && return apint_tcExtractBit(f.significand, 0, bit) != 0
         return false
-    elseif rounding_mode == APF_rmTowardZero
+    elseif rounding_mode == APF_roundingMode.rmTowardZero
         return false
-    elseif rounding_mode == APF_rmTowardPositive
+    elseif rounding_mode == APF_roundingMode.rmTowardPositive
         return !f.sign
-    elseif rounding_mode == APF_rmTowardNegative
+    elseif rounding_mode == APF_roundingMode.rmTowardNegative
         return f.sign
     end
     throw(ErrorException("WasmTarget: APFloat roundAwayFromZero (llvm/lib/Support/APFloat.cpp): Invalid rounding mode found"))
@@ -740,12 +737,12 @@ end
 # exponent adjusted, a denormal's MSB forced by minExponent, overflow handled, and the number rounded by the
 # lost fraction, an increment that carries renormalized
 @quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:1560 IEEEFloat::normalize)" "a float normalized and rounded, as APFloat's normalize rounds it" Base.:- function apfloat_normalize!(f::APFloatIEEE, rounding_mode::Int, lost_fraction::Int)::Int
-    f.category == APF_fcNormal || return APF_opOK
+    f.category == APF_fltCategory.fcNormal || return APF_opStatus.opOK
     local precision = f.semantics.precision
     # one, not zero, based MSB
     local omsb = apint_tcMSB(f.significand, 0, length(f.significand)) + UInt32(1)
     # only skip this if the value is exactly zero
-    if omsb != 0 || lost_fraction != APF_lfExactlyZero
+    if omsb != 0 || lost_fraction != APF_lostFraction.lfExactlyZero
         local exponentChange = Int(omsb) - precision
         # if the resulting exponent is too high, overflow according to the rounding mode
         f.exponent + exponentChange > f.semantics.maxExponent && return apfloat_handleOverflow!(f, rounding_mode)
@@ -753,9 +750,9 @@ end
         f.exponent + exponentChange < f.semantics.minExponent && (exponentChange = f.semantics.minExponent - f.exponent)
         # shifting left is easy as we don't lose precision
         if exponentChange < 0
-            lost_fraction == APF_lfExactlyZero || throw(ErrorException("WasmTarget: APFloat normalize (llvm/lib/Support/APFloat.cpp): a left shift with a lost fraction"))
+            lost_fraction == APF_lostFraction.lfExactlyZero || throw(ErrorException("WasmTarget: APFloat normalize (llvm/lib/Support/APFloat.cpp): a left shift with a lost fraction"))
             apfloat_shiftSignificandLeft!(f, UInt32(-exponentChange))
-            return APF_opOK
+            return APF_opStatus.opOK
         end
         if exponentChange > 0
             # shift right and capture any new lost fraction
@@ -766,10 +763,10 @@ end
         end
     end
     # as specified in IEEE 754, since we do not trap we do not report underflow for exact results
-    if lost_fraction == APF_lfExactlyZero
+    if lost_fraction == APF_lostFraction.lfExactlyZero
         # canonicalize zeroes
-        omsb == 0 && (f.category = APF_fcZero)
-        return APF_opOK
+        omsb == 0 && (f.category = APF_fltCategory.fcZero)
+        return APF_opStatus.opOK
     end
     # increment the significand if we're rounding away from zero
     if apfloat_roundAwayFromZero(f, rounding_mode, lost_fraction, UInt32(0))
@@ -780,24 +777,24 @@ end
         if omsb == UInt32(precision + 1)
             # renormalize by incrementing the exponent and shifting our significand right one; however if we
             # already have the maximum exponent we overflow to infinity
-            f.exponent == f.semantics.maxExponent && return apfloat_handleOverflow!(f, f.sign ? APF_rmTowardNegative : APF_rmTowardPositive)
+            f.exponent == f.semantics.maxExponent && return apfloat_handleOverflow!(f, f.sign ? APF_roundingMode.rmTowardNegative : APF_roundingMode.rmTowardPositive)
             apfloat_shiftSignificandRight!(f, UInt32(1))
-            return APF_opInexact
+            return APF_opStatus.opInexact
         end
     end
     # the normal case: we were and are not denormal, and any significand increment above didn't overflow
-    omsb == UInt32(precision) && return APF_opInexact
+    omsb == UInt32(precision) && return APF_opStatus.opInexact
     # we have a non-zero denormal
     omsb < UInt32(precision) || throw(ErrorException("WasmTarget: APFloat normalize (llvm/lib/Support/APFloat.cpp): the MSB past the precision"))
     # canonicalize zeroes
-    omsb == 0 && (f.category = APF_fcZero)
+    omsb == 0 && (f.category = APF_fltCategory.fcZero)
     # the fcZero case is a denormal that underflowed to zero
-    return APF_opUnderflow | APF_opInexact
+    return APF_opStatus.opUnderflow | APF_opStatus.opInexact
 end
 
 # APFloat.cpp:2736 IEEEFloat::convertFromUnsignedParts: the most significant precision bits of SRC, rounded
 @quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:2736 IEEEFloat::convertFromUnsignedParts)" "a bignum converted to a float, as APFloat's convertFromUnsignedParts rounds it" Base.:<= function apfloat_convertFromUnsignedParts!(f::APFloatIEEE, src::Vector{UInt64}, srcCount::Int, rounding_mode::Int)::Int
-    f.category = APF_fcNormal
+    f.category = APF_fltCategory.fcNormal
     local omsb = apint_tcMSB(src, 0, srcCount) + UInt32(1)
     local dstCount = length(f.significand)
     local precision = UInt32(f.semantics.precision)
@@ -809,7 +806,7 @@ end
         apint_tcExtract!(f.significand, 0, dstCount, src, 0, precision, omsb - precision)
     else
         f.exponent = Int(precision) - 1
-        lost_fraction = APF_lfExactlyZero
+        lost_fraction = APF_lostFraction.lfExactlyZero
         apint_tcExtract!(f.significand, 0, dstCount, src, 0, omsb, UInt32(0))
     end
     return apfloat_normalize!(f, rounding_mode, lost_fraction)
@@ -819,8 +816,8 @@ end
 # at a time from the significand's top, the fraction past them noted, the binary exponent adjusted for the
 # digits and the point, and rounded
 @quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:2776 IEEEFloat::convertFromHexadecimalString)" "a hexadecimal number's text converted to a float, as APFloat's convertFromHexadecimalString converts it" Base.:% function apfloat_convertFromHexadecimalString!(f::APFloatIEEE, s::String, b::Int, e::Int, rounding_mode::Int)::Int
-    local lost_fraction = APF_lfExactlyZero
-    f.category = APF_fcNormal
+    local lost_fraction = APF_lostFraction.lfExactlyZero
+    f.category = APF_fltCategory.fcNormal
     apfloat_zeroSignificand!(f)
     f.exponent = 0
     local partsCount = length(f.significand)
@@ -878,7 +875,7 @@ end
 # correctly (HUerrBound against ulpsFromBoundary), then rounded
 @quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:2870 IEEEFloat::roundSignificandWithExponent)" "a decimal significand and exponent rounded to a float, as APFloat's roundSignificandWithExponent rounds them" Base.:* function apfloat_roundSignificandWithExponent!(f::APFloatIEEE, decSigParts::Vector{UInt64}, sigPartCount::Int, exp::Int, rounding_mode::Int)::Int
     local pow5Parts = zeros(UInt64, APF_MAX_POWER_OF_FIVE_PARTS)
-    local isNearest = rounding_mode == APF_rmNearestTiesToEven || rounding_mode == APF_rmNearestTiesToAway
+    local isNearest = rounding_mode == APF_roundingMode.rmNearestTiesToEven || rounding_mode == APF_roundingMode.rmNearestTiesToAway
     local parts = apfloat_partCountForBits(f.semantics.precision + 11)
     # calculate pow(5, abs(exp))
     local pow5PartCount = apfloat_powerOf5!(pow5Parts, UInt32(exp >= 0 ? exp : -exp))
@@ -889,8 +886,8 @@ end
         local decSig = apfloat_new(calcSemantics)
         decSig.sign = f.sign
         local pow5 = apfloat_new(calcSemantics)
-        local sigStatus = apfloat_convertFromUnsignedParts!(decSig, decSigParts, sigPartCount, APF_rmNearestTiesToEven)
-        local powStatus = apfloat_convertFromUnsignedParts!(pow5, pow5Parts, pow5PartCount, APF_rmNearestTiesToEven)
+        local sigStatus = apfloat_convertFromUnsignedParts!(decSig, decSigParts, sigPartCount, APF_roundingMode.rmNearestTiesToEven)
+        local powStatus = apfloat_convertFromUnsignedParts!(pow5, pow5Parts, pow5PartCount, APF_roundingMode.rmNearestTiesToEven)
         # add exp, as 10^n = 5^n * 2^n
         decSig.exponent += exp
         local calcLostFraction::Int
@@ -898,7 +895,7 @@ end
         if exp >= 0
             # multiplySignificand leaves the precision-th bit set to 1
             calcLostFraction = apfloat_multiplySignificand!(decSig, pow5)
-            powHUerr = UInt32(powStatus != APF_opOK)
+            powHUerr = UInt32(powStatus != APF_opStatus.opOK)
         else
             calcLostFraction = apfloat_divideSignificand!(decSig, pow5)
             # denormal numbers have less precision
@@ -908,12 +905,12 @@ end
                 excessPrecision = min(excessPrecision, UInt32(calcSemantics.precision))
             end
             # extra half-ulp lost in reciprocal of exponent
-            powHUerr = powStatus == APF_opOK && calcLostFraction == APF_lfExactlyZero ? UInt32(0) : UInt32(2)
+            powHUerr = powStatus == APF_opStatus.opOK && calcLostFraction == APF_lostFraction.lfExactlyZero ? UInt32(0) : UInt32(2)
         end
         # both multiplySignificand and divideSignificand return the result with the integer bit set
         apint_tcExtractBit(decSig.significand, 0, UInt32(calcSemantics.precision - 1)) == 1 ||
             throw(ErrorException("WasmTarget: APFloat roundSignificandWithExponent (llvm/lib/Support/APFloat.cpp): the integer bit is clear"))
-        local HUerr = UInt64(apfloat_HUerrBound(calcLostFraction != APF_lfExactlyZero, UInt32(sigStatus != APF_opOK), powHUerr))
+        local HUerr = UInt64(apfloat_HUerrBound(calcLostFraction != APF_lostFraction.lfExactlyZero, UInt32(sigStatus != APF_opStatus.opOK), powHUerr))
         local HUdistance = UInt64(2) * apfloat_ulpsFromBoundary(decSig.significand, 0, excessPrecision, isNearest)
         # are we guaranteed to round correctly if we truncate?
         if HUdistance >= HUerr
@@ -923,7 +920,7 @@ end
             # compensate for the implicit right shift
             f.exponent = decSig.exponent + f.semantics.precision - (calcSemantics.precision - Int(excessPrecision))
             calcLostFraction = apfloat_lostFractionThroughTruncation(decSig.significand, 0, length(decSig.significand), truncatedBits)
-            return apfloat_normalize!(f, rounding_mode, calcLostFraction) | ((sigStatus | powStatus) & APF_opInexact)
+            return apfloat_normalize!(f, rounding_mode, calcLostFraction) | ((sigStatus | powStatus) & APF_opStatus.opInexact)
         end
         parts *= 2
     end
@@ -939,16 +936,16 @@ end
     # the quick cases: no significant digits (zero), and exponents that are obviously too large or too small,
     # by the bounds 42039/12655 < log 10 / log 2 < 28738/8651
     if firstSigDigit == e || apfloat_decDigitValue(codeunit(s, firstSigDigit + 1)) >= 10
-        f.category = APF_fcZero
-        fs = APF_opOK
+        f.category = APF_fltCategory.fcZero
+        fs = APF_opStatus.opOK
     elseif normalizedExponent - 1 > typemax(Int32) ÷ 42039
         fs = apfloat_handleOverflow!(f, rounding_mode)
     elseif normalizedExponent - 1 < typemin(Int32) ÷ 42039 ||
            (normalizedExponent + 1) * 28738 <= 8651 * (f.semantics.minExponent - f.semantics.precision)
         # underflow to zero and round
-        f.category = APF_fcNormal
+        f.category = APF_fltCategory.fcNormal
         apfloat_zeroSignificand!(f)
-        fs = apfloat_normalize!(f, rounding_mode, APF_lfLessThanHalf)
+        fs = apfloat_normalize!(f, rounding_mode, APF_lostFraction.lfLessThanHalf)
     elseif (normalizedExponent - 1) * 42039 >= 12655 * f.semantics.maxExponent
         # overflow and round
         fs = apfloat_handleOverflow!(f, rounding_mode)
@@ -982,7 +979,7 @@ end
             decSignificand[partCount + 1] != 0 && (partCount += 1)
             p <= lastSigDigit || break
         end
-        f.category = APF_fcNormal
+        f.category = APF_fltCategory.fcNormal
         fs = apfloat_roundSignificandWithExponent!(f, decSignificand, partCount, dexponent, rounding_mode)
     end
     return fs
@@ -1010,7 +1007,7 @@ end
 
 # APFloat.cpp:859 IEEEFloat::makeNaN: a quiet NaN of no payload, its QNaN bit (precision - 2) set
 @quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:859 IEEEFloat::makeNaN)" "a quiet NaN, as APFloat's makeNaN makes one with no fill" Base.:- function apfloat_makeNaN!(f::APFloatIEEE, negative::Bool)::Nothing
-    f.category = APF_fcNaN
+    f.category = APF_fltCategory.fcNaN
     f.sign = negative
     f.exponent = f.semantics.maxExponent + 1
     apint_tcSet!(f.significand, 0, UInt64(0), length(f.significand))
@@ -1020,7 +1017,7 @@ end
 
 # APFloat.cpp:4560 IEEEFloat::makeInf
 @quarantine pin"precedent(llvm: llvm/lib/Support/APFloat.cpp:4560 IEEEFloat::makeInf)" "an infinity, as APFloat's makeInf makes it" Base.:+ function apfloat_makeInf!(f::APFloatIEEE, negative::Bool)::Nothing
-    f.category = APF_fcInfinity
+    f.category = APF_fltCategory.fcInfinity
     f.sign = negative
     f.exponent = f.semantics.maxExponent + 1
     apint_tcSet!(f.significand, 0, UInt64(0), length(f.significand))
@@ -1040,14 +1037,14 @@ end
     local bias = -(sem.minExponent - 1)
     local myexponent::UInt64
     local mysignificand::UInt64
-    if f.category == APF_fcNormal
+    if f.category == APF_fltCategory.fcNormal
         myexponent = UInt64(f.exponent + bias)
         mysignificand = f.significand[1]
         myexponent == 1 && (f.significand[1] & integer_bit) == 0 && (myexponent = UInt64(0))   # denormal
-    elseif f.category == APF_fcZero
+    elseif f.category == APF_fltCategory.fcZero
         myexponent = UInt64(sem.minExponent - 1 + bias)
         mysignificand = UInt64(0)
-    elseif f.category == APF_fcInfinity
+    elseif f.category == APF_fltCategory.fcInfinity
         myexponent = UInt64(sem.maxExponent + 1 + bias)
         mysignificand = UInt64(0)
     else
@@ -1226,7 +1223,7 @@ end
     local status::Int
     if hex && fail_pos == digits_pos + 1
         # the 0 alone: zero
-        status = apfloat_convertFromString!(f, s, digits_pos, fail_pos, APF_rmNearestTiesToEven)
+        status = apfloat_convertFromString!(f, s, digits_pos, fail_pos, APF_roundingMode.rmNearestTiesToEven)
     elseif hex
         local hasexp = false
         for k in digits_pos+2:fail_pos-1
@@ -1234,7 +1231,7 @@ end
             (ck == UInt8('p') || ck == UInt8('P')) && (hasexp = true)
         end
         if hasexp
-            status = apfloat_convertFromString!(f, s, digits_pos, fail_pos, APF_rmNearestTiesToEven)
+            status = apfloat_convertFromString!(f, s, digits_pos, fail_pos, APF_roundingMode.rmNearestTiesToEven)
         else
             # the digits and p0, a fresh String (wasm_string_copy!, wasm_string_write!)
             local n = fail_pos - digits_pos
@@ -1242,12 +1239,12 @@ end
             wasm_string_copy!(text, 0, s, digits_pos, n)
             wasm_string_write!(text, n, UInt8('p'))
             wasm_string_write!(text, n + 1, UInt8('0'))
-            status = apfloat_convertFromString!(f, text, 0, n + 2, APF_rmNearestTiesToEven)
+            status = apfloat_convertFromString!(f, text, 0, n + 2, APF_roundingMode.rmNearestTiesToEven)
         end
     else
-        status = apfloat_convertFromString!(f, s, digits_pos, fail_pos, APF_rmNearestTiesToEven)
+        status = apfloat_convertFromString!(f, s, digits_pos, fail_pos, APF_roundingMode.rmNearestTiesToEven)
     end
-    local erange = (status & (APF_opOverflow | APF_opUnderflow)) != 0
+    local erange = (status & (APF_opStatus.opOverflow | APF_opStatus.opUnderflow)) != 0
     local bits = apfloat_convertIEEEFloatToAPInt(f)
     # if negate and fail_pos != nptr: val = -val, the sign bit flipped
     negate && (bits = xor(bits, UInt64(1) << (sem.sizeInBits - 1)))
