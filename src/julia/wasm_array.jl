@@ -616,25 +616,33 @@ end
 """
     wasm_pointer_based(p) -> Bool
 
-Whether the pointer `p` points into a data array (its base is one), not an integer address. Natively never:
-Julia's pointers are addresses; the answer is hidden from inference (Julia's compilerbarrier builtin,
+Whether the pointer `p` points into a data array (its base is one), not an integer address. Julia's late
+GC lowering asks the same of a pointer at compile time: FindBaseValue walks a derived pointer back to the
+object it came from, and gives one not derived from a tracked object the null base
+(julia/src/llvm-late-gc-lowering.cpp:108 FindBaseValue, :155-158). Natively never: Julia's pointers are
+addresses; the answer is hidden from inference (Julia's compilerbarrier builtin,
 julia/src/builtins.c:2065 jl_f_compilerbarrier), so Julia folds no call of it.
 """
-@quarantine pin"precedent(julia: src/llvm-late-gc-lowering.cpp:108 FindBaseValue)" "a pointer derived from an object has that object as its base, Julia's late GC lowering's; natively a Ptr is an address of no base" Core.Ptr @noinline wasm_pointer_based(p::Ptr)::Bool = Base.compilerbarrier(:const, false)
+@quarantine pin"precedent(julia: src/llvm-late-gc-lowering.cpp:108 FindBaseValue)" "whether a pointer has an object as its base, the question Julia's late GC lowering answers at compile time by walking a derived pointer back to its base, null for one not derived from a tracked object; WasmTarget answers it at run time from the pointer's base field; natively a Ptr is an address of no base" Core.Ptr @noinline wasm_pointer_based(p::Ptr)::Bool = Base.compilerbarrier(:const, false)
 
 """
     wasm_pointer_same_base(x, y) -> Bool
 
-Whether the pointers `x` and `y` share their base: one data array (`ref.eq`, dart's `identical` of two
-buffers, sdk/lib/_internal/wasm/common/typed_data.dart:1243), or both none. Natively always: one address
-space.
+Whether the pointers `x` and `y` share their base: one data array (`ref.eq`), or both none. dart compares
+two byte buffers so: equal only when their data arrays are one object, `identical(_data, other._data)`
+(sdk/lib/_internal/wasm/common/typed_data.dart:1243 _I8ByteBuffer.==). Julia's differs: its pointers are
+integers of one address space, so natively always; two base-less pointers, of which dart has none, share
+their none.
 """
-@quarantine pin"precedent(julia: src/llvm-late-gc-lowering.cpp:108 FindBaseValue)" "two pointers derived from one object share its base; natively every Ptr is an address of one space" Core.Ptr @noinline wasm_pointer_same_base(x::Ptr, y::Ptr)::Bool = Base.compilerbarrier(:const, true)
+@quarantine pin"sdk/lib/_internal/wasm/common/typed_data.dart:1243 _I8ByteBuffer.==" "two pointers share their base when their data arrays are one object, compared by identity, as dart's two byte buffers are equal only when their data arrays are identical; Julia differs: natively every Ptr is an integer of one address space, and two base-less pointers share their none" Core.Ptr @noinline wasm_pointer_same_base(x::Ptr, y::Ptr)::Bool = Base.compilerbarrier(:const, true)
 
 """
     wasm_pointer_offset(p) -> UInt
 
-The pointer `p`'s byte offset from its base's first element, or its integer address where it has no base.
-Natively its address, `UInt(p)`.
+The pointer `p`'s byte offset from its base's first element, or its integer address where it has no base,
+as dart's byte view holds the index of its first byte in its buffer's data array
+(sdk/lib/_internal/wasm/common/typed_data.dart:93 ByteDataBase.offsetInBytes) and reads at
+`offsetInBytes + byteOffset` (:515). Julia's differs: natively its address, `UInt(p)`
+(julia/base/boot.jl:968 UInt), its offset in the one address space.
 """
-@quarantine pin"precedent(julia: src/llvm-late-gc-lowering.cpp:108 FindBaseValue)" "a derived pointer's offset from its base; natively a Ptr's address is its offset in the one address space" Core.Ptr @noinline wasm_pointer_offset(p::Ptr)::UInt = UInt(p)
+@quarantine pin"precedent(dart: sdk/lib/_internal/wasm/common/typed_data.dart:93 ByteDataBase.offsetInBytes)" "a pointer's byte offset from its base's first element, as dart's byte view holds its offsetInBytes into its buffer's data array; Julia differs: natively a Ptr's address is its offset in the one address space, UInt of it" Core.Ptr @noinline wasm_pointer_offset(p::Ptr)::UInt = UInt(p)

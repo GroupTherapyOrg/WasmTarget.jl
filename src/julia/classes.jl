@@ -935,19 +935,22 @@ end
 """    managed_pointer(T) -> Bool
 
 Whether `T` is a `Ptr`, whose value WasmTarget holds as a managed pointer: its class's struct of a base
-and a byte offset (`_pointer_instance_fields`), never an address. Julia's `Ptr` is an address; Julia's own
-codegen already treats an address into an object as its base object and a derived offset (its late GC
-lowering finds every derived pointer's base, julia/src/llvm-late-gc-lowering.cpp:108 FindBaseValue, and a
-MemoryRef holds its memory beside the element's address, julia.h jl_genericmemoryref_t). A wasm array has
-no addresses, so the base is the data array itself and the offset its byte distance from the array's
-start, the address the element holds in Julia's own layout (an element's `elsize` times its index).
-precedent(graalvm: Sulong's LLVMManagedPointer, an (object, offset) pair standing for an LLVM pointer into a
-managed object; java: sun.misc.Unsafe's (Object, long offset) addressing). Julia's differs: an address is
-an integer; a pointer whose base is no object (C_NULL, `Ptr{T}(n)`) is WasmTarget's base-less pointer
-whose offset is that integer, and a base's address as an integer is no value WasmTarget has (rejected at
-run time where a program reads it, src/intrinsics.jl's pointer arm).
+and a byte offset (`_pointer_instance_fields`), never an address. dart's wasm runtime holds a view of bytes
+the same way: a ByteData is the data array of its buffer beside the view's `offsetInBytes`, and it reads the
+byte at `offsetInBytes + byteOffset` of that array (sdk/lib/_internal/wasm/common/typed_data.dart:92
+ByteDataBase, its `offsetInBytes` at :93, I8ByteData's `_data` at :487 read at :515). Here the base is the
+WasmGC data array the pointer points into and the offset its byte distance from the array's start, the
+address the element holds in Julia's own layout (an element's `elsize` times its index).
+precedent(dart: sdk/lib/_internal/wasm/common/typed_data.dart:92 ByteDataBase). Julia's differs: a `Ptr` is
+an integer address (julia/base/boot.jl:968 UInt, a bitcast of its bits), and Julia's codegen keeps an
+address into an object apart from that object only in its analyses (its late GC lowering finds a derived
+pointer's base, julia/src/llvm-late-gc-lowering.cpp:108 FindBaseValue; a MemoryRef holds its memory beside
+the element's address, julia.h jl_genericmemoryref_t). A dart view always has a buffer; a pointer whose
+base is no object (C_NULL, `Ptr{T}(n)`) is WasmTarget's base-less pointer whose offset is that integer, and
+a base's address as an integer is no value WasmTarget has (rejected at run time where a program reads it,
+src/intrinsics.jl's pointer arm).
 """
-@quarantine pin"precedent(julia: src/llvm-late-gc-lowering.cpp:108 FindBaseValue)" "a Ptr is an address; WasmTarget holds its base, the data array it points into, beside its byte offset, as Julia's late GC lowering knows each derived pointer's base and a MemoryRef its memory" Core.Ptr managed_pointer(@nospecialize(T::Any))::Bool =
+@quarantine pin"precedent(dart: sdk/lib/_internal/wasm/common/typed_data.dart:92 ByteDataBase)" "a Ptr is an address; WasmTarget holds its base, the data array it points into, beside its byte offset, as dart's ByteData holds its buffer's data array beside its offsetInBytes; Julia differs: a Ptr is one integer, and a pointer of no object keeps that integer as its offset with no base" Core.Ptr managed_pointer(@nospecialize(T::Any))::Bool =
     T isa DataType && T <: Ptr
 
 """
@@ -959,9 +962,12 @@ and `offset`, the byte offset from the base's first element, or the integer addr
 no base.
 
 Reshaped: Julia's `Ptr` is one machine word, the address; a wasm array has none, so the word is split
-into the base it is derived from and the offset within it (managed_pointer's precedents).
+into the data array it points into and the byte offset within it, the two fields of dart's byte view
+(I8ByteData's final `_data`, sdk/lib/_internal/wasm/common/typed_data.dart:487, and ByteDataBase's final
+`offsetInBytes`, :93). Julia's differs: the base is nullable, `nothing` where the address is an integer of
+no object, which a dart view, always over a buffer, never is.
 """
-@quarantine pin"precedent(julia: src/llvm-late-gc-lowering.cpp:108 FindBaseValue)" "a Ptr's address is its base and its offset within it, as Julia's late GC lowering derives a pointer from its base; a wasm array has no address" Core.Ptr function _pointer_instance_fields(c::DataType, at::String)::Vector{ClassField}
+@quarantine pin"precedent(dart: sdk/lib/_internal/wasm/common/typed_data.dart:93 ByteDataBase.offsetInBytes)" "a Ptr's address is its base and its byte offset within it, as dart's byte view is its buffer's data array and its final offsetInBytes; Julia differs: a Ptr is one word, and its base is nullable, none for an integer address" Core.Ptr function _pointer_instance_fields(c::DataType, at::String)::Vector{ClassField}
     c <: Ptr || reject!(Internal("src/julia/classes.jl _pointer_instance_fields: $c, no Ptr"), at)
     return ClassField[ClassField(c, 0, "base", Union{Nothing,WasmEqRef}, false), ClassField(c, 0, "offset", UInt64, false)]
 end
