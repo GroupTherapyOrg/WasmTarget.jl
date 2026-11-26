@@ -2309,6 +2309,12 @@ end
                 WasmBuilder.var"end"(b)
             end
         end
+        # an integer field every entry of which is set (hash, an Int32; flags, a UInt16): its integers held as
+        # dart's class-id tables hold theirs, a WasmI32 each (types.dart:1209), as the states are, so no entry
+        # is a box; a UInt16's i32 is its zero-extended form, as Julia's ABI holds it
+        if (f.type === Int32 || f.type === UInt16) && all(v -> v isa f.type, f.values)
+            return entry(table(WasmI32, NirConst[make_wasm_i32(t.constants[], Int(v)) for v in f.values]))
+        end
         return entry(table(f.type, NirConst[NirConst(Core.Const(v)) for v in f.values]))
     end
 end
