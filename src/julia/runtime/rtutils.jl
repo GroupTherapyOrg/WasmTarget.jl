@@ -394,11 +394,11 @@ end
 # and raises UndefRefError from); a final binding holds the one cell, as object_patch's counter
 # (src/runtime/common/object_patch.jl Object__hash_code_rnd). Natively never written: Julia's own table is
 # the one every native symbol lives in, and the bodies that walk this one raise natively
-@quarantine pin"julia/src/symbol.c:51 symtab_lookup" "Julia's symbol table (julia/src/symbol.c:19 symtab), which symtab_lookup walks, is one static root of a binary tree of jl_sym_t nodes, initialized to NULL; WasmTarget's is a cell whose one field, always set, holds the root Symbol" Core.Symbol mutable struct SymbolTable
+@quarantine pin"julia/src/symbol.c:19 symtab" "Julia's symbol table (julia/src/symbol.c:19 symtab), which symtab_lookup walks, is one static root of a binary tree of jl_sym_t nodes, initialized to NULL; WasmTarget's is a cell whose one field, always set, holds the root Symbol" Core.Symbol mutable struct SymbolTable
     root::Union{Nothing,Symbol}
 end
 
-@quarantine pin"julia/src/symbol.c:51 symtab_lookup" "Julia's symbol table (julia/src/symbol.c:19 symtab) is one static root, NULL before the first symbol; WasmTarget's final binding holds its one cell, none in its root" Core.nothing const jl_symtab = SymbolTable(nothing)
+@quarantine pin"julia/src/symbol.c:19 symtab" "Julia's symbol table (julia/src/symbol.c:19 symtab) is one static root, NULL before the first symbol; WasmTarget's final binding holds its one cell, none in its root" Core.nothing const jl_symtab = SymbolTable(nothing)
 
 # strncmp(str, jl_symbol_name(node), len) (julia/src/symbol.c:60), C's: the difference of the first
 # differing bytes as unsigned chars, a name shorter than `len` ending at its NUL (the byte 0), else 0;
