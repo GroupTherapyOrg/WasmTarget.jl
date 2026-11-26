@@ -1971,6 +1971,15 @@ end
     end
     local fields = class_instance_fields(cls, at)
     local k = key isa Symbol ? findfirst(f -> f.name == string(key), fields) : findfirst(f -> f.index == key, fields)
+    # a name or position that is none of Julia's fields of the class (Nothing's `v` on a union split's
+    # arm inference proves throws, a field another subtype declares): Julia's codegen inlines no read
+    # (julia/src/codegen.cpp:4533 jl_field_index misses, so emit_builtin_call returns false; an Int
+    # past nfields takes emit_getfield_unknownidx's bounds check, :4577) and calls the runtime's
+    # jl_f_getfield, whose get_checked_fieldindex raises FieldError for a Symbol and BoundsError for an
+    # Int (julia/src/builtins.c:994): the run-time name's method below, its switch of no matching arm.
+    # Julia's fields: a Symbol jl_field_index finds (julia/src/datatype.c:1781), an Int in 1:nfields
+    k === nothing && !(key isa Symbol ? Base.fieldindex(cls, key, false) != 0 : 1 <= key <= fieldcount(cls)) &&
+        return visit_instance_get(self, node, cls)
     k === nothing && reject!(Unquarantined("src/julia/classes.jl: the field $key of $cls, which its class layout (a kind's runtime type layout) does not hold"), "$(julia_text(self.enclosing_member))")
     return _direct_get(self, fields[k], receiver)
 end
