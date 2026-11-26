@@ -279,6 +279,16 @@ end
     return node
 end
 
+# Julia's registration of a finalizer, which the builtin Core.finalizer makes (julia/src/builtins.c:2078
+# jl_f_finalizer calls jl_gc_add_finalizer_ with the object and the function, ignoring the two operands
+# Julia's inlining pass may append): julia/src/gc-common.c:423 jl_gc_add_finalizer_ appends the object and
+# then the function to the thread's finalizer list (ptls_finalizers), arraylist_push's growth Base's push!
+@quarantine pin"julia/src/builtins.c:2078 jl_f_finalizer" "the builtin Core.finalizer registers an object's finalizer, julia/src/gc-common.c:423 jl_gc_add_finalizer_ appending the object and its finalizer to the thread's finalizer list" Base.push! @noinline function jl_gc_add_finalizer_(@nospecialize(v::Any), @nospecialize(f::Any))::Nothing
+    push!(ptls_finalizers, v)
+    push!(ptls_finalizers, f)
+    return nothing
+end
+
 # ---- end of Julia's runtime ----
 
 # Julia's symbol table (julia/src/symbol.c:19 `static _Atomic(jl_sym_t*) symtab = NULL`): the root of the
@@ -353,6 +363,21 @@ end
     end
     return _jl_symbol(name)
 end
+
+"""
+The thread's finalizer list (julia/src/julia_threads.h:195 jl_tls_states_t.finalizers, an arraylist_t of
+void*): each registered object followed by its finalizer, appended by jl_gc_add_finalizer_. Julia's
+collector moves an entry whose object is unreachable to the list it runs (gc-stock.c:2891
+sweep_finalizer_list, schedule_finalization), finalize(x) runs an object's entries now (gc-common.c:479
+jl_finalize_th) and the exit hook runs every entry (gc-common.c:403 jl_gc_run_all_finalizers). Julia
+differs: one list, a wasm module running one thread; and nothing in a module runs an entry: a WasmGC
+collector gives no object back to code once unreachable, and the host's registry dart's Finalizer rests on
+(sdk/lib/_internal/wasm/js_common/weak_patch.dart:128 _FinalizationRegistryWrapper, JS's
+FinalizationRegistry) calls its callback with a token, never the object Julia's finalizer takes, so the
+list holds each object and its finalizer and none runs; jl_finalize_th, a foreign call, rejects where a
+program makes it. Natively Julia's own list holds the entries, so this one is never appended.
+"""
+@quarantine pin"julia/src/julia_threads.h:219 jl_tls_states_t" "julia/src/julia_threads.h:195 jl_tls_states_t.finalizers, the thread's list of each registered object and its finalizer" Base.Vector const ptls_finalizers = Vector{Any}()
 
 # Julia's test of a value's kind by its type tag (julia.h:136 jl_typetagis, as jl_is_datatype and
 # jl_is_uniontype read it): the value's class id against the classes under `K` (getConcreteClassIdRange,

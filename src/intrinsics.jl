@@ -875,6 +875,7 @@ end
     f === Core.applicable && length(args) >= 1 && return generate_static_intrinsic(self, Val(:applicable), f, args)
     f === Core.ifelse && length(args) == 3 && return generate_static_intrinsic(self, Val(:ifelse), f, args)
     f === Core.donotdelete && return generate_static_intrinsic(self, Val(:donotdelete), f, args)
+    f === Core.finalizer && 2 <= length(args) <= 4 && return generate_static_intrinsic(self, Val(:finalizer), f, args)
     f isa Core.IntrinsicFunction || return nothing
     # an operation on a pointer, an operand's or a conversion's result: its base and offset (managed_pointer)
     local pointer_to = length(args) == 2 ? dart_type_of(self, args[1]) : nothing
@@ -4572,6 +4573,29 @@ end
         WasmBuilder.drop(code_gen.b[])
     end
     local nothing_type = translate_type(translator(self), Nothing)
+    translate_expression(code_gen, NirConst(Core.Const(nothing)), nothing_type)
+    return nothing_type
+end
+
+# Julia's Core.finalizer(f, o): its codegen calls the builtin (julia/src/builtins.c:2078 jl_f_finalizer, at
+# most two more operands, the inline flag and CodeInstance Julia's inlining pass appends where it could not
+# inline the finalizer, Compiler/src/ssair/inlining.jl:1547 handle_finalizer_call!, which the builtin
+# ignores), whose value is `nothing` and which appends the object and the function to the thread's
+# finalizer list, the runtime's jl_gc_add_finalizer_ (src/julia/runtime/rtutils.jl). dart's counterpart is
+# a library patch, Finalizer.attach (sdk/lib/_internal/wasm/js_common/weak_patch.dart:136), never an
+# intrinsic; Julia's is a builtin, so the intrinsifier calls the runtime as for the builtin === (jl_egal).
+# The function is compiled where Julia's trim inference enqueues it (Compiler/src/typeinfer.jl:1353,
+# verifytrim.jl:221 "unresolved finalizer registered")
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:finalizer}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local code_gen = self.code_gen
+    local tr = translator(self)
+    local at = "$(julia_text(code_gen.enclosing_member)): Julia's finalizer"
+    all(a -> a isa NirConst, args[3:end]) ||
+        reject!(Internal("src/intrinsics.jl generate_static_intrinsic: a finalizer's inlining operand that is no constant"), at)
+    translate_expression(code_gen, args[2], tr.top_type[])
+    translate_expression(code_gen, args[1], tr.top_type[])
+    foreach(_ -> WasmBuilder.drop(code_gen.b[]), call(code_gen, nir_runtime_member(tr.component, jl_gc_add_finalizer_, at)))
+    local nothing_type = translate_type(tr, Nothing)
     translate_expression(code_gen, NirConst(Core.Const(nothing)), nothing_type)
     return nothing_type
 end
