@@ -395,13 +395,19 @@ Whether dart's emitIsTest and emitAsCheck take their interface arm for the teste
 `testedAgainstType is InterfaceType && classForType(testedAgainstType) == interfaceTypeClass`, a
 Julia DataType that is a class of the closed world, its runtime test the class table's. The table
 relates classes, so it answers a test only where a value's class tells it (`told_by_class`); a type
-that splits a kind's instances (Type{X}) is tested by the value itself, so it takes the arm only where
-the null case alone is tested, which reads no table.
+that splits a kind's instances (Type{X}) is tested by the value itself, and so is an open tuple type, whose
+values a tuple record holds whatever their elements: each takes the arm only where the null case alone is tested,
+which reads no table.
 """
 @quarantine pin"julia/src/subtype.c:2511 jl_isa" "julia/src/subtype.c:2511 jl_isa tests a type value by itself where the type splits its kind, any other value by its class (jl_typeof), the relation the class table holds" Base.haskey function is_interface_class_type(translator, @nospecialize(T::Type), check_only_null_assignability::Bool)::Bool
     T isa DataType || return false
     haskey(translator.class_info, T) || return false
-    return check_only_null_assignability || told_by_class(T)
+    check_only_null_assignability && return true
+    # an open tuple type's values are held in its arities' records (open_tuple_holds), whose class says nothing of
+    # their elements, which decide (julia/src/subtype.c:1348 subtype_tuple): the class table, which relates classes,
+    # never answers it; the record member tests or the runtime's subtype test do
+    T <: Tuple && !isconcretetype(T) && return false
+    return told_by_class(T)
 end
 
 """
