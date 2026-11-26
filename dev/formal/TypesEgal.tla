@@ -22,6 +22,12 @@
 (* code walks. WasmTarget's DataType value holds no TypeName, so two       *)
 (* DataTypes that are not one object meeting in the DataType arm end the   *)
 (* comparison at a named fatal ("gap"): a located gap, never an answer.    *)
+(* STALE ARM (A124E1): that gap is the port before its DataType arm       *)
+(* landed. src/julia/runtime/jltypes.jl:148-159 now answers two DataTypes *)
+(* by their TypeName (jl_datatype_same_name, the class-id table of        *)
+(* src/intrinsics.jl:1555-1582), their parameter counts and each          *)
+(* parameter pair, as builtins.c:174-187 does: DataTypeEgal.tla models    *)
+(* that arm, and this model's other arms stand as they are.               *)
 (*                                                                          *)
 (* ABSTRACTION. A finite universe of objects by identity (Obj): DataTypes  *)
 (* Any and Int64 (concrete, one object each: Julia's type cache) and Vec   *)
@@ -227,6 +233,8 @@ TypeOK == /\ a \in UAs /\ b \in UAs
 Agrees == Answered => ((outcome = "egal") = JuliaEgal(a, b))
 AgreesAlpha == (Answered /\ (AlphaEverywhere \/ Separated(a, b))) => ((outcome = "egal") = Alpha(a, b))
 JuliaIsAlpha == Separated(a, b) => (JuliaEgal(a, b) = Alpha(a, b))
+\* the port before its DataType arm (A124E1): jl_egal_types has no gap there now; DataTypeEgal.tla's Agrees covers
+\* the arm's pairs
 GapOnlyAtDataTypes ==
   /\ Done => ((outcome = "gap") = Meets(a, b, <<>>))
   /\ outcome = "gap" => /\ gapAt[1] # gapAt[2]
