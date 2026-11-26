@@ -10,9 +10,10 @@
 # image_slot!), every other key's a function of its content. Keys are compared by egal (`===`).
 # How Julia differs (D7): the C's jl_object_id_ switches on the key's type tag at run time, where the port's
 # jl_object_id is specialized on the key's type when the module is compiled, so a key carries its type: a key
-# passed in, its caller's, and a key read back from the table (a rehash's) the IdDict's key type K, which every
-# key the table holds is (Base's setindex! throws KeyTypeError for any other), asserted at the read. A key whose
-# type is only known at run time (K = Any) needs objectid of a value only run time types, a located rejection.
+# looked up, its caller's, and a key assigned (put, or read back by a rehash) the IdDict's key type K, which every
+# key the table holds is (Base's setindex! throws KeyTypeError for any other), asserted where it is hashed; over a
+# Union K the assert splits the hash by the key's type tag, as the C's switch does. A key whose type is only known
+# at run time (K = Any) needs objectid of a value only run time types, a located rejection.
 # formal(dev/formal/IdTable.tla): LookupAgrees, OneSlotPerKey, NextindVisitsMap, CountAgrees
 
 # htable.h's inline size, the slot count of a table jl_table_assign_bp makes from an empty one
@@ -29,7 +30,7 @@
 
 A new table of `newsz` slots holding each live pair of `a`, assigned in slot order
 (julia/src/iddict.c:13), its Memory Julia's jl_alloc_memory_any, `Memory{Any}(undef, Int(newsz))`; each key
-read back as the IdDict's key type `K`, the type its hash is computed at.
+passed to jl_table_assign_bp as the C passes it, untyped, hashed there as the IdDict's key type `K`.
 """
 @quarantine pin"julia/src/iddict.c:13 jl_idtable_rehash" "Julia's runtime rehashes an identity table in C, hashing each key by its type tag; WasmGC has no C, so the port runs over the table's Memory{Any}, each key read as the IdDict's key type its hash is specialized on" Core.Memory function jl_idtable_rehash(a::Memory{Any}, newsz::UInt, ::Type{K})::Memory{Any} where {K}
     local sz = length(a)
@@ -37,7 +38,7 @@ read back as the IdDict's key type `K`, the type its hash is computed at.
     local i = 0
     while i < sz
         if isassigned(a, i + 2)
-            newa = jl_table_assign_bp(newa, a[i + 1]::K, a[i + 2], K)[1]
+            newa = jl_table_assign_bp(newa, a[i + 1], a[i + 2], K)[1]
         end
         i += 2
     end
@@ -50,17 +51,24 @@ end
 Stores `val` under `key` (julia/src/iddict.c:32), the table it leaves (the C's `*pa`, a new one where
 `a` held no room within the probe bound) and whether the key was new (1) or its value overwritten (0):
 the walk from the key's home index overwrites a live egal key's value, else takes the first deleted
-or never-assigned slot it met; with neither, the table grows (its keys read as `K`) and the insert is
+or never-assigned slot it met; with neither, the table grows (jl_idtable_rehash) and the insert is
 retried.
+
+The key is untyped, the C's `jl_value_t *key`, and hashed as the IdDict's key type `K` (iddict.c:8
+keyhash, the type tag's switch): the C's recursion through the growth (this → jl_idtable_rehash →
+this) is then one specialization per `K` (@nospecializeinfer), where a key specialized on its caller's
+type gave a Union `K` one per member, each a different signature of this method in the one inference
+cycle, which Julia's recursion limit leaves as an unresolved call (Compiler/src/abstractinterpretation.jl:609
+get_nospecializeinfer_sig, the signature inferred).
 """
-@quarantine pin"julia/src/iddict.c:32 jl_table_assign_bp" "Julia's runtime assigns into an identity table in C through a pointer to the table; WasmGC has no C, so the port returns the table it leaves beside `inserted`" Core.Memory function jl_table_assign_bp(a::Memory{Any}, key, @nospecialize(val), ::Type{K})::Tuple{Memory{Any},Cint} where {K}
+@quarantine pin"julia/src/iddict.c:32 jl_table_assign_bp" "Julia's runtime assigns into an identity table in C through a pointer to the table; WasmGC has no C, so the port returns the table it leaves beside `inserted`" Core.Memory @nospecializeinfer function jl_table_assign_bp(a::Memory{Any}, @nospecialize(key), @nospecialize(val), ::Type{K})::Tuple{Memory{Any},Cint} where {K}
     local sz = iddict_hash_size(a)
     if sz == 0
         a = Memory{Any}(undef, HT_N_INLINE)
         sz = iddict_hash_size(a)
     end
     local maxprobe = iddict_max_probe(sz)
-    local hv = iddict_keyhash(key)
+    local hv = iddict_keyhash(key::K)
     while true
         local iter = 0
         local index = iddict_h2index(hv, sz)

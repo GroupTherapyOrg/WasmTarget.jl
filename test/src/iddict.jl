@@ -1,7 +1,8 @@
 # Base's IdDict over Julia's identity table (julia/src/iddict.c), its C ported (src/julia/runtime/iddict.jl) and
 # called by Base's own IdDict bodies by overlay (src/patch/iddict.jl): an image constant keyed by an identity, read
 # by jl_eqtable_get (get, getindex, haskey, a missing key's KeyError). Each case's answer is native Julia's,
-# compared in both modules. A write is outside the strict subset at Base's own setindex! (a convert of a value it leaves Any).
+# compared in both modules. A write of a concrete V is outside the strict subset at Base's own setindex! (a convert of a
+# value it leaves Any); one of V = Any folds that convert away: test/src/iddict_writes.jl writes, pops and walks.
 # formal(dev/formal/IdTable.tla): LookupAgrees, CountAgrees
 module IdDictTest
 using Test, WasmTarget
