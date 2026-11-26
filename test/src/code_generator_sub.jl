@@ -58,22 +58,31 @@ let t = D.Translator(WasmTarget.build_nir(W.check_subset(is_int, (Base.RefValue{
     TRANSLATOR[] = t
 end
 
-@testset "code_generator.dart: MacroAssembler's closure accessors read a #ClosureBase the layouter refuses, located" begin
+@testset "code_generator.dart: MacroAssembler's closure accessors read #ClosureBase's context, vtable and function type where dart lays them out" begin
     local t = TRANSLATOR[]
     local layouter = t.closure_layouter[]
-    # the accessors read #ClosureBase by FieldIndex.closureContext, closureVtable and closureRuntimeType (2, 3, 4),
-    # dart's layout below _Closure's context; Julia's Function declares no context, so the struct laid out below
-    # Any's two-field header holds vtable at 2 and functionType at 3, refused where it is made, never read wrong
-    local e = rejection(() -> layouter.closure_base_struct[])
-    @test e !== nothing && e.rejection isa W.Internal &&
-          occursin("#ClosureBase field $(D.FieldIndex_closure_vtable()) expected = vtable, actual = functionType", e.rejection.site)
-    # each accessor reaches the refusal before it emits an instruction
+    # dart's layout (closures.dart:350-363): _Closure's context at FieldIndex.closureContext, #ClosureBase's vtable
+    # and function type at closureVtable and closureRuntimeType; Julia's Function declares no field, so the
+    # layouter lays the context on #ClosureBase, below Any's two-field header
+    local base = layouter.closure_base_struct[]
+    @test [get(base.field_names, i, nothing) for i in (D.FieldIndex_closure_context(), D.FieldIndex_closure_vtable(), D.FieldIndex_closure_runtime_type())] ==
+          ["context", "vtable", "functionType"]
+    local closure = IR.RefType(base; nullable = false)
+    # each accessor's documented signature `[ref _Closure] -> [output]`, the output each one's own type, never read
+    # back from the struct it reads: the builder, which refuses invalid wasm at the emitting instruction (D10),
+    # takes its result as the function's output
     local mb = D.main_module(t)
-    for emit in (D.emit_instantiation_closure_check, D.emit_get_instantiated_closure, D.emit_tear_off_check,
-                 D.emit_get_tear_off_receiver, D.emit_get_closure_vtable)
-        local fb = B.define(mb.functions[], B.define_function(mb.types[], IR.ValueType[t.top_type[]], IR.ValueType[]), string(emit))
-        local r = rejection(() -> emit(B.body(fb), t))
-        @test r !== nothing && r.rejection isa W.Internal && occursin("ClosureLayouter.closureBaseStruct", r.rejection.site)
+    local input = IR.RefType(t.closure_info[].struct_; nullable = false)
+    for (emit, output) in ((D.emit_instantiation_closure_check, IR.NumType_i32),
+                           (D.emit_get_instantiated_closure, closure),
+                           (D.emit_tear_off_check, IR.NumType_i32),
+                           (D.emit_get_tear_off_receiver, t.top_type_non_nullable[]),
+                           (D.emit_get_closure_vtable, IR.RefType(layouter._vtable_base_struct_uninitialized[]; nullable = false)))
+        local fb = B.define(mb.functions[], B.define_function(mb.types[], IR.ValueType[input], IR.ValueType[output]), string(emit))
+        local b = B.body(fb)
+        B.local_get(b, B.locals(fb)[1])
+        emit(b, t)
+        @test B.var"end"(b) === nothing
     end
 end
 

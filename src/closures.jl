@@ -160,20 +160,28 @@ metadata is Julia's inference, which the NIR holds, and the NIR has no constant 
                 () -> WasmBuilder.define_function(types_builder(self.translator),
                     WasmBuilder.IR.ValueType[ref(self.instantiation_context_base_struct[])],
                     WasmBuilder.IR.ValueType[WasmBuilder.IR.NumType_i64])),   # hash
+            # dart's layout (closures.dart:350-363): Object's class id and identity hash, _Closure's context
+            # (sdk/lib/_internal/wasm/common/closure.dart:10 `final WasmStructRef context`, closureContextFieldType),
+            # then #ClosureBase's vtable and function type. Julia's Function, the translator's closureInfo,
+            # declares no field (a Julia closure's captures are fields of its own struct, Julia's lowering's),
+            # and its struct is Any's two-field header, shared by every function object of the program; so the
+            # context dart's _Closure declares is laid out here, ahead of the vtable, and #ClosureBase's
+            # fields sit where dart's do, at FieldIndex.closureContext, closureVtable and closureRuntimeType
             Late{WasmBuilder.IR.StructType}("dart2wasm/lib/closures.dart:345 ClosureLayouter.closureBaseStruct", function ()
                 local closure_base = _define_struct(self, "#ClosureBase"; named_fields = [
+                        "context" => WasmBuilder.IR.FieldType(closure_context_field_type(); mutable = false),
                         "vtable" => fixed(ref(self._vtable_base_struct_uninitialized[])),
                         "functionType" => fixed(self.function_type_type[])],
                     super_type = self.translator.closure_info[].struct_)
-                # the fields codegen reads by FieldIndex.closureVtable and closureRuntimeType, each after
-                # _Closure's context at FieldIndex.closureContext (the layout closures.dart:350 states, which
-                # dart's FieldIndex.validate checks of _Closure.context): refused, located, where the
-                # struct laid out here holds another
+                # the fields codegen reads by FieldIndex.closureContext, closureVtable and closureRuntimeType, each
+                # where its constant says (dart's FieldIndex.validate row `closureClass, "context"`,
+                # class_info.dart:130, for all three): refused, located, where the struct laid out here holds another
                 local at = "dart2wasm/lib/closures.dart:345 ClosureLayouter.closureBaseStruct"
-                for (index, name) in (FieldIndex_closure_vtable() => "vtable", FieldIndex_closure_runtime_type() => "functionType")
+                for (index, name) in (FieldIndex_closure_context() => "context", FieldIndex_closure_vtable() => "vtable",
+                                      FieldIndex_closure_runtime_type() => "functionType")
                     local actual = get(closure_base.field_names, index, nothing)
                     actual == name ||
-                        reject!(Internal("$at: #ClosureBase field $index expected = $name, actual = $(something(actual, "none")); its superclass $(self.translator.closure_info[].cls) holds no context at FieldIndex.closureContext = $(FieldIndex_closure_context())"), at)
+                        reject!(Internal("$at: #ClosureBase field $index expected = $name, actual = $(something(actual, "none")); its superclass $(self.translator.closure_info[].cls)'s struct holds $(length(self.translator.closure_info[].struct_.fields)) fields"), at)
                 end
                 return closure_base
             end),

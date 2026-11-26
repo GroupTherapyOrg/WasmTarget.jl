@@ -227,7 +227,9 @@ subset), _ListBase and _HashFieldBase (Julia's arrays and dicts are Base's own c
 _InterfaceType, _FunctionType and _RecordType (a Julia type value is a kind, laid out by its own
 fields, src/julia/classes.jl `_kind_instance_fields`), and Pointer (no FFI). dart's `_Closure.context`
 check has no class to read: Julia's `Function`, the translator's closureInfo, is abstract and
-declares no field.
+declares no field, so the context is laid out on #ClosureBase, below Any's header, and checked there
+with the vtable and the function type, when the layouter defines the struct
+(ClosureLayouter.closureBaseStruct, src/closures.jl).
 """
 @parity "dart2wasm/lib/class_info.dart:58 FieldIndex.validate" function FieldIndex_validate(translator::Translator)::Nothing
     local at = "dart2wasm/lib/class_info.dart:58 FieldIndex.validate"
