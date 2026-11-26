@@ -128,7 +128,6 @@ julia/nir.jl NirGoto
 julia/nir.jl NirGotoIfNot
 julia/nir.jl NirHandlers
 julia/nir.jl NirInvoke
-julia/nir.jl NirInvokeModify
 julia/nir.jl NirLeave
 julia/nir.jl NirLoopInfo
 julia/nir.jl NirNew

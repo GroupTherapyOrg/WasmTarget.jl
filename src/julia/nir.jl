@@ -176,8 +176,11 @@ end
 @quarantine "Julia's @cfunction, Expr(:cfunction)" Core.Expr struct NirCFunction
     args::Vector{NirValue}
 end
-"""`Expr(:invoke_modify, ...)`: a resolved modifyfield!-style call, its operands as Julia wrote them."""
-@quarantine "Julia's resolved atomic modify, Expr(:invoke_modify)" Core.Expr struct NirInvokeModify
+"""`Expr(:invoke_modify, target, f, args...)`: a resolved modifyfield!-style call; `target` the instance of
+its operator Julia resolved, which codegen calls as the modify's operator (julia/src/codegen.cpp:5422
+emit_invoke_modify, `lival`), a callee as an invoke's target is, no value of the program."""
+@quarantine pin"julia/src/codegen.cpp:5422 emit_invoke_modify" "Julia's resolved atomic modify, Expr(:invoke_modify), its first operand the operator's resolved instance, which codegen reads as the modify's operator (julia/src/codegen.cpp:5429 lival)" Core.Expr struct NirInvokeModify
+    target::Union{Core.MethodInstance, Core.CodeInstance}
     args::Vector{NirValue}
 end
 """`Core.GotoNode`: a jump to statement `label`."""
@@ -463,7 +466,12 @@ end
         h === :loopinfo && return NirLoopInfo(ops(st.args))
         h === :throw_undef_if_not && return NirThrowUndefIfNot(ops(st.args))
         h === :cfunction && return NirCFunction(ops(st.args))
-        h === :invoke_modify && return NirInvokeModify(ops(st.args))
+        if h === :invoke_modify
+            local t = st.args[1]
+            t isa Union{Core.MethodInstance, Core.CodeInstance} ||
+                reject!(Unquarantined("src/julia/nir.jl: an invoke_modify of a $(typeof(t)), not a MethodInstance or CodeInstance"), at)
+            return NirInvokeModify(t, ops(st.args[2:end]))
+        end
         reject!(Unquarantined("src/julia/nir.jl: Julia's statement form Expr(:$h), outside NirStmt"), at)
     end
     st isa Core.GotoNode && return NirGoto(st.label)
@@ -505,7 +513,8 @@ mirror_samples!(_nir_stmt_sample, :NirStmt,
     NirPopException => Expr(:pop_exception, Core.SSAValue(1)), NirTheException => Expr(:the_exception),
     NirLoopInfo => Expr(:loopinfo), NirThrowUndefIfNot => Expr(:throw_undef_if_not, QuoteNode(:x), true),
     NirCFunction => Expr(:cfunction, Ptr{Cvoid}, QuoteNode(:f), Int, Core.svec(), QuoteNode(:ccall)),
-    NirInvokeModify => Expr(:invoke_modify, Core.SSAValue(1)),
+    NirInvokeModify => Expr(:invoke_modify, Core.Compiler.specialize_method(only(methods(+, (Int, Int))), Tuple{typeof(+), Int, Int}, Core.svec()),
+                            GlobalRef(Core, :modifyfield!), Core.SSAValue(1), QuoteNode(:x), GlobalRef(Base, :+), 1),
     NirGoto => Core.GotoNode(2), NirGotoIfNot => Core.GotoIfNot(Core.SSAValue(1), 3),
     NirReturn => Core.ReturnNode(Core.SSAValue(1)), NirUnreachable => Core.ReturnNode(),
     NirPhi => Core.PhiNode(Int32[1], Any[Core.SSAValue(1)]), NirPi => Core.PiNode(Core.SSAValue(1), Int),
