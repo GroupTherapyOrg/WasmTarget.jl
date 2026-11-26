@@ -480,6 +480,8 @@ UnionAll or a free TypeVar (julia/src/subtype.c:1419, its environment) and a tup
 field (subtype.c:1348), each Julia's own, Unquarantined. A program's type value is a literal or one of
 them found at run time: typeof's entry of the table of each class's type value, or an entry of an apply_type
 statement's cache, which run_time_type_gap checks at its statement (src/julia/classes.jl apply_type_cache).
+An apply_type operand compile time knows is that cache's key, never a run-time value, so the walk passes
+over it as over the type an isa or a typeassert names as a literal.
 """
 @quarantine "julia/src/subtype.c:2511 jl_isa decides a UnionAll by subtyping with an environment, which the runtime does not port; dart patches what every use needs once every use is known (pkg/dart2wasm/lib/constants.dart:1860 _ConstantAccessor.loadConstant)" Base.IdSet function check_run_time_type_values(translator)::Nothing
     local at = first(translator.types[].rtt[].run_time_type_tests)
@@ -514,6 +516,11 @@ statement's cache, which run_time_type_gap checks at its statement (src/julia/cl
             # emitIsTest, emitAsCheck), never a value a run-time test meets
             st isa NirCall && (nir_callee(st) === Core.isa || nir_callee(st) === Core.typeassert) &&
                 length(st.args) == 3 && x === st.args[3] && continue
+            # an operand of apply_type compile time knows (nir_compile_time_operand: a closure's or a
+            # parametric struct's UnionAll, `Foo` of `Foo{T}`) is a key of the statement's cache, never
+            # emitted (src/intrinsics.jl, the run_time_type arm): no run-time value holds it, and each type
+            # the statement answers is checked at the statement (src/julia/classes.jl apply_type_cache)
+            st isa NirCall && nir_callee(st) === Core.apply_type && nir_compile_time_operand(x, at) !== nothing && continue
             x isa NirConst && visit(x.c.val)
             # a binding's value, the other place a program's value comes from at compile time
             # (src/julia/classes.jl meets each)

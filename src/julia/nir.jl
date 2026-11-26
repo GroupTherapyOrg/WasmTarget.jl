@@ -1129,6 +1129,22 @@ run time rejects, located.
 end
 
 """
+    nir_compile_time_operand(a, at) -> Union{Some{Any},Nothing}
+
+An operand's value where compile time knows it, Julia's Const of it: a literal, or a constant binding's
+value at the program's world (nir_binding_value, abstract_eval_globalref's Const); `nothing` where only
+run time knows it. The one reading of such an operand: the apply_type and applicable arms key their
+caches by it and emit no such operand (src/intrinsics.jl), so the link-time check of the program's type
+values (check_run_time_type_values) passes over an apply_type operand it answers, one no run-time
+value holds.
+"""
+@quarantine pin"precedent(julia: Compiler/src/abstractinterpretation.jl:3736 abstract_eval_globalref)" "an operand's value is known at compile time where Julia's inference holds its Const: a literal, or a constant binding's value at the program's world (NirBinding)" Base.Some function nir_compile_time_operand(a::NirValue, at::String)::Union{Some{Any},Nothing}
+    a isa NirConst && return Some{Any}(a.c.val)
+    a isa NirGlobal && nir_binding_is_constant(a.binding) && return Some{Any}(nir_binding_value(a.binding, at).c.val)
+    return nothing
+end
+
+"""
     nir_getglobal_ref(node) -> Union{GlobalRef,Nothing}
 
 The binding a `getglobal(mod, name[, order])` call reads, or nothing. Julia's codegen emits the call as
