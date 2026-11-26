@@ -4,8 +4,9 @@
 # julia pin, each define read and evaluated as femtolisp would, never from the port's own copies: the port's lists equal
 # those defines, define for define; each ported predicate answers as Julia's own ccall natively at every name of every
 # define, dotted, suffixed (a suffix of julia_opsuffs.h, a combining mark) and with a suffix that is no suffix, at
-# multi-codepoint names, at names cut off mid-sequence and at every character to U+FFFF; and both overlays answer in a
-# module as native.
+# multi-codepoint names, at names cut off mid-sequence (natively where C's answer reads no byte past the name's NUL,
+# elsewhere as C's walk over zeros, dev/formal/StripWalk.tla) and at every character to U+FFFF; and both overlays
+# answer in a module as native.
 module JuliaParserOpsTest
 using Test, WasmTarget
 const W = WasmTarget
@@ -178,18 +179,53 @@ const PINNED = pinned_parser()
     end
 end
 
+# C's operator? over a name as flisp's strip-op-suffix walks it (julia/src/flisp/julia_extensions.c:245) in the
+# memory dev/formal/StripWalk.tla's Mem(name, ZeroGarbage) holds: the name's bytes, the NUL flisp's strcpy stores
+# after them (julia/src/flisp/flisp.c:217 mk_symbol), then zeros where C reads bytes it leaves undefined. The walk
+# is C's loop as written, `while (op[i])`, each character u8_nextchar's (julia/src/support/utf8.c:269: u8_seqlen's
+# bytes by trailingBytesForUTF8, shifted in six bits at a time, offsetsFromUTF8 subtracted; the two tables the
+# port's copies, which test/src/unicode.jl re-reads from the pinned utf8.c) and the suffix test libjulia's own
+# jl_op_suffix_char; the name stripped as strncpy copies it (fl_julia_strip_op_suffix), then maybe-strip-op-suffix
+# (julia-parser.scm:66) and membership in the pinned parser's operators. Also whether C's answer is defined: every
+# character the walk decodes ends at or before the NUL. A character that reads past the NUL decodes bytes C leaves
+# undefined (a three- to six-byte lead cut off by the name's end, "+\xe3" reading 0xe3, the NUL and one byte past
+# it), and libjulia's answer there is what those bytes happen to be: malloc padding, or the next block. A walk
+# that only steps past the NUL after a character ending at it reads op[n+1] but answers the name whatever it is
+# (StripPastNulIsName), so its answer is defined
+function c_operator_over_zeros(s::String, operators::Vector{String}, no_suffix::Vector{String})::Tuple{Bool,Bool}
+    local n = ncodeunits(s)
+    local mem = vcat(Vector{UInt8}(codeunits(s)), zeros(UInt8, 8))   # op[k] is mem[k + 1]; op[n] the NUL
+    local i = 0
+    local defined = true
+    while mem[i+1] != 0x00
+        local sz = Int(W.U8_TRAILING_BYTES[Int(mem[i+1])+1]) + 1
+        local ch = UInt32(0)
+        for k in 0:sz-1
+            ch = (ch << 6) + mem[i+k+1]
+        end
+        ch -= W.U8_OFFSETS_FROM_UTF8[sz]
+        i + sz - 1 > n && (defined = false)
+        ccall(:jl_op_suffix_char, Cint, (UInt32,), ch) != 0 && break
+        i += sz
+    end
+    local op_ = mem[i+1] == 0x00 || i == 0 ? s : String(mem[1:i])
+    local op = op_ == s || op_ in no_suffix ? s : op_
+    return op in operators, defined
+end
+
 @testset "jl_is_operator's port answers as Base's _isoperator, natively" begin
     @test PINNED !== nothing   # bash dev/fetch_julia.sh makes it
     local ours(s) = W.jl_is_operator(s) != 0
     local operators = PINNED === nothing ? String[] : PINNED[2][:operators]
+    local no_suffix = PINNED === nothing ? String[] : PINNED[2][Symbol("no-suffix?")]
     local names = String[]
     for op in operators, s in (op, "." * op, op * "²", op * "′", op * "̂", op * "x", "²" * op)
         push!(names, s)
     end
-    PINNED === nothing || append!(names, PINNED[2][Symbol("no-suffix?")])
-    # names whose last sequence is cut off by their end, which C decodes with the NUL after the name and,
-    # past it, bytes it leaves undefined, the port's zeros (dev/formal/StripWalk.tla): every lead byte
-    # 0x80-0xff alone and with one continuation byte, after each prefix
+    append!(names, no_suffix)
+    # names whose last sequence is cut off by their end, which C decodes with the NUL after the name and, for a
+    # lead of three bytes or more, bytes past it that C leaves undefined: every lead byte 0x80-0xff alone and
+    # with one continuation byte, after each prefix
     for p in ("", "+", "-", "=", ".+", "<", "x", "a", "→"), b in 0x80:0xff, t in (nothing, 0x80:0xbf...)
         push!(names, p * String(t === nothing ? UInt8[b] : UInt8[b, t]))
     end
@@ -199,7 +235,19 @@ end
         push!(names, string(Char(u)), string('+', Char(u)), string(Char(u), Char(u)))
     end
     @test length(operators) > 600
-    @test isempty(filter(s -> ours(s) != Base._isoperator(s), names))
+    local walked = [(s, c_operator_over_zeros(s, operators, no_suffix)...) for s in names]
+    local defined = String[s for (s, _, d) in walked if d]
+    local undefined = [(s, a) for (s, a, d) in walked if !d]
+    # each prefix's 16 three-byte leads alone, and its four-, five- and six-byte leads (16) alone and with each
+    # continuation byte, 9 × (16 + 16 × 65); every valid name and every other cut-off name is defined
+    @test length(undefined) == 9 * (16 + 16 * 65) && all(((s, _),) -> !isvalid(s), undefined)
+    # where C's answer is defined, libjulia's is the expected value: the port's, and the walk's over zeros
+    @test isempty(filter(s -> ours(s) != Base._isoperator(s), defined))
+    @test all(((s, a, d),) -> !d || a == Base._isoperator(s), walked)
+    # where it is not, libjulia answers by the bytes past the NUL (macOS aarch64 read zeros there and answered as the
+    # port; hpc3's linux x86_64 answered "+\xe3", "<\xf0\x83" and others otherwise, a different set each run): the
+    # expected value is C's walk over zeros, the model's (StripWalk.tla, PortIsZeroGarbage), which the port answers
+    @test isempty(filter(((s, a),) -> ours(s) != a, undefined))
     @test all(op -> Base._isoperator(op), operators)
 end
 
