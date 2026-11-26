@@ -92,7 +92,7 @@ end
 
 Why no constant of the class `cls` can be made, as constants.jl's visitInstanceConstant refuses it, or
 `nothing` where one is made: a builtin type's value is its builtin constant; one held in an integer
-register is its register's literal (register_constant_class: a `Ptr`, `Core.AddrSpace`, an enum), boxed
+register is its register's literal (register_constant_class: `Core.AddrSpace`, an enum), boxed
 by its class's struct where a reference holds it; any other primitive type but a 128-bit integer (its
 class's two halves) has no wasm representation and is Unquarantined; a class with no class info, outside
 the closed world, is Internal (a register class's too: its box is its class's). The one source of the
@@ -1030,8 +1030,8 @@ end
 Whether a constant of the class `cls` is its integer register's literal, dart's instance constant of a
 wasm value class (constants.dart:690 ConstantInstantiator.visitInstanceConstant, `wasmI32Class` and
 `wasmI64Class`): a primitive class with no builtin type (Translator.builtinTypes) held in the register
-LLVM promotes its integer to (type_promote_integer: a `Ptr`, an enum, `Core.AddrSpace`, a `primitive type
-P 40`). Julia's codegen makes such a constant the integer of its bits (julia/src/intrinsics.cpp:188
+LLVM promotes its integer to (type_promote_integer: an enum, `Core.AddrSpace`, a `primitive type P 40`; a `Ptr`
+is a managed pointer, its class's struct, managed_pointer). Julia's codegen makes such a constant the integer of its bits (julia/src/intrinsics.cpp:188
 julia_const_to_llvm: an APInt of 8 * jl_datatype_size bits, a pointer its inttoptr). The one source of
 which instance constants are a register's literal: constants.jl's instantiator pushes them, its
 creator makes none, and constant_unmade reads it. Read from primitive_value_type, the one source of a

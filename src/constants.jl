@@ -643,8 +643,8 @@ end
 """
 dart's instances of its wasm value classes (WasmI32, WasmI64, WasmF32, WasmF64, the WasmV128 lanes)
 are pushed as wasm values. Julia's counterpart is a primitive class with no builtin type held in an
-integer register (src/julia/classes.jl register_constant_class: a `Ptr`, an enum, `Core.AddrSpace`, a
-`primitive type P 40`), dart's `wasmI32Class` and `wasmI64Class` arms: its constant is its register's
+integer register (src/julia/classes.jl register_constant_class: an enum, `Core.AddrSpace`, a `primitive type
+P 40`; a `Ptr` is a managed pointer, managed_pointer), dart's `wasmI32Class` and `wasmI64Class` arms: its constant is its register's
 literal, the integer of its bits as Julia's codegen makes it (julia/src/intrinsics.cpp:188
 julia_const_to_llvm), one narrower than its register extended as LLVM's PromoteIntRes_Constant folds it.
 A Julia primitive class has a box where dart's wasm value classes have none: where a reference is
