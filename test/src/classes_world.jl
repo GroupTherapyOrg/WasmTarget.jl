@@ -1,6 +1,6 @@
 # The closed world's classes (src/julia/classes.jl, dev/MARCH.md 1.C): the types the NIR carries, in
 # the order the walk first meets them, each with its supertype chain to Any, a type as a value by
-# its kind, a UnionAll value a located rejection. The class-id numbering reads this list
+# its kind, a UnionAll value by its instances' nearest common superclass. The class-id numbering reads this list
 # (class_info.dart:864, its model dev/formal/ClassIdNumbering.tla). Split from test/src/classes.jl, every testset
 # verbatim; its other half is test/src/classes_objects.jl (objects a module builds, run against native Julia).
 using Test
@@ -15,6 +15,14 @@ f_vector(v::Vector{Int}) = sum(v)
 # specialization, so Julia's subset check rejects it first), the value the walk meets is not
 struct Open; v::Vector; end
 f_open(o::Open) = length(o.v)
+abstract type Shape end
+struct Boxed{T} <: Shape; v::T; end
+# fields of UnionAll types: Boxed's, whose instances' nearest common superclass Shape only the walk's UnionAll
+# arm meets (no other value of the program is a Shape), and one whose body is no class
+struct HoldsBoxed; b::Boxed; end
+f_boxed(h::HoldsBoxed) = h.b isa Boxed{Int}
+struct HoldsOdd; x::(Union{Vector{T},Set{T}} where T); end
+f_odd(h::HoldsOdd) = h.x isa Vector{Int}
 @enum Hue red blue
 f_enum(c::Hue) = c == red ? 1 : 2
 end
@@ -51,9 +59,22 @@ _classes(f, at) = W.closed_world_classes(W.build_nir(W.check_subset(f, at, "clas
     @test !(Vector in vs)
     # an @enum is a class under its Enum supertype
     @test ClassesCases.Hue in _classes(ClassesCases.f_enum, (ClassesCases.Hue,))
-    # a value of a UnionAll type not under Type rejects, located at the walk
-    local e = try; _classes(ClassesCases.f_open, (ClassesCases.Open,)); nothing; catch x; x; end
+    # a value of a UnionAll type not under Type meets the class representing its instances, their nearest
+    # common superclass on Julia's supertype chain (unionall_class): Vector's is Any, the UnionAll no class
+    local bs = _classes(ClassesCases.f_boxed, (ClassesCases.HoldsBoxed,))
+    @test ClassesCases.Shape in bs && !(ClassesCases.Boxed in bs)
+    # the walk no longer rejects a field of the UnionAll Vector: it meets Vector's class, Any
+    @test _classes(ClassesCases.f_open, (ClassesCases.Open,)) isa Vector{DataType}
+    @test W.unionall_class(Vector, "classes") === Any && W.unionall_class(GenericMemory, "classes") === Any
+    # the first class on the body's chain free of the UnionAll's variables: Boxed{T}'s supertype Shape, which
+    # binds no T, a class every instance is under
+    @test W.unionall_class(ClassesCases.Boxed, "classes") === ClassesCases.Shape
+    @test all(T -> T <: W.unionall_class(ClassesCases.Boxed, "classes"), (ClassesCases.Boxed{Int}, ClassesCases.Boxed{String}))
+    # a body that is no class rejects, located, directly and where the walk meets a value of it
+    local e = try; W.unionall_class(Union{Vector{T},Set{T}} where T, "classes"); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Unquarantined && occursin("src/julia/classes.jl", e.rejection.row)
+    local ew = try; _classes(ClassesCases.f_odd, (ClassesCases.HoldsOdd,)); nothing; catch x; x; end
+    @test ew isa W.RejectionError && ew.rejection isa W.Unquarantined && occursin("is no class", ew.rejection.row)
 end
 
 module ClassesTypeValueCases

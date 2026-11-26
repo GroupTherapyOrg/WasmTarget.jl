@@ -490,9 +490,15 @@ statement's cache, which run_time_type_gap checks at its statement (src/julia/cl
         if v isa Type
             local gap = run_time_type_gap(v)
             gap === nothing || reject!(gap, "$at: a run-time type test where the program holds the type $v")
-        elseif v isa Union{Tuple,Core.SimpleVector,AbstractArray}
+        elseif v isa Tuple
             for x in v
                 visit(x)
+            end
+        elseif v isa Union{Core.SimpleVector,AbstractArray}
+            # an element left #undef (a Dict's empty slot, julia/base/dict.jl) holds no value: reading
+            # it is Julia's UndefRefError, so only the assigned ones are visited
+            for i in (v isa Core.SimpleVector ? (1:length(v)) : eachindex(v))
+                isassigned(v, i) && visit(v[i])
             end
         elseif isstructtype(typeof(v))
             for i in 1:nfields(v)

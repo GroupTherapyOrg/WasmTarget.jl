@@ -253,6 +253,99 @@ formal(dev/formal/TypeCacheLookup.tla): every key the operands can hold finds an
 end
 
 """
+    types_equal_cache(translator, operands, at) -> Vector{Pair{Vector{Any},Bool}}
+
+The cases of one foreign call of libjulia's `jl_types_equal(T, S)`, Base's `==` of two types
+(julia/base/operators.jl:295), split as applicable_cache splits applicable's: each entry a case, its key
+one member of each operand, its answer Julia's for every value of that key, tested in order (src/
+intrinsics.jl, the types_equal arm). An operand is a literal or constant type (`Some` of it, its key
+`Type{X}`) or the type Julia inferred for it, each of whose members is `Type{X}` or `DataType` itself. A
+`Type{X}` holds every type equal to X (Julia's isa of a Type{X} is jl_types_equal, julia/src/subtype.c:2523),
+one value only where X has a unique representation (Julia's isconstType, Compiler/src/typeutils.jl:9
+hasuniquerep): such a member is told at run time by ref.eq with X's constant; any other is admitted only as
+its operand's one member, whose values the run time never tests. Two `Type{X}` members make a key answered
+by Julia's own jl_types_equal of the two X at compile time, which is every value's answer, jl_types_equal
+being an equivalence (mutual subtyping). A `DataType` member, whose values no split
+can key, is answered against the other operand's member `Type{X}` by two entries, in this order: the
+key of X itself (Julia's answer, true), then the remainder, the `DataType` key, false. The remainder is
+exact only where every DataType equal to X is X itself, the identity premise Julia's obviously_unequal
+decides (julia/src/subtype.c:436): X no TypeofBottom nor its supertype Type{Union{}} (:438-441, equal
+though distinct), and either a concrete non-tuple DataType, which jl_type_equality_is_identity
+(julia/src/jltypes.c:1354) answers by identity against every concrete type and every DataType of its
+name with no free variable is concrete (jltypes.c:1841 jl_precompute_memoized_dt), or a DataType of no
+parameter, the one DataType of its name (subtype.c:458, other names unequal). The free variables are
+the program's type values' check, the run-time type test's (src/julia/runtime/rtutils.jl
+check_run_time_type_values, registered by run_time_type_test!). An operand typed Union{}, a member of any
+other type, a `Type{X}` of no unique representation beside another member, two `DataType` operands, an X
+of no identity premise against `DataType`, or a type value the run-time tests compare with that has no
+constant (type_value_unmade) rejects at the statement, located.
+
+dart's counterpart is `_Type.operator ==` of each runtime type kind (sdk/lib/_internal/wasm/common/
+type.dart:317 `_InterfaceType.operator ==`): structural, the class ids and the type arguments. Julia's
+differs: its type equality is mutual subtyping, so two distinct types can be equal, and its runtime
+answers by its subtyping algorithm, which WasmTarget does not port; WasmTarget holds every type value as
+one constant (constants.jl _lowerTypeToConstant), so the statement is split at compile time.
+
+formal(dev/formal/TypesEqualSplit.tla): every pair the operands can hold finds an entry, the first answering Julia's jl_types_equal
+"""
+@quarantine pin"julia/src/subtype.c:2353 jl_types_equal" "Julia's runtime answers type equality by mutual subtyping (subtype.c:2353 jl_types_equal), which WasmGC has no runtime for; dart's _Type.operator == (sdk/lib/_internal/wasm/common/type.dart:317) is structural, which Julia's is not; WasmTarget holds every type value as one constant (constants.jl _lowerTypeToConstant), so the statement is split at compile time as applicable's is, one case per key every value Julia's inference lets each operand hold, its answer the run time's own jl_types_equal, and an operand typed DataType keyed by its remainder where obviously_unequal answers by identity (subtype.c:436)" Core.Compiler.isconstType function types_equal_cache(translator, operands::Vector{Any}, at::String)::Vector{Pair{Vector{Any},Bool}}
+    length(operands) == 2 ||
+        reject!(Internal("src/julia/classes.jl types_equal_cache: jl_types_equal of $(length(operands)) operands, not two (julia/src/julia.h:1903)"), at)
+    local members = Vector{Any}[]
+    for op in operands
+        op === Union{} &&
+            reject!(Unquarantined("src/julia/classes.jl types_equal_cache: an operand of jl_types_equal typed Union{}, a value no run time holds"), at)
+        if op isa Some
+            something(op) isa Type ||
+                reject!(Unquarantined("src/julia/classes.jl types_equal_cache: jl_types_equal of $(repr(something(op))), no type, where Julia's == passes two (julia/base/operators.jl:295)"), at)
+            push!(members, Any[Core.Typeof(something(op))])
+        else
+            local ms = Any[Base.uniontypes(op)...]
+            all(m -> m === DataType || Base.isType(m) && !(m.parameters[1] isa TypeVar), ms) ||
+                reject!(Unquarantined("src/julia/classes.jl types_equal_cache: an operand of jl_types_equal typed $op, whose members are no Type{X} nor DataType, which no key the cache makes at compile time splits"), at)
+            # a Type{X} of no unique representation holds every type equal to X, which no ref.eq tells
+            # apart from another member's values: only as the operand's one member, never tested
+            length(ms) == 1 || all(m -> m === DataType || Core.Compiler.isconstType(m), ms) ||
+                reject!(Unquarantined("src/julia/classes.jl types_equal_cache: an operand of jl_types_equal typed $op, a member of which holds every type equal to its parameter (no unique representation, Compiler/src/typeutils.jl:12 hasuniquerep), which no ref.eq with one constant tests at run time"), at)
+            push!(members, ms)
+        end
+    end
+    all(ms -> DataType in ms, members) &&
+        reject!(Unquarantined("src/julia/classes.jl types_equal_cache: jl_types_equal of two operands typed $(join(operands, " and ")), each holding any DataType, which no key splits and no one value's identity answers (julia/src/subtype.c:2353, its subtyping)"), at)
+    # the identity premise: every DataType equal to X is X itself (obviously_unequal, julia/src/subtype.c:436)
+    local premise(@nospecialize(X)) = X isa DataType && X !== Core.TypeofBottom && X !== Core.TypeofBottom.super &&
+        (isconcretetype(X) && X.name !== Tuple.name || isempty(X.parameters) && X.name.wrapper === X)
+    local answer(@nospecialize(X), @nospecialize(Y)) = ccall(:jl_types_equal, Cint, (Any, Any), X, Y) != 0
+    local entries = Pair{Vector{Any},Bool}[]
+    for m1 in members[1], m2 in members[2]
+        if m1 !== DataType && m2 !== DataType
+            push!(entries, Any[m1, m2] => answer(m1.parameters[1], m2.parameters[1]))
+            continue
+        end
+        local narrow = m1 === DataType ? m2 : m1
+        local X = narrow.parameters[1]
+        premise(X) ||
+            reject!(Unquarantined("src/julia/classes.jl types_equal_cache: jl_types_equal of $X against a value typed DataType, where a DataType distinct from $X may be equal to it: Julia's obviously_unequal does not answer by identity (julia/src/subtype.c:436), and its subtyping is not ported"), at)
+        # the remainder is exact only for DataTypes of no free variable: the program's type values' check
+        run_time_type_test!(translator, at)
+        push!(entries, Any[narrow, narrow] => answer(X, X))
+        push!(entries, (m1 === DataType ? Any[DataType, narrow] : Any[narrow, DataType]) => false)
+    end
+    # the constants the run-time tests compare with: each Type{X} key of an operand of more than one key
+    for j in 1:2
+        local column = unique(k[j] for (k, _) in entries)
+        length(column) > 1 || continue
+        for m in column
+            m === DataType && continue
+            local why = type_value_unmade(translator, m.parameters[1])
+            why === nothing ||
+                reject!(Unquarantined("src/julia/classes.jl type_value_unmade: an operand of jl_types_equal typed $(operands[j]), whose type value $(m.parameters[1]) has no constant ($(something(why)))"), at)
+        end
+    end
+    return entries
+end
+
+"""
     new_struct_classes(translator, tytype, at) -> Vector{DataType}
 
 The classes an allocation of a class only run time knows may make (Julia's `new` whose type operand is
@@ -312,7 +405,8 @@ type. A type meets the walk by Julia's own inferred form: a `Union` by its membe
 (`typeof(X)`, or every kind when `X` is not known) and by the classes `X` denotes (`X` itself, or each
 member of a Union, that is a DataType, one with a free type variable a class no value has), whose ids a
 type value's layout holds (dart's `classIds[type.classNode]`, constants.dart:430
-_makeInterfaceTypeConstant); any other `UnionAll` rejects, located. A class
+_makeInterfaceTypeConstant); any other `UnionAll` by the class representing its instances, their nearest common
+superclass (unionall_class). A class
 met brings its supertype chain to `Any`, the root, and a concrete class that is not a kind brings
 its field types, each met as a value's type. `Union{}`, the type of no value, brings nothing. Where
 the program holds a type value, every class's type value can be made (the typeof table), so each
@@ -624,9 +718,12 @@ end
         foreach(u -> _meet_value!(out, seen, u, at), Base.uniontypes(t))
     elseif t isa Core.TypeofVararg
         _meet_value!(out, seen, isdefined(t, :T) ? t.T : Any, at)
-    elseif t isa UnionAll
-        t <: Type || reject!(Unquarantined("src/julia/classes.jl: a value of the UnionAll type $t, whose class Julia's inference left open"), at)
+    elseif t isa UnionAll && t <: Type
         foreach(k -> _meet_class!(out, seen, k, at), _KINDS)
+    elseif t isa UnionAll
+        # a value of one of the UnionAll's instances, each a class of its own met where the value is made: the
+        # class representing them all (unionall_class), as an abstract class's value meets that class
+        _meet_class!(out, seen, unionall_class(t, at), at)
     elseif t isa DataType && Base.isType(t)
         local x = t.parameters[1]
         if x isa TypeVar
@@ -647,6 +744,36 @@ end
         reject!(Internal("src/julia/classes.jl: a value's type $t, a $(typeof(t)), no form of Julia's inferred types"), at)
     end
     return nothing
+end
+
+"""
+    unionall_class(U, at) -> DataType
+
+The class representing a value of the UnionAll type `U` (one not under `Type`): Julia's instances of `U`
+(`Vector{Int64}`, `Vector{Float64}` of `Vector`) are each a class of its own, so their one class is the nearest
+on Julia's supertype chain of `U`'s body that holds `U` whole, the first with none of `U`'s free type variables
+(`Vector`'s `Any`; `F{T} where T`'s supertype where it binds no `T`). The one answer of the walk
+(_meet_value!) and of the translator's toMostSpecificInterfaceType, which also takes it for a Union whose
+join is a UnionAll. A body that is no DataType (`Union{A{T},B{T}} where T`) rejects, located.
+
+precedent(dart: dart2wasm/lib/translator.dart:940 Translator.toMostSpecificInterfaceType walks a type
+parameter's type to its bound, an interface type whose class is its representation). Julia's differs: a
+parametric type's instances are distinct classes, never one class with type arguments, so the walk is up
+Julia's `supertype` chain to the first class every instance shares.
+
+formal(dev/formal/UnionAllClass.tla): the class met has no free variable, holds every instance, and is their nearest common superclass; the walk ends
+"""
+@quarantine "pkg/dart2wasm/lib/translator.dart:940 Translator.toMostSpecificInterfaceType walks a type parameter to its bound, an interface type, the class representing every value of the type; a Julia UnionAll's instances are each a class of their own, their nearest common superclass on Julia's supertype chain" Base.supertype function unionall_class(@nospecialize(U::UnionAll), at::String)::DataType
+    local c = Base.unwrap_unionall(U)
+    c isa DataType || reject!(Unquarantined("src/julia/classes.jl: the UnionAll type $U, whose body $c is no class"), at)
+    # a class with a free variable of U's is no class a value has, and Julia's subtyping reads that variable
+    # as any type (`Vector <: Array{T,1}` holds), so the free-variable test is what moves the walk on; the
+    # first class free of them already holds U whole, the subtype test a guard of that claim
+    # (dev/formal/UnionAllClass.tla: IsClass, HoldsAll, Nearest)
+    while Base.has_free_typevars(c) || !(U <: c)
+        c = supertype(c)
+    end
+    return c
 end
 
 # a class met by the walk: itself, its supertype chain, and a concrete non-kind class's field types

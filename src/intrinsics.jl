@@ -630,6 +630,7 @@ end
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, node::NirForeignCall)::Union{WasmBuilder.IR.ValueType,Nothing}
     local libjulia = nir_libjulia_func(node)
     libjulia === :jl_genericmemory_owner && return generate_static_intrinsic(self, Val(:genericmemory_owner), node)
+    libjulia === :jl_types_equal && return generate_static_intrinsic(self, Val(:types_equal), node)
     libjulia === :jl_get_tls_world_age || return nothing
     local at = "$(julia_text(self.code_gen.enclosing_member))"
     local rt, cc = node.args[2], node.args[5]
@@ -685,6 +686,38 @@ end
     convert_type(t, b, WasmBuilder.unpacked(minfo.struct_.fields[t.field_index[owner] + 1].type), t.top_type[])
     WasmBuilder.var"end"(b)
     return t.top_type[]
+end
+
+# jl_types_equal, libjulia's type equality (julia/src/subtype.c:2353), Base's `==` of two types
+# (julia/base/operators.jl:295), which Julia's codegen calls as any C function and which no wasm host
+# supplies: split at compile time over the keys the operands can hold, each case's answer Julia's own
+# jl_types_equal of its key, an operand typed DataType keyed by its remainder under the identity premise
+# (src/julia/classes.jl types_equal_cache, the one source of its keys and answers), the cases run as the
+# applicable arm's (the bool_cases arm), the answer the i32 of the declared Cint. dart's counterpart is
+# _Type.operator == (sdk/lib/_internal/wasm/common/type.dart:317), a structural equality, which Julia's
+# mutual subtyping is not. A declaration other than julia.h's `int jl_types_equal(jl_value_t*,
+# jl_value_t*)` (julia/src/julia.h:1903) called by C's convention rejects, located
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:types_equal}, node::NirForeignCall)::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local at = "$(julia_text(self.code_gen.enclosing_member)): jl_types_equal"
+    local rt, argtypes, cc = node.args[2], node.args[3], node.args[5]
+    rt isa NirConst && rt.c.val === Cint ||
+        reject!(Unquarantined("julia/src/julia.h:1903 jl_types_equal: declared to return $rt, not Cint"), at)
+    argtypes isa NirConst && argtypes.c.val isa Core.SimpleVector && length(argtypes.c.val) == 2 && all(==(Any), argtypes.c.val) ||
+        reject!(Unquarantined("julia/src/julia.h:1903 jl_types_equal: declared to take $argtypes, not two values (Any, Any)"), at)
+    local conv = cc isa NirConst ? (cc.c.val isa Tuple ? cc.c.val[1] : cc.c.val) : nothing
+    conv === :ccall || conv === :cdecl ||
+        reject!(Unquarantined("julia/src/julia.h:1903 jl_types_equal: called by the convention $(repr(conv)), not C's"), at)
+    local args = NirValue[nir_foreign_operands(node)...]
+    length(args) == 2 ||
+        reject!(Unquarantined("julia/src/julia.h:1903 jl_types_equal: called with $(length(args)) arguments, not two"), at)
+    # an operand's value where compile time knows it, a literal or a constant binding, else the type
+    # Julia inferred for it
+    local operands = Any[a isa NirConst ? Some(a.c.val) :
+                         a isa NirGlobal && nir_binding_is_constant(a.binding) ? Some(nir_binding_value(a.binding, at).c.val) :
+                         dart_type_of(self, a) for a in args]
+    local cache = types_equal_cache(t, operands, at)
+    return generate_static_intrinsic(self, Val(:bool_cases), args, operands, cache, at)
 end
 
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, node::Union{NirCall,NirInvoke})::Union{WasmBuilder.IR.ValueType,Nothing}
@@ -2187,16 +2220,10 @@ end
 # jl_f_applicable, gf.c:3092 jl_method_lookup) that Julia's codegen leaves to its runtime: split at
 # compile time over the keys the operands can hold, each case's answer the run time's lookup on its
 # key's tuple type (src/julia/classes.jl applicable_cache, the one source of its keys and answers). The
-# cases run as Julia's inliner runs a union split's (Compiler/src/ssair/inlining.jl:526
-# ir_inline_unionsplit!), in order, as the apply_type arm runs its own: each case's test is isa on each
-# operand of more than one key, a `Type{X}` key the operand's ref.eq with X's constant (isa on a type of
-# one value is === X), a class key types.dart's emitIsTest of the class; the first case whose tests hold
-# answers its Bool. Past the last case is wasm's trap, as the apply_type arm's: the cases cover every
-# key (dev/formal/TypeCacheLookup.tla)
+# cases run as the bool_cases arm runs them, as the apply_type arm runs its own (dev/formal/TypeCacheLookup.tla)
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:applicable}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::WasmBuilder.IR.ValueType
     local code_gen = self.code_gen
     local t = translator(self)
-    local b = code_gen.b[]
     local at = "$(julia_text(code_gen.enclosing_member)): Julia's $(nameof(f)) on $(join((dart_type_of(self, a) for a in args), ", "))"
     # an operand's value where compile time knows it, a literal or a constant binding, else the type
     # Julia inferred for it
@@ -2204,6 +2231,21 @@ end
                          a isa NirGlobal && nir_binding_is_constant(a.binding) ? Some(nir_binding_value(a.binding, at).c.val) :
                          dart_type_of(self, a) for a in args]
     local cache = applicable_cache(t, operands, at)
+    return generate_static_intrinsic(self, Val(:bool_cases), args, operands, cache, at)
+end
+
+# the run-time half of a statement split at compile time into Bool cases (applicable_cache's,
+# types_equal_cache's), run as Julia's inliner runs a union split's (Compiler/src/ssair/inlining.jl:526
+# ir_inline_unionsplit!), in order: each case's test is isa on each operand of more than one key, a
+# `Type{X}` key the operand's ref.eq with X's constant (isa on a type of one value is === X), a class key
+# types.dart's emitIsTest of the class, none where the operand's type is already under the class; the
+# first case whose tests hold answers its Bool as an i32. Past the last case is wasm's trap: the cases
+# cover every key (dev/formal/TypeCacheLookup.tla, dev/formal/TypesEqualSplit.tla)
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:bool_cases}, args::Vector{NirValue}, operands::Vector{Any},
+        cache::Vector{Pair{Vector{Any},Bool}}, at::String)::WasmBuilder.IR.ValueType
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
     # each operand of more than one key, held boxed in the top type for the tests
     local held = Dict{Int,WasmBuilder.IR.Local}()
     for (j, a) in enumerate(args)
@@ -2218,6 +2260,8 @@ end
     for (k, answer) in cache
         local miss = WasmBuilder.block(b)
         for j in sort!(collect(keys(held)))
+            # a class key the operand's type is already under holds for every value: no test
+            !Core.Compiler.isconstType(k[j]) && operands[j] <: k[j] && continue
             WasmBuilder.local_get(b, held[j])
             if Core.Compiler.isconstType(k[j])
                 translate_expression(code_gen, NirConst(Core.Const(k[j].parameters[1])), t.top_type[])

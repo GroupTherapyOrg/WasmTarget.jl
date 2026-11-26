@@ -146,13 +146,13 @@ import ..@closed, ..@exhaustive, ..@parity, ..@quarantine, ..AbstractClosures,
        ..throw_invalid_memory_size, ..throw_method_error, ..throw_out_of_memory,
        ..throw_undef_ref_error, ..told_by_class, ..top_held_classes, ..tuple_record_arity,
        ..tuple_record_class, ..tuple_type_rows, ..type_expand_integer, ..type_promote_integer,
-       ..type_value_entries, ..type_value_unmade, ..udivti3, ..uf_add!, ..uf_find!, ..uf_union!,
-       ..umodti3, ..wasm_array_length, ..wasm_array_new, ..wasm_array_read,
-       ..wasm_array_read_unsigned, ..wasm_array_write!, ..wasm_egal, ..wasm_memory_copy!,
-       ..wasm_memory_fill!, ..wasm_memory_overlaps, ..wasm_memory_string, ..wasm_memory_unset!,
-       ..wasm_string_alloc, ..wasm_string_codeunit, ..wasm_string_copy!, ..wasm_string_length,
-       ..wasm_string_memory, ..wasm_string_write!, ..wasm_symbol_child, ..wasm_symbol_hash,
-       ..wasm_symbol_name, ..wasm_symbol_new, ..wasm_symbol_set_child!
+       ..type_value_entries, ..type_value_unmade, ..types_equal_cache, ..udivti3, ..uf_add!,
+       ..uf_find!, ..uf_union!, ..umodti3, ..unionall_class, ..wasm_array_length, ..wasm_array_new,
+       ..wasm_array_read, ..wasm_array_read_unsigned, ..wasm_array_write!, ..wasm_egal,
+       ..wasm_memory_copy!, ..wasm_memory_fill!, ..wasm_memory_overlaps, ..wasm_memory_string,
+       ..wasm_memory_unset!, ..wasm_string_alloc, ..wasm_string_codeunit, ..wasm_string_copy!,
+       ..wasm_string_length, ..wasm_string_memory, ..wasm_string_write!, ..wasm_symbol_child,
+       ..wasm_symbol_hash, ..wasm_symbol_name, ..wasm_symbol_new, ..wasm_symbol_set_child!
 import Base: @nospecializeinfer
 import Core: MethodInstance
 import ..LLVM
