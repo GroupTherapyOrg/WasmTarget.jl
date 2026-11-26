@@ -51,11 +51,9 @@ imm_const(x::Int64)::Int64 = try; setfield!(Imm(x, 2), :x, 5); 0; catch e; @code
 tuple_const(x::Int64)::Int64 = try; setfield!((x, 2), 1, 3); 0; catch e; @code(e); end
 # a const field named at compile time
 const_field(x::Int64)::Int64 = (m = mk(); try; setfield!(m, :b, x); 0; catch e; @code(e); end)
-# a value whose type overlaps the field's: tested at run time, written where it is one; the field read back by a
-# call, since Julia's optimizer would forward the stored Union value to the return (a narrowing WasmTarget's return
-# does not unbox: cleanup/H.md)
-@noinline geta(m::Mut)::Int64 = m.a
-overlap(x::Int64)::Int64 = (m = mk(); try; setfield!(m, :a, mixed(x)); geta(m); catch e; e isa TypeError && e.expected === Int64 && e.got === "q" ? -11 : -12; end)
+# a value whose type overlaps the field's: tested at run time, written where it is one; Julia's optimizer forwards
+# the field's read back as the stored Union value, which the return narrows to Int64 (test/src/return_narrowed.jl)
+overlap(x::Int64)::Int64 = (m = mk(); try; setfield!(m, :a, mixed(x)); m.a; catch e; e isa TypeError && e.expected === Int64 && e.got === "q" ? -11 : -12; end)
 # a name compile time knows is codegen's arm (julia/src/codegen.cpp:3776-3827): the value's type is checked before
 # the immutable struct and the const field; a name none of Julia's fields is jl_f_setfield's, the immutable struct first
 macro typed(e)
