@@ -585,30 +585,30 @@ member the intrinsifier lowers at its call, whose body is never collected (nir_i
 statement its kind of `NirStmt`, each operand of `NirValue`, each type Julia's. A form outside the
 census rejects with `Unquarantined`, located at the compile `at` names.
 
-formal(dev/formal/NirHandoff.tla): a record no body, one body per CodeInstance, a repeat asserted, each statement at its position
+formal(dev/formal/NirHandoff.tla): a record no body, one body per CodeInstance, each statement at its position
+formal(dev/formal/FirstListing.tla): a body per CodeInstance from its first listing, a repeat skipped by identity
 """
 @quarantine pin"julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel" "the closed world Julia inferred comes as CodeInstance and CodeInfo pairs at one world, as julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel returns them, read once" Core.CodeInfo function build_nir(world::ClosedWorld, at::String)::NirWorld
     # a queued ccallable's svec(rettype, signature) is the verifier's record, no body: its
-    # specialization is a CodeInstance of the world like any other, which Julia's inference lists a
-    # second time when its invokelatest queue compiles it (typeinfer.jl's compile!): one body here, the
-    # repeat's CodeInfo asserted the first's (its statements and their types), never dropped unread
+    # specialization is a CodeInstance of the world like any other. Julia's inference lists a
+    # CodeInstance a second time when its invokelatest queue (typeinfer.jl:1539-1557, its own inspected
+    # set) compiles a ccallable's or a finalizer's specialization and reaches it again; its CodeInfo
+    # then may be another copy of the same code (a mutable constant decompressed again). Julia's code
+    # generator compiles one function per CodeInstance, from its first listing, and skips a repeat by
+    # its identity (julia/src/aotcompile.cpp:814 `if (compiled_functions.count(codeinst)) continue;`);
+    # two CodeInstances of one MethodInstance are two functions, each built
     local xs = Any[x for x in world.codeinfos if !(x isa Core.SimpleVector)]
     iseven(length(xs)) || reject!(Internal("src/julia/nir.jl: the closed world holds $(length(xs)) entries, not CodeInstance and CodeInfo pairs"), at)
     local bodies = NirBody[]
     # every binding the bodies name, each read once at the closed world's world
     local bindings = NirBindings(world.world)
-    local seen = IdDict{Core.CodeInstance,Core.CodeInfo}()
+    local seen = Base.IdSet{Core.CodeInstance}()
     for k in 1:2:length(xs)
         local ci = xs[k]; local src = xs[k + 1]
         ci isa Core.CodeInstance && src isa Core.CodeInfo ||
             reject!(Internal("src/julia/nir.jl: the closed world's entry $k is a $(typeof(ci)) and $(typeof(src)), not a CodeInstance and its CodeInfo"), at)
-        local first_src = get(seen, ci, nothing)
-        if first_src !== nothing
-            (isequal(src.code, first_src.code) && isequal(src.ssavaluetypes, first_src.ssavaluetypes)) ||
-                reject!(Internal("src/julia/nir.jl: the closed world lists $(ci.def) twice with different code"), at)
-            continue
-        end
-        seen[ci] = src
+        ci in seen && continue
+        push!(seen, ci)
         # an intrinsified member is dart's external member: its call stays in its caller's body, its own
         # body is never collected (nir_intrinsified)
         nir_intrinsified(ci.def) && ci.def !== world.entry && continue
