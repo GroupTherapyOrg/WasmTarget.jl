@@ -2870,12 +2870,31 @@ source globals.dart's getConstantInitializer reads too; dev/MODULE_INIT.md), ins
 constant, which keeps Julia's identity (constants are canonical by `===`). A binding carries no
 source position in Julia's debuginfo, so the source map keeps the function's; it has no code, so it
 has no closure and `closures` stays unassigned.
+
+A binding declared with no value (`global x::T`, Julia's PARTITION_KIND_GLOBAL holding null) has no
+initial value: Julia's read of it loads the binding's value and, finding none, raises
+UndefVarError(name, module) (julia/src/codegen.cpp:3294 emit_globalref, :5587 emit_checked_var,
+cgutils.cpp:1596 undef_var_error_ifnot, the runtime's jl_undefined_var_error), as dart's late field
+with no initializer throws LateError.fieldNI from its getter until it is written
+(pkg/front_end/lib/src/kernel/late_lowering.dart:271 createGetterBodyWithoutInitializer, dart2wasm's
+target.dart:555 enabledLateLowerings, all). So its initializer, which the getter calls only while the
+field holds no value (no write has set it or its flag, _generate_setter), raises that error and
+writes nothing.
 """
 @parity "dart2wasm/lib/code_generator.dart:4861 StaticFieldInitializerCodeGenerator.generateInternal" function generate_internal(self::StaticFieldInitializerCodeGenerator)::Nothing
     local translator = self.translator
     local field = self.field
     local b = self.b[]
     local global_definition = get_definition_for_static_field(translator.dart_globals[], field)
+    if !nir_binding(translator.component, field).defined
+        # late_lowering.dart:271's `throw LateError.fieldNI(name)`: Julia's jl_undefined_var_error(name, module)
+        translate_expression(self, NirConst(Core.Const(field.name)), translate_type(translator, Symbol))
+        translate_expression(self, NirConst(Core.Const(field.mod)), translator.top_type[])
+        call(self, nir_runtime_member(translator.component, jl_undefined_var_error, "$(field) initializer"))
+        WasmBuilder.unreachable(b)
+        WasmBuilder.var"end"(b)
+        return nothing
+    end
     local flag = global_definition.initialized_flag
     local local_ = WasmBuilder.add_local(b, type(global_definition))
     write(global_definition, translator, b, function (b::WasmBuilder.InstructionsBuilder)
