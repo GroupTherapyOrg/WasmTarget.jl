@@ -899,7 +899,14 @@ end
         # dart's `node.accept1(this, expectedType)`: the visitor of the node's kind
         local result_type = node isa NirValue ? (@exhaustive node::NirValue begin
             (s::NirSSA) => visit_variable_get(self, s, expected_type)
-            (a::NirArgument) => a.n == 1 ? visit_this_expression(self, a, expected_type) : visit_variable_get(self, a, expected_type)
+            # the callee read as a value: `this` where it carries fields; a singleton callee is no parameter
+            # (_initializeThis), its value its type's one instance, as Julia's codegen gives an argument that is
+            # not actually passed (julia/src/codegen.cpp:8688 get_specsig_arg's ghostValue, :2221: the ghost
+            # type's value): a MethodError's function, a call's own callee passed on
+            (a::NirArgument) => a.n == 1 ? (self.this_local === nothing && Base.issingletontype(nir_argument_type(self.enclosing_member::Core.MethodInstance, a)) ?
+                                             translate_expression(self, NirConst(Core.Const(nir_argument_type(self.enclosing_member::Core.MethodInstance, a).instance)), expected_type) :
+                                             visit_this_expression(self, a, expected_type)) :
+                                  visit_variable_get(self, a, expected_type)
             (c::NirConst) => let v = c.c.val
                 v === nothing ? visit_null_literal(self, c, expected_type) :
                 v isa String ? visit_string_literal(self, c, expected_type) :
