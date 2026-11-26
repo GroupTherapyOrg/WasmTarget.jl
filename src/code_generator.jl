@@ -2167,6 +2167,12 @@ end
     if k === nothing && cls <: Core.GenericMemory && (key === :ptr || key == Base.fieldindex(cls, :ptr))
         return generate_static_intrinsic(self.intrinsifier[], Val(:memory_address), cls, receiver)
     end
+    # a DataType's field its type value's layout does not hold (`T.super`, supertype's read): its table by class id,
+    # the one read the run-time name's arm makes too (kind_field_table)
+    if k === nothing && cls === DataType
+        local got = visit_instance_get(self, node, kind_field_table(self.translator, key isa Symbol ? Base.fieldindex(DataType, key) : key, "$(julia_text(self.enclosing_member))"), receiver)
+        return got === nothing ? expected_type : got
+    end
     k === nothing && reject!(Unquarantined("src/julia/classes.jl: the field $key of $cls, which its class layout (a kind's runtime type layout) does not hold"), "$(julia_text(self.enclosing_member))")
     return _direct_get(self, fields[k], receiver)
 end
@@ -2210,63 +2216,78 @@ end
                 convert_type(t, b, got, result[]; boxed_class = f.type isa DataType ? f.type : nothing)
                 return nothing
             end
-            # a DataType's field its type value's layout does not hold (dart's _InterfaceType's) is its
-            # table by class id (src/julia/classes.jl kind_field_table, formal(dev/formal/KindFieldTable.tla)):
-            # the receiver's class id, the entry of each table: its state (jl_get_nth_field_checked's #undef
-            # raises UndefRefError; a gap is the fatal arm, located), then its value
-            local info = get(t.class_info, DataType, nothing)
-            info === nothing && reject!(Internal("$at: a field of DataType named at run time where DataType has no class info"), where_)
-            local id_field = only(c for c in class_instance_fields(DataType, at) if c.name == "classId")
-            local class_id()::Nothing = (translate_expression(self, receiver, info.non_nullable_type);
-                                         WasmBuilder.struct_get(b, info.struct_, t.field_index[id_field]); nothing)
-            local site = "$where_ (at run time, $(generate_static_intrinsic(self.intrinsifier[], Val(:statement_location), node)))"
-            local fatal()::Nothing = generate_static_intrinsic(self.intrinsifier[], Val(:fatal), Unquarantined(f.gap), site)
-            local table(T::Type, entries::Vector{NirConst})::WasmBuilder.IR.ArrayType = begin
-                local array_type = array_type_for_dart_type(t, T; mutable_ = true)
-                instantiate_constant(t.constants[], b, make_array_of(t.constants[], T, entries),
-                    WasmBuilder.IR.RefType_def(array_type; nullable = false))
-                class_id()
-                array_type
-            end
-            # an entry of a table, its element read as its storage holds it (a packed one zero-extended)
-            local entry(array_type::WasmBuilder.IR.ArrayType)::WasmBuilder.IR.ValueType = begin
-                local storage = array_type.element_type[].type
-                storage isa WasmBuilder.IR.PackedType ? WasmBuilder.array_get_u(b, array_type) : WasmBuilder.array_get(b, array_type)
-                WasmBuilder.unpacked(storage)
-            end
-            if f.values === nothing
-                fatal()
-            else
-                local undef = KIND_ENTRY_UNDEF in f.states
-                local gap = KIND_ENTRY_GAP in f.states
-                if undef || gap
-                    local state = add_local(self, WasmBuilder.IR.NumType_i32)
-                    # the states as dart's class-id tables hold their integers, a WasmI32 each (types.dart:1209)
-                    entry(table(WasmI32, NirConst[make_wasm_i32(t.constants[], Int(x)) for x in f.states]))
-                    WasmBuilder.local_set(b, state)
-                    if undef
-                        WasmBuilder.local_get(b, state)
-                        WasmBuilder.i32_const(b, Int(KIND_ENTRY_UNDEF))
-                        WasmBuilder.i32_eq(b)
-                        WasmBuilder.if_(b)
-                        call(self, nir_runtime_member(t.component, throw_undef_ref_error, "$where_: a read of DataType.$(f.field)"))
-                        WasmBuilder.unreachable(b)
-                        WasmBuilder.var"end"(b)
-                    end
-                    if gap
-                        WasmBuilder.local_get(b, state)
-                        WasmBuilder.i32_const(b, Int(KIND_ENTRY_GAP))
-                        WasmBuilder.i32_eq(b)
-                        WasmBuilder.if_(b)
-                        fatal()
-                        WasmBuilder.var"end"(b)
-                    end
-                end
-                convert_type(t, b, entry(table(f.type, NirConst[NirConst(Core.Const(v)) for v in f.values])), result[]; boxed_class = f.type isa DataType ? f.type : nothing)
-            end
+            # a DataType's field its type value's layout does not hold: its table by class id
+            local got = visit_instance_get(self, node, f, receiver)
+            got === nothing || convert_type(t, b, got, result[]; boxed_class = f.type isa DataType ? f.type : nothing)
             return nothing
         end)
     return result[]
+end
+
+# A DataType's field its type value's layout does not hold (dart's _InterfaceType's: name, super, types, instance,
+# layout, hash, flags), read from its table by class id (src/julia/classes.jl kind_field_table,
+# formal(dev/formal/KindFieldTable.tla)), as dart keeps a per-class runtime fact in a table indexed by class id
+# (types.dart:1424 RuntimeTypeInformation._getTypeNames): the receiver's class id, the entry of each table, its
+# state (jl_get_nth_field_checked's #undef raises UndefRefError; a gap is the fatal arm, located), then its value.
+# The one read of such a field, whether its name is a constant (visitInstanceGet's constant arm) or only run time
+# knows it (the run-time switch's arm). Leaves the value's wasm type, or nothing where the field is every entry a
+# gap and the read ends at the fatal arm
+@parity "dart2wasm/lib/code_generator.dart:2258 AstCodeGenerator.visitInstanceGet" function visit_instance_get(self::AstCodeGenerator, node::NirCall, f::KindFieldTable, receiver::NirValue)::Union{WasmBuilder.IR.ValueType,Nothing}
+    local at = "dart2wasm/lib/code_generator.dart:2258 AstCodeGenerator.visitInstanceGet"
+    local where_ = "$(julia_text(self.enclosing_member))"
+    local t = self.translator
+    local b = self.b[]
+    local info = get(t.class_info, DataType, nothing)
+    info === nothing && reject!(Internal("$at: a field of DataType read where DataType has no class info"), where_)
+    local id_field = only(c for c in class_instance_fields(DataType, at) if c.name == "classId")
+    local class_id()::Nothing = (translate_expression(self, receiver, info.non_nullable_type);
+                                 WasmBuilder.struct_get(b, info.struct_, t.field_index[id_field]); nothing)
+    local site = "$where_ (at run time, $(generate_static_intrinsic(self.intrinsifier[], Val(:statement_location), node)))"
+    local fatal()::Nothing = generate_static_intrinsic(self.intrinsifier[], Val(:fatal), Unquarantined(f.gap), site)
+    local table(T::Type, entries::Vector{NirConst})::WasmBuilder.IR.ArrayType = begin
+        local array_type = array_type_for_dart_type(t, T; mutable_ = true)
+        instantiate_constant(t.constants[], b, make_array_of(t.constants[], T, entries),
+            WasmBuilder.IR.RefType_def(array_type; nullable = false))
+        class_id()
+        array_type
+    end
+    # an entry of a table, its element read as its storage holds it (a packed one zero-extended)
+    local entry(array_type::WasmBuilder.IR.ArrayType)::WasmBuilder.IR.ValueType = begin
+        local storage = array_type.element_type[].type
+        storage isa WasmBuilder.IR.PackedType ? WasmBuilder.array_get_u(b, array_type) : WasmBuilder.array_get(b, array_type)
+        WasmBuilder.unpacked(storage)
+    end
+    if f.values === nothing
+        fatal()
+        return nothing
+    else
+        local undef = KIND_ENTRY_UNDEF in f.states
+        local gap = KIND_ENTRY_GAP in f.states
+        if undef || gap
+            local state = add_local(self, WasmBuilder.IR.NumType_i32)
+            # the states as dart's class-id tables hold their integers, a WasmI32 each (types.dart:1209)
+            entry(table(WasmI32, NirConst[make_wasm_i32(t.constants[], Int(x)) for x in f.states]))
+            WasmBuilder.local_set(b, state)
+            if undef
+                WasmBuilder.local_get(b, state)
+                WasmBuilder.i32_const(b, Int(KIND_ENTRY_UNDEF))
+                WasmBuilder.i32_eq(b)
+                WasmBuilder.if_(b)
+                call(self, nir_runtime_member(t.component, throw_undef_ref_error, "$where_: a read of DataType.$(f.field)"))
+                WasmBuilder.unreachable(b)
+                WasmBuilder.var"end"(b)
+            end
+            if gap
+                WasmBuilder.local_get(b, state)
+                WasmBuilder.i32_const(b, Int(KIND_ENTRY_GAP))
+                WasmBuilder.i32_eq(b)
+                WasmBuilder.if_(b)
+                fatal()
+                WasmBuilder.var"end"(b)
+            end
+        end
+        return entry(table(f.type, NirConst[NirConst(Core.Const(v)) for v in f.values]))
+    end
 end
 
 # The index of a field Julia names at run time, get_checked_fieldindex's (julia/src/builtins.c:994),
