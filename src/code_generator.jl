@@ -1443,21 +1443,12 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/code_generator.dart:1242 AstCodeGenerator._conditional" function _conditional(self::AstCodeGenerator, condition::NirValue, then::Function, otherwise::Union{Nothing,Function}, result::Vector{WasmBuilder.IR.ValueType})::Nothing
-    local b = self.b[]
-    _has_logical_operator(self, condition) &&
-        reject!(Internal("dart2wasm/lib/code_generator.dart:1242 AstCodeGenerator._conditional: a NIR condition with a logical operator"), "$(julia_text(self.enclosing_member))")
-    # Simple condition
-    translate_expression(self, condition, WasmBuilder.IR.NumType_i32)
-    WasmBuilder.if_(b, WasmBuilder.IR.ValueType[], result)
-    then()
-    if otherwise !== nothing
-        WasmBuilder.else_(b)
-        otherwise()
-    end
-    WasmBuilder.var"end"(b)
-    return nothing
-end
+# dart's three callers, visitIfStatement (:1277), visitLogicalExpression (:2792) and visitConditionalExpression (:2810),
+# take Kernel nodes Julia has no counterpart for (their KERNEL_TYPES rows): Julia lowers `if`, `&&`, `||` and `?:` to
+# GotoIfNot before its IR, which visit_block emits through branch_if, the one condition path (emit_condition's). No
+# caller reaches it, so it is the row's rejection, as theirs are, never a second condition path
+@parity "dart2wasm/lib/code_generator.dart:1242 AstCodeGenerator._conditional" _conditional(self::AstCodeGenerator, condition::NirValue, then::Function, otherwise::Union{Nothing,Function}, result::Vector{WasmBuilder.IR.ValueType})::Union{} =
+    no_counterpart_rejection("IfStatement", "dart2wasm/lib/code_generator.dart:1242 AstCodeGenerator._conditional", "$(julia_text(self.enclosing_member))")
 
 @parity "dart2wasm/lib/code_generator.dart:1277 AstCodeGenerator.visitIfStatement" visit_if_statement(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
     no_counterpart_rejection("IfStatement", "dart2wasm/lib/code_generator.dart:1277 AstCodeGenerator.visitIfStatement", "$(julia_text(self.enclosing_member))")
