@@ -33,11 +33,16 @@ function wide(x::Int64)::Int64
     end
     return n + 1000 * Int64(TE_KEYS[x] == TeC{Int64}) + 10000 * length(TE_DICT)
 end
-# two operands typed DataType: no key splits them, refused, located
-# (read from a vector: two type values an argument's split would fold to constants, Julia's concrete evaluation)
-both(x::Int64)::Int64 = Int64(TE_KEYS[x] == TE_KEYS[x + 1])
-# a literal tuple type against an operand typed DataType: obviously_unequal does not answer by identity
+# two operands typed DataType, no key splits them: the run-time port, by identity and the identity premise (read
+# from a vector: two type values an argument's split would fold to constants, Julia's concrete evaluation)
+both(x::Int64)::Int64 = Int64(TE_KEYS[x] == TE_KEYS[x + 1]) + 2 * Int64(TE_KEYS[x] == TE_KEYS[x])
+# a literal tuple type, of no premise, against an operand typed DataType whose values have it
 tuple_wide(x::Int64)::Int64 = Int64(Tuple{Int64} == TE_KEYS[x])
+# a Dict keyed by DataTypes looked up by one read from a vector, Base's ht_keyindex comparing keys by ==
+dict_get(x::Int64)::Int64 = TE_DICT[TE_KEYS[x]]
+# two distinct tuple types, neither of the premise: Julia answers by subtyping, the run-time port's fatal gap
+const TE_TUPLES = DataType[Tuple{Int64}, Tuple{Int8}]
+tuple_gap(x::Int64)::Int64 = Int64(TE_TUPLES[x] == TE_TUPLES[3 - x])
 end
 
 const TC = TypesEqualCases
@@ -56,12 +61,19 @@ const TC = TypesEqualCases
     for r in Main.WTChild.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
     end
-    # two operands typed DataType, refused at the statement, located
-    local e = try; WasmTarget.compile(TC.both, (Int64,)); nothing; catch x; x; end
-    @test e isa WasmTarget.RejectionError && occursin("each holding any DataType", sprint(showerror, e))
-    # a tuple type has no identity premise against DataType: refused, located
-    local r = try; WasmTarget.compile(TC.tuple_wide, (Int64,)); nothing; catch x; x; end
-    @test r isa WasmTarget.RejectionError && occursin("does not answer by identity", sprint(showerror, r))
+    # the run-time port: identity and the identity premise, against native
+    local rt = Main.WTChild.RunCase[]
+    for (f, xs) in ((TC.both, 1:2), (TC.tuple_wide, 1:3), (TC.dict_get, 1:3))
+        local (p, o) = both(f, (Int64(1),))
+        append!(rt, [Main.WTChild.RunCase("types_equal/$(nameof(f))($x)", p, (x,), Main.WTChild.native_answer(f, (x,)); optimized = o) for x in Int64.(xs)])
+    end
+    @test [c.native for c in rt] == [2, 2, 0, 0, 0, 1, 2, 3]
+    for r in Main.WTChild.run_cases(rt)
+        @test r.ok || (@info r.label r.why; false)
+    end
+    # two distinct tuple types: the fatal gap, named, read as unported
+    local g = only(Main.WTChild.run_cases([Main.WTChild.compiled_case("types_equal/tuple_gap", WasmTarget.compile, TC.tuple_gap, (Int64(1),))]))
+    @test g.outcome === :unported
 end
 
 end # module

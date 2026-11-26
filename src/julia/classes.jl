@@ -253,7 +253,24 @@ formal(dev/formal/TypeCacheLookup.tla): every key the operands can hold finds an
 end
 
 """
-    types_equal_cache(translator, operands, at) -> Vector{Pair{Vector{Any},Bool}}
+    types_equal_identity_premise(X) -> Bool
+
+Whether every DataType equal to `X` is `X` itself, so Julia's jl_types_equal of `X` and another DataType answers by
+identity (julia/src/subtype.c:436 obviously_unequal): `X` a DataType, neither TypeofBottom nor its supertype
+Type{Union{}} (:438-441, equal though distinct), and either a concrete non-tuple DataType, which
+jl_type_equality_is_identity (julia/src/jltypes.c:1354) answers by identity against every concrete type (every
+DataType of its name with no free variable concrete, jltypes.c:1841 jl_precompute_memoized_dt), or a DataType of no
+parameter, the one DataType of its name (subtype.c:458). Among DataTypes of no free variable: the run-time type
+test's link-time check excludes the others (src/julia/runtime/rtutils.jl check_run_time_type_values). The one
+reading of the premise: the compile-time cache's (types_equal_cache) and the run-time port's, through the closed
+world's table by class id (src/julia/runtime/jltypes.jl jl_types_equal, jl_type_identity_premise).
+"""
+@quarantine pin"julia/src/subtype.c:436 obviously_unequal" "Julia answers two types' equality by identity where obviously_unequal decides it, a concrete non-tuple DataType or one of no parameter" Core.DataType types_equal_identity_premise(@nospecialize(X))::Bool =
+    X isa DataType && X !== Core.TypeofBottom && X !== Core.TypeofBottom.super &&
+        (isconcretetype(X) && X.name !== Tuple.name || isempty(X.parameters) && X.name.wrapper === X)
+
+"""
+    types_equal_cache(translator, operands, at) -> Union{Nothing,Vector{Pair{Vector{Any},Bool}}}
 
 The cases of one foreign call of libjulia's `jl_types_equal(T, S)`, Base's `==` of two types
 (julia/base/operators.jl:295), split as applicable_cache splits applicable's: each entry a case, its key
@@ -268,17 +285,14 @@ by Julia's own jl_types_equal of the two X at compile time, which is every value
 being an equivalence (mutual subtyping). A `DataType` member, whose values no split
 can key, is answered against the other operand's member `Type{X}` by two entries, in this order: the
 key of X itself (Julia's answer, true), then the remainder, the `DataType` key, false. The remainder is
-exact only where every DataType equal to X is X itself, the identity premise Julia's obviously_unequal
-decides (julia/src/subtype.c:436): X no TypeofBottom nor its supertype Type{Union{}} (:438-441, equal
-though distinct), and either a concrete non-tuple DataType, which jl_type_equality_is_identity
-(julia/src/jltypes.c:1354) answers by identity against every concrete type and every DataType of its
-name with no free variable is concrete (jltypes.c:1841 jl_precompute_memoized_dt), or a DataType of no
-parameter, the one DataType of its name (subtype.c:458, other names unequal). The free variables are
-the program's type values' check, the run-time type test's (src/julia/runtime/rtutils.jl
-check_run_time_type_values, registered by run_time_type_test!). An operand typed Union{}, a member of any
-other type, a `Type{X}` of no unique representation beside another member, two `DataType` operands, an X
-of no identity premise against `DataType`, or a type value the run-time tests compare with that has no
-constant (type_value_unmade) rejects at the statement, located.
+exact only where every DataType equal to X is X itself (types_equal_identity_premise). The free variables
+are the program's type values' check, the run-time type test's (src/julia/runtime/rtutils.jl
+check_run_time_type_values, registered by run_time_type_test!). Where no key splits the operands (a member
+of any other type, such as an operand typed `Type`; two `DataType` operands; an X of no identity premise
+against `DataType`) the answer is `nothing`: the run-time port answers (src/julia/runtime/rtutils.jl
+jl_types_equal). An operand typed Union{}, a `Type{X}` of no unique representation beside another member,
+or a type value the run-time tests compare with that has no constant (type_value_unmade) rejects at the
+statement, located.
 
 dart's counterpart is `_Type.operator ==` of each runtime type kind (sdk/lib/_internal/wasm/common/
 type.dart:317 `_InterfaceType.operator ==`): structural, the class ids and the type arguments. Julia's
@@ -288,7 +302,7 @@ one constant (constants.jl _lowerTypeToConstant), so the statement is split at c
 
 formal(dev/formal/TypesEqualSplit.tla): every pair the operands can hold finds an entry, the first answering Julia's jl_types_equal
 """
-@quarantine pin"julia/src/subtype.c:2353 jl_types_equal" "Julia's runtime answers type equality by mutual subtyping (subtype.c:2353 jl_types_equal), which WasmGC has no runtime for; dart's _Type.operator == (sdk/lib/_internal/wasm/common/type.dart:317) is structural, which Julia's is not; WasmTarget holds every type value as one constant (constants.jl _lowerTypeToConstant), so the statement is split at compile time as applicable's is, one case per key every value Julia's inference lets each operand hold, its answer the run time's own jl_types_equal, and an operand typed DataType keyed by its remainder where obviously_unequal answers by identity (subtype.c:436)" Core.Compiler.isconstType function types_equal_cache(translator, operands::Vector{Any}, at::String)::Vector{Pair{Vector{Any},Bool}}
+@quarantine pin"julia/src/subtype.c:2353 jl_types_equal" "Julia's runtime answers type equality by mutual subtyping (subtype.c:2353 jl_types_equal), which WasmGC has no runtime for; dart's _Type.operator == (sdk/lib/_internal/wasm/common/type.dart:317) is structural, which Julia's is not; WasmTarget holds every type value as one constant (constants.jl _lowerTypeToConstant), so the statement is split at compile time as applicable's is, one case per key every value Julia's inference lets each operand hold, its answer the run time's own jl_types_equal, and an operand typed DataType keyed by its remainder where obviously_unequal answers by identity (subtype.c:436)" Core.Compiler.isconstType function types_equal_cache(translator, operands::Vector{Any}, at::String)::Union{Nothing,Vector{Pair{Vector{Any},Bool}}}
     length(operands) == 2 ||
         reject!(Internal("src/julia/classes.jl types_equal_cache: jl_types_equal of $(length(operands)) operands, not two (julia/src/julia.h:1903)"), at)
     local members = Vector{Any}[]
@@ -301,8 +315,8 @@ formal(dev/formal/TypesEqualSplit.tla): every pair the operands can hold finds a
             push!(members, Any[Core.Typeof(something(op))])
         else
             local ms = Any[Base.uniontypes(op)...]
-            all(m -> m === DataType || Base.isType(m) && !(m.parameters[1] isa TypeVar), ms) ||
-                reject!(Unquarantined("src/julia/classes.jl types_equal_cache: an operand of jl_types_equal typed $op, whose members are no Type{X} nor DataType, which no key the cache makes at compile time splits"), at)
+            # members no key splits (an operand typed Type, or Any): the run-time port answers (nothing)
+            all(m -> m === DataType || Base.isType(m) && !(m.parameters[1] isa TypeVar), ms) || return nothing
             # a Type{X} of no unique representation holds every type equal to X, which no ref.eq tells
             # apart from another member's values: only as the operand's one member, never tested
             length(ms) == 1 || all(m -> m === DataType || Core.Compiler.isconstType(m), ms) ||
@@ -310,11 +324,8 @@ formal(dev/formal/TypesEqualSplit.tla): every pair the operands can hold finds a
             push!(members, ms)
         end
     end
-    all(ms -> DataType in ms, members) &&
-        reject!(Unquarantined("src/julia/classes.jl types_equal_cache: jl_types_equal of two operands typed $(join(operands, " and ")), each holding any DataType, which no key splits and no one value's identity answers (julia/src/subtype.c:2353, its subtyping)"), at)
-    # the identity premise: every DataType equal to X is X itself (obviously_unequal, julia/src/subtype.c:436)
-    local premise(@nospecialize(X)) = X isa DataType && X !== Core.TypeofBottom && X !== Core.TypeofBottom.super &&
-        (isconcretetype(X) && X.name !== Tuple.name || isempty(X.parameters) && X.name.wrapper === X)
+    # two operands each holding any DataType: no key splits them, the run-time port answers (nothing)
+    all(ms -> DataType in ms, members) && return nothing
     local answer(@nospecialize(X), @nospecialize(Y)) = ccall(:jl_types_equal, Cint, (Any, Any), X, Y) != 0
     local entries = Pair{Vector{Any},Bool}[]
     for m1 in members[1], m2 in members[2]
@@ -324,8 +335,8 @@ formal(dev/formal/TypesEqualSplit.tla): every pair the operands can hold finds a
         end
         local narrow = m1 === DataType ? m2 : m1
         local X = narrow.parameters[1]
-        premise(X) ||
-            reject!(Unquarantined("src/julia/classes.jl types_equal_cache: jl_types_equal of $X against a value typed DataType, where a DataType distinct from $X may be equal to it: Julia's obviously_unequal does not answer by identity (julia/src/subtype.c:436), and its subtyping is not ported"), at)
+        # no identity premise for X: the run-time port answers, by the other operand's premise or its gap (nothing)
+        types_equal_identity_premise(X) || return nothing
         # the remainder is exact only for DataTypes of no free variable: the program's type values' check
         run_time_type_test!(translator, at)
         push!(entries, Any[narrow, narrow] => answer(X, X))

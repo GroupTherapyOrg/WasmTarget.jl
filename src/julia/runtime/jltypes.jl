@@ -221,3 +221,95 @@ end
 # canonical constant and the egal arm's reference compare is Julia's answer
 @quarantine pin"julia/src/builtins.c:167 egal_types" "Julia's runtime compares two UnionAlls structurally, egal_types with their variables' names" Core.UnionAll @noinline jl_egal_unionall(@nospecialize(a::Any), @nospecialize(b::Any))::Bool =
     jl_egal_types(a::UnionAll, b::UnionAll, nothing, true)
+
+"""
+    jl_type_identity_premise(d) -> Bool
+
+Whether every DataType equal to `d` is `d` itself (src/julia/classes.jl types_equal_identity_premise): natively that
+function, Julia's answer, in a module the closed world's table of each class's answer, indexed by the class id a
+DataType value holds (src/intrinsics.jl, the type_identity_premise arm), as jl_datatype_same_name reads its TypeName's.
+"""
+@quarantine pin"julia/src/subtype.c:436 obviously_unequal" "Julia decides two types' equality by identity where obviously_unequal answers; a WasmTarget DataType value holds its class id, the closed world's table maps each class id to its premise" Core.DataType @noinline jl_type_identity_premise(d::DataType)::Bool =
+    types_equal_identity_premise(d)
+
+"""
+    jl_types_equal_gap(a, b) -> Int32
+
+The pairs of types whose equality Julia answers by its subtyping (julia/src/subtype.c:2353 jl_types_equal's
+forall_exists_equal): natively Julia's answer, in a module the fatal gap, named (src/intrinsics.jl), never a value.
+"""
+@quarantine pin"julia/src/subtype.c:2353 jl_types_equal" "Julia answers the remaining pairs' equality by subtyping, which the runtime does not port: natively Julia's answer, in a module the fatal gap" Core.Type @noinline jl_types_equal_gap(@nospecialize(a::Any), @nospecialize(b::Any))::Int32 =
+    ccall(:jl_types_equal, Cint, (Any, Any), a::Type, b::Type)
+
+# Julia's type equality (julia/src/subtype.c:2353 jl_types_equal), Base's == of two types, where no key the
+# compile-time cache splits answers (src/julia/classes.jl types_equal_cache, nothing): Julia's own first answers,
+# identity (`a == b`), and obviously_unequal's where it decides by identity, two DataTypes one of which has the
+# identity premise (types_equal_identity_premise, read by the class id the DataType value holds,
+# jl_type_identity_premise), and Union{}, a singleton, equal to itself alone. Any other pair needs Julia's
+# subtyping (its forall_exists_equal), the fatal gap, named (jl_types_equal_gap). The answer is the declared Cint.
+# In a closed world where a statement of the program is the foreign call jl_types_equal (src/julia/subset.jl
+# reached_runtime_ports), which the types_equal arm calls where no key splits the operands
+@quarantine pin"julia/src/subtype.c:2353 jl_types_equal" "Julia's runtime answers two types' equality by identity first and by obviously_unequal where it decides, the rest by subtyping, which WasmGC has no runtime for" Core.DataType @noinline function jl_types_equal(@nospecialize(a::Any), @nospecialize(b::Any))::Int32
+    local ta = typeof(a)
+    local tb = typeof(b)
+    if ta === DataType && tb === DataType
+        local da = Runtime.unsafe_cast(DataType, a)
+        local db = Runtime.unsafe_cast(DataType, b)
+        da === db && return Int32(1)
+        (jl_type_identity_premise(da) || jl_type_identity_premise(db)) && return Int32(0)
+    elseif ta === Core.TypeofBottom || tb === Core.TypeofBottom
+        # Union{}, one object: equal to itself alone, and unequal to a DataType of the premise (obviously_unequal's
+        # `b == jl_bottom_type` against a DataType, subtype.c:451)
+        ta === tb && return Int32(1)
+        ta === DataType && jl_type_identity_premise(Runtime.unsafe_cast(DataType, a)) && return Int32(0)
+        tb === DataType && jl_type_identity_premise(Runtime.unsafe_cast(DataType, b)) && return Int32(0)
+    end
+    return jl_types_equal_gap(a, b)
+end
+
+"""
+    jl_type_hash(v) -> UInt
+
+Julia's hash of a type (julia/src/jltypes.c:1779 jl_type_hash, type_hash at :1742 with `failed` 0), Base's
+`_jl_type_hash` (julia/base/hashing.jl:32), the foreign call jl_type_hash: a UnionAll by its body unwrapped; a
+DataType its stored hash (`dt->hash`), and where that is 0 the 0 type_hash returns as it sets `failed`; a type
+variable its upper bound's; a Union the 0 type_hash returns as it sets `failed`. The DataType's stored hash is read
+from the closed world's table by the class id the DataType value holds (jl_datatype_hash_of), the compiling process's
+hash (src/julia/runtime/hashing.jl datatype_hash's reading). Its last arm, jl_object_id of any other value, which
+Union{} alone reaches, is the gap, named (jl_type_hash_gap): Union{}'s object id is a type value's, which the runtime
+does not port (src/julia/runtime/hashing.jl jl_object_id). In a closed world where
+a statement of the program is the foreign call jl_type_hash (src/julia/subset.jl reached_runtime_ports), which the
+code generator lowers to a call of this port (src/intrinsics.jl, the type_hash arm).
+"""
+@quarantine pin"julia/src/jltypes.c:1779 jl_type_hash" "Julia's runtime hashes a type by its DataType's stored hash, a Union as failed, any other value by its object id" Core.DataType @noinline function jl_type_hash(@nospecialize(v::Any))::UInt
+    local uw = v
+    while typeof(uw) === UnionAll
+        uw = Runtime.unsafe_cast(UnionAll, uw).body
+    end
+    local tu = typeof(uw)
+    tu === DataType && return UInt(jl_datatype_hash_of(Runtime.unsafe_cast(DataType, uw)))
+    tu === TypeVar && return jl_type_hash(Runtime.unsafe_cast(TypeVar, uw).ub)
+    tu === Union && return UInt(0)
+    # Union{}, jl_type_hash's last arm, its jl_object_id: the gap, named (jl_type_hash_gap)
+    return jl_type_hash_gap(v)
+end
+
+"""
+    jl_datatype_hash_of(d) -> UInt32
+
+A DataType's stored hash (julia/src/julia.h jl_datatype_t's `hash`): in a module the closed world's table of each
+class's hash, the compiling process's (src/julia/runtime/hashing.jl datatype_hash), indexed by the class id a
+DataType value holds (src/intrinsics.jl, the datatype_hash_of arm); natively the field itself.
+"""
+@quarantine pin"julia/src/jltypes.c:1742 type_hash" "Julia reads a DataType's stored hash; a WasmTarget DataType value holds its class id, the closed world's table maps each class id to its hash" Core.DataType @noinline jl_datatype_hash_of(d::DataType)::UInt32 =
+    reinterpret(UInt32, getfield(d, :hash))
+
+"""
+    jl_type_hash_gap(v) -> UInt
+
+jl_type_hash's last arm (julia/src/jltypes.c:1776, jl_object_id of the value), which Union{} alone reaches: a type
+value's object id, which the runtime does not port (src/julia/runtime/hashing.jl jl_object_id); natively Julia's
+answer, in a module the fatal gap, named.
+"""
+@quarantine pin"julia/src/jltypes.c:1779 jl_type_hash" "Julia hashes any other value by its object id, a type value's the runtime does not port: natively Julia's answer, in a module the fatal gap" Core.Type @noinline jl_type_hash_gap(@nospecialize(v::Any))::UInt =
+    ccall(:jl_type_hash, UInt, (Any,), v::Type)

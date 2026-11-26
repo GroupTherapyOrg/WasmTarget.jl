@@ -632,6 +632,7 @@ end
     libjulia === :jl_genericmemory_owner && return generate_static_intrinsic(self, Val(:genericmemory_owner), node)
     libjulia === :jl_types_equal && return generate_static_intrinsic(self, Val(:types_equal), node)
     libjulia === :jl_type_unionall && return generate_static_intrinsic(self, Val(:type_unionall), node)
+    libjulia === :jl_type_hash && return generate_static_intrinsic(self, Val(:type_hash), node)
     libjulia === :jl_alloc_genericmemory && return generate_static_intrinsic(self, Val(:alloc_genericmemory), node)
     libjulia === :jl_get_tls_world_age || return nothing
     local at = "$(julia_text(self.code_gen.enclosing_member))"
@@ -667,6 +668,27 @@ end
     local target = nir_runtime_member(t.component, jl_type_unionall, at)
     local inputs = signature_for_direct_call(t, target).inputs
     for (op, w) in zip(ops, inputs)
+        translate_expression(self.code_gen, op, w)
+    end
+    return output_or_void(t, call(self.code_gen, target))
+end
+
+# jl_type_hash, Base's hash of a type (julia/base/hashing.jl:32 _jl_type_hash, `ccall(:jl_type_hash, UInt, (Any,),
+# T)`), which Julia's codegen emits as a call of its runtime's function (julia/src/ccall.cpp emit_ccall): here the call
+# of the runtime's port (src/julia/runtime/jltypes.jl jl_type_hash, in the closed world where a statement reaches it,
+# src/julia/subset.jl reached_runtime_ports), its operand the declaration's one. A declaration other than Base's
+# (UInt of one Any argument, C's convention) rejects, located
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:type_hash}, node::NirForeignCall)::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local at = "$(julia_text(self.code_gen.enclosing_member))"
+    local rt, argtypes, cc = node.args[2], node.args[3], node.args[5]
+    rt isa NirConst && rt.c.val === UInt && argtypes isa NirConst && argtypes.c.val == Core.svec(Any) ||
+        reject!(Internal("julia/base/hashing.jl:32: jl_type_hash declared other than UInt of one Any argument"), at)
+    local conv = cc isa NirConst ? (cc.c.val isa Tuple ? cc.c.val[1] : cc.c.val) : nothing
+    conv === :ccall || conv === :cdecl ||
+        reject!(Internal("julia/base/hashing.jl:32: jl_type_hash called by the convention $(repr(conv)), not C's"), at)
+    local target = nir_runtime_member(t.component, jl_type_hash, at)
+    for (op, w) in zip(nir_foreign_operands(node), signature_for_direct_call(t, target).inputs)
         translate_expression(self.code_gen, op, w)
     end
     return output_or_void(t, call(self.code_gen, target))
@@ -744,7 +766,16 @@ end
                          a isa NirGlobal && nir_binding_is_constant(a.binding) ? Some(nir_binding_value(a.binding, at).c.val) :
                          dart_type_of(self, a) for a in args]
     local cache = types_equal_cache(t, operands, at)
-    return generate_static_intrinsic(self, Val(:bool_cases), args, operands, cache, at)
+    cache === nothing || return generate_static_intrinsic(self, Val(:bool_cases), args, operands, cache, at)
+    # no key splits the operands: the runtime's port (src/julia/runtime/jltypes.jl jl_types_equal, in the closed world
+    # where a statement reaches it, src/julia/subset.jl reached_runtime_ports), its
+    # premise among DataTypes of no free variable, the program's type values' check (run_time_type_test!)
+    run_time_type_test!(t, at)
+    local target = nir_runtime_member(t.component, jl_types_equal, at)
+    for (a, w) in zip(args, signature_for_direct_call(t, target).inputs)
+        translate_expression(self.code_gen, a, w)
+    end
+    return output_or_void(t, call(self.code_gen, target))
 end
 
 # jl_alloc_genericmemory (julia/src/genericmemory.c:75), a foreign call of libjulia's exported allocator: a
@@ -825,6 +856,14 @@ end
             return generate_static_intrinsic(self, Val(:new_unionall), node.args[2:end])
         target.def.name === :jl_datatype_same_name && target.def in methods(jl_datatype_same_name) &&
             return generate_static_intrinsic(self, Val(:datatype_same_name), node.args[2:end])
+        target.def.name === :jl_type_identity_premise && target.def in methods(jl_type_identity_premise) &&
+            return generate_static_intrinsic(self, Val(:type_identity_premise), node.args[2:end])
+        target.def.name === :jl_types_equal_gap && target.def in methods(jl_types_equal_gap) &&
+            return generate_static_intrinsic(self, Val(:types_equal_gap))
+        target.def.name === :jl_datatype_hash_of && target.def in methods(jl_datatype_hash_of) &&
+            return generate_static_intrinsic(self, Val(:datatype_hash_of), node.args[2:end])
+        target.def.name === :jl_type_hash_gap && target.def in methods(jl_type_hash_gap) &&
+            return generate_static_intrinsic(self, Val(:type_hash_gap))
         target.def.name === :image_object_id && target.def in methods(image_object_id) &&
             return generate_static_intrinsic(self, Val(:image_object_id), node.args[2:end])
         target.def.name === :jl_typetagis && target.def in methods(jl_typetagis) &&
@@ -1429,6 +1468,71 @@ end
     WasmBuilder.struct_new(b, info.struct_)
     record_class_allocation(t.functions[], class_id(info))
     return info.non_nullable_type
+end
+
+# whether every DataType equal to a DataType value is that value itself (src/julia/runtime/jltypes.jl
+# jl_type_identity_premise, src/julia/classes.jl types_equal_identity_premise): the closed world's table of each
+# class's answer in class id order (an immutable i32 array constant, made as RuntimeTypeInformation makes its tables),
+# read at the operand's class id (_InterfaceType.classId)
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:type_identity_premise}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local b = self.code_gen.b[]
+    local at = "$(julia_text(self.code_gen.enclosing_member)): jl_type_identity_premise"
+    length(args) == 1 || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: jl_type_identity_premise takes 1 operand, not $(length(args))"), at)
+    local numbering = t.class_id_numbering[]
+    local answer = fill(0, numbering.max_class_id + 1)
+    for (cls, id) in numbering.class_ids
+        answer[id + 1] = Int(types_equal_identity_premise(cls))
+    end
+    local constants = t.constants[]
+    local table = make_array_of(constants, WasmI32, NirConst[make_wasm_i32(constants, k) for k in answer])
+    local array_type = WasmBuilder.IR.RefType_def(array_type_for_dart_type(t, WasmI32; mutable_ = true); nullable = false)
+    instantiate_constant(constants, b, table, array_type)
+    generate_static_intrinsic(self, Val(:interface_type_class_id), args)
+    WasmBuilder.array_get(b, array_type.heap_type)
+    return WasmBuilder.IR.NumType_i32
+end
+
+# a DataType's stored hash (src/julia/runtime/jltypes.jl jl_datatype_hash_of, julia.h jl_datatype_t's `hash`): the
+# closed world's table of each class's hash in class id order, the compiling process's (src/julia/runtime/hashing.jl
+# datatype_hash), an immutable i32 array constant read at the operand's class id (_InterfaceType.classId), its bits
+# the UInt32's
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:datatype_hash_of}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local b = self.code_gen.b[]
+    local at = "$(julia_text(self.code_gen.enclosing_member)): jl_datatype_hash_of"
+    length(args) == 1 || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: jl_datatype_hash_of takes 1 operand, not $(length(args))"), at)
+    local numbering = t.class_id_numbering[]
+    local hashes = fill(0, numbering.max_class_id + 1)
+    for (cls, id) in numbering.class_ids
+        hashes[id + 1] = Int(reinterpret(Int32, UInt32(datatype_hash(cls))))
+    end
+    local constants = t.constants[]
+    local table = make_array_of(constants, WasmI32, NirConst[make_wasm_i32(constants, k) for k in hashes])
+    local array_type = WasmBuilder.IR.RefType_def(array_type_for_dart_type(t, WasmI32; mutable_ = true); nullable = false)
+    instantiate_constant(constants, b, table, array_type)
+    generate_static_intrinsic(self, Val(:interface_type_class_id), args)
+    WasmBuilder.array_get(b, array_type.heap_type)
+    return WasmBuilder.IR.NumType_i32
+end
+
+# jl_type_hash's last arm, a type value's object id (src/julia/runtime/jltypes.jl jl_type_hash_gap,
+# julia/src/jltypes.c:1776), which the runtime does not port: the deferred gap, the fatal arm, never a value
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:type_hash_gap})::WasmBuilder.IR.ValueType
+    generate_static_intrinsic(self, Val(:fatal),
+        Unquarantined("src/julia/runtime/jltypes.jl jl_type_hash_gap: jl_type_hash of Union{}, its jl_object_id, a type value's object id the runtime does not port (julia/src/jltypes.c:1776)"),
+        "$(julia_text(self.code_gen.enclosing_member)) (at run time)")
+    return WasmBuilder.IR.NumType_i64
+end
+
+# the pairs of types whose equality Julia answers by subtyping (src/julia/runtime/jltypes.jl jl_types_equal_gap,
+# julia/src/subtype.c:2353 jl_types_equal), which the runtime does not port: the deferred gap, the fatal arm,
+# never a value
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:types_equal_gap})::WasmBuilder.IR.ValueType
+    generate_static_intrinsic(self, Val(:fatal),
+        Unquarantined("src/julia/runtime/jltypes.jl jl_types_equal_gap: the equality of two types neither identical nor decided by obviously_unequal's identity premise, which Julia answers by subtyping (julia/src/subtype.c:2353 jl_types_equal)"),
+        "$(julia_text(self.code_gen.enclosing_member)) (at run time)")
+    return WasmBuilder.IR.NumType_i32
 end
 
 # whether two DataTypes share their TypeName (src/julia/runtime/jltypes.jl jl_datatype_same_name,
