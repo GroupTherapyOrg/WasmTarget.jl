@@ -21,8 +21,10 @@ git config core.sparseCheckout true
 # unit it names and no tree's list can take another's unit away; a tree whose script still writes a per-unit list
 # (before 9743c109) shrinks it only until the next landing check runs this one (dev/check.sh, 110c2936). The units of
 # JULIA_FILES are checked against the checkout by L213, never fetched one by one
-# deps/utf8proc.version, the derived pin's commit (below), is read from the same checkout
-{ cat .git/info/sparse-checkout 2>/dev/null; printf 'src/\nbase/\nCompiler/src/\ndeps/utf8proc.version\n'; } | sort -u > .git/info/sparse-checkout.new
+# deps/utf8proc.version, the derived pin's commit (below), is read from the same checkout. A fresh directory has no list
+# yet: it is read only where it exists (a `cat` of none failed the pipe under pipefail, and set -e ended the first run
+# with no word and nothing fetched), and a list that exists and cannot be read still fails, loud
+{ if [ -e .git/info/sparse-checkout ]; then cat .git/info/sparse-checkout; fi; printf 'src/\nbase/\nCompiler/src/\ndeps/utf8proc.version\n'; } | sort -u > .git/info/sparse-checkout.new
 mv .git/info/sparse-checkout.new .git/info/sparse-checkout
 # a lost connection to github.com is retried: three tries, 10 s then 30 s apart, loud on the last
 fetch_pin() {   # <repository> <commit>, in the current directory's checkout
