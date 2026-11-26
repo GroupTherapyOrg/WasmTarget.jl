@@ -1024,21 +1024,25 @@ end
 """
     _symbol_instance_fields(c, at) -> Vector{ClassField}
 
-The fields of a `Symbol`, whose data Julia holds outside its fields: one field, `_name`, of type
-`String`, the symbol's name, immutable. Julia's layout (julia.h `jl_sym_t`, `jl_symbol_name`): a
-symbol is its interned name, which `String(::Symbol)` and printing read; dart's class
-(sdk/lib/internal/symbol.dart:16 Symbol, its one field `final String _name` :18): the object header
-and then the name, as constants.dart's visitSymbolConstant builds one. A String's representation is
-the ruling's (`_string_instance_fields`), so a symbol's name is one. The field is not one of Julia's
-(a Symbol has none), so it takes index 0, like a String's `_data`.
+The fields of a `Symbol`, whose data Julia holds outside its fields, in Julia's layout (julia.h:147
+`jl_sym_t`): `left` and `right`, the symbol table's two children (`_Atomic(jl_sym_t*)`, a symbol or
+none, written once by `_jl_symbol` when a new symbol hangs below), `hash`, the precomputed hash
+`mk_symbol` stores (julia/src/symbol.c:45), immutable, and then `_name`, the name (`jl_symbol_name`),
+a String, immutable. dart's class (sdk/lib/internal/symbol.dart:16 Symbol, its one field
+`final String _name` :18) holds the name as a String, as WasmTarget's does; the tree and the hash are
+Julia's. A String's representation is the ruling's (`_string_instance_fields`), so a symbol's name is
+one. No field is one of Julia's fields (a Symbol has none), so each takes index 0, like a String's
+`_data`.
 
 precedent(dart: dart:_internal's Symbol class, a name String held by an object; Julia's jl_sym_t, a
-name held by the interned symbol). Julia's differs: its symbols are interned and compared by identity,
-which an object per constant symbol keeps (each symbol constant one instance).
+name held by the interned symbol). Julia's differs: its symbols are interned in one table and compared
+by identity; every Symbol of a module, a constant's too (src/constants.jl visit_symbol_constant), is
+made by the table's mk_symbol (src/julia/runtime/rtutils.jl _jl_symbol), so one name is one object.
 """
-@quarantine "a Symbol's data lies outside its fields (Julia's jl_sym_t, jl_symbol_name), its name one String as dart's Symbol._name" Core.Symbol function _symbol_instance_fields(c::DataType, at::String)::Vector{ClassField}
+@quarantine pin"julia/src/julia.h:147 jl_sym_t" "a Symbol's data lies outside its fields (Julia's jl_sym_t: left, right, hash, then the name at jl_symbol_name), its name one String as dart's Symbol._name" Core.Symbol function _symbol_instance_fields(c::DataType, at::String)::Vector{ClassField}
     c === Symbol || reject!(Internal("src/julia/classes.jl _symbol_instance_fields: $c, no Symbol"), at)
-    return ClassField[ClassField(c, 0, "_name", String, false)]
+    return ClassField[ClassField(c, 0, "left", Union{Nothing,Symbol}, true), ClassField(c, 0, "right", Union{Nothing,Symbol}, true),
+                      ClassField(c, 0, "hash", UInt64, false), ClassField(c, 0, "_name", String, false)]
 end
 
 """

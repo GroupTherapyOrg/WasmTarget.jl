@@ -442,7 +442,7 @@ end
     jl_object_id(x) -> UInt64
 
 Julia's object id of `x` (julia/src/builtins.c:489 jl_object_id_, :459 jl_object_id__cold): a
-Symbol's stored hash (hash_symbol of its name); a String's memhash of its bytes under the seed
+Symbol's stored hash (wasm_symbol_hash, the one mk_symbol stored); a String's memhash of its bytes under the seed
 0xedc3b677; an object whose id is its identity (jl_object_id_identity_arm) its identity's
 (jl_object_id_identity: the id an image constant keeps, else int64hash of its serial); an immutable
 value's immut_id_ from its type's hash, the compiling process's folded in (datatype_hash: native
@@ -451,7 +451,7 @@ of a module made at run time). A type value's id (its DataType's, TypeName's or 
 Module's and a SimpleVector's are Base's ccall, a located rejection where it is reached.
 """
 @quarantine "julia/src/builtins.c:489 jl_object_id_ answers by the value's type tag: a Symbol's hash, a String's memhash, an immutable's immut_id_" Core.Symbol function jl_object_id(x::T)::UInt64 where {T}
-    T === Symbol && return hash_symbol(String(x))
+    T === Symbol && return wasm_symbol_hash(x)
     T === String && return memhash_seed(x, 0xedc3b677)
     jl_object_id_identity_arm(T) && return jl_object_id_identity(x)
     # a type value's id is its own hash, a Module's and a SimpleVector's their own: Base's ccall

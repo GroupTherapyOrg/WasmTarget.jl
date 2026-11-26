@@ -65,3 +65,19 @@ end
     wasm_string_copy!(out, Int(offs) - 1, wasm_symbol_name(s), 0, n)
     return n
 end
+
+# Base's String of a SubString{String} (julia/base/strings/substring.jl:75): unsafe_string of pointer(parent,
+# s.offset+1) and its ncodeunits, jl_pchar_to_string's copy of those bytes into a fresh String
+# (julia/src/array.c:307, jl_alloc_string then memcpy); WasmGC copies the parent's data array from the offset
+# into the fresh String's (array.copy), as getindex(::String, ::UnitRange) does (src/patch/string.jl)
+@quarantine "julia/base/strings/substring.jl:75 String of a SubString{String} copies its bytes by unsafe_string from pointer(parent, offset+1); WasmGC copies the parent's data array from the offset (array.copy)" Base.String @consistent_overlay METHOD_TABLE function Base.String(s::SubString{String})
+    local n = s.ncodeunits
+    local out = Base._string_n(n)
+    wasm_string_copy!(out, 0, s.string, s.offset, n)
+    return out
+end
+
+# Base's Symbol of a SubString{String} (julia/base/strings/substring.jl:195): jl_symbol_n of its pointer and
+# sizeof; WasmGC has no pointer, so the port of jl_symbol_n (src/julia/runtime/rtutils.jl) takes the String of
+# its bytes, its copy as String(s) makes it
+@quarantine "julia/base/strings/substring.jl:195 Symbol of a SubString{String} is jl_symbol_n of its pointer and size; WasmGC has no pointer, so the port of jl_symbol_n reads a String of its bytes" Core.Symbol @consistent_overlay METHOD_TABLE Core.Symbol(s::SubString{String}) = jl_symbol_n(String(s))

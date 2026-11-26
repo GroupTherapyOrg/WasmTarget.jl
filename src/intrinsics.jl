@@ -692,6 +692,8 @@ end
         local target = nir_invoke_target(node)
         local string_op = generate_static_intrinsic(Val(:string_data_op), target)
         string_op === nothing || return generate_static_intrinsic(self, Val(:string_data), string_op, node.args[2:end])
+        local symbol_op = generate_static_intrinsic(Val(:symbol_data_op), target)
+        symbol_op === nothing || return generate_static_intrinsic(self, Val(:symbol_data), symbol_op, node.args[2:end])
         target.def in methods(wasm_egal) && return generate_static_intrinsic(self, Val(:egal), node.args[2:end])
         local array_op = generate_static_intrinsic(Val(:wasm_array_op), target)
         array_op === nothing || return generate_static_intrinsic(self, Val(:wasm_array), array_op, target, node.args[2:end])
@@ -848,6 +850,75 @@ end
 # I8ArrayExt.write (:1372, array.set), the WasmArray constructor (:1959, array.new_default, here inside the String's struct, its header
 # first) and WasmArrayExt.copy (:1254, array.copy). An Int offset or length is wrapped to the i32 a
 # wasm array takes, as dart wraps its int.
+# A Symbol's symbol-table operations (src/julia/wasm_array.jl): mk_symbol's allocation and the reads and writes of
+# julia.h:147 jl_sym_t's `hash`, `left` and `right`, over the Symbol class's fields (src/julia/classes.jl
+# _symbol_instance_fields), each a struct.new, struct.get or struct.set of the class, as dart's intrinsifier
+# emits an InstanceGet or InstanceSet of a field (intrinsics.dart:1194, the getID and identity-hash arms)
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:symbol_data_op}, target::Core.MethodInstance)::Union{Symbol,Nothing} =
+    target.def in methods(wasm_symbol_new) ? :new : target.def in methods(wasm_symbol_hash) ? :hash :
+    target.def in methods(wasm_symbol_child) ? :child : target.def in methods(wasm_symbol_set_child!) ? :set_child : nothing
+
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:symbol_data}, op::Symbol, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local at = "$(julia_text(code_gen.enclosing_member)): a Symbol's symbol-table field"
+    local info = get(t.class_info, Symbol, nothing)
+    info === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a Symbol's field where Symbol has no class info"), at)
+    local fields = Dict{String,ClassField}(f.name => f for f in class_instance_fields(Symbol, at))
+    sort(collect(keys(fields))) == ["_name", "hash", "left", "right"] ||
+        reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: Symbol's fields $(sort(collect(keys(fields)))), not jl_sym_t's left, right, hash and its name"), at)
+    local storage(f::ClassField) = WasmBuilder.unpacked(info.struct_.fields[t.field_index[f] + 1].type)
+    local child_type = storage(fields["left"])
+    if op === :new
+        generate_static_intrinsic(self, Val(:new_struct), info, fields, Dict{String,Function}(
+            "left" => () -> WasmBuilder.ref_null(b, child_type.heap_type),
+            "right" => () -> WasmBuilder.ref_null(b, child_type.heap_type),
+            "hash" => () -> translate_expression(code_gen, args[2], storage(fields["hash"])),
+            "_name" => () -> translate_expression(code_gen, args[1], storage(fields["_name"]))))
+        return info.non_nullable_type
+    elseif op === :hash
+        translate_expression(code_gen, args[1], info.non_nullable_type)
+        WasmBuilder.struct_get(b, info.struct_, t.field_index[fields["hash"]])
+        return storage(fields["hash"])
+    elseif op === :child
+        # the right child where `right`, else the left
+        local s = add_local(code_gen, info.non_nullable_type)
+        translate_expression(code_gen, args[1], info.non_nullable_type)
+        WasmBuilder.local_set(b, s)
+        translate_expression(code_gen, args[2], WasmBuilder.IR.NumType_i32)
+        WasmBuilder.if_(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[child_type])
+        WasmBuilder.local_get(b, s)
+        WasmBuilder.struct_get(b, info.struct_, t.field_index[fields["right"]])
+        WasmBuilder.else_(b)
+        WasmBuilder.local_get(b, s)
+        WasmBuilder.struct_get(b, info.struct_, t.field_index[fields["left"]])
+        WasmBuilder.var"end"(b)
+        return child_type
+    elseif op === :set_child
+        local s = add_local(code_gen, info.non_nullable_type)
+        local v = add_local(code_gen, child_type)
+        translate_expression(code_gen, args[1], info.non_nullable_type)
+        WasmBuilder.local_set(b, s)
+        translate_expression(code_gen, args[3], child_type)
+        WasmBuilder.local_set(b, v)
+        translate_expression(code_gen, args[2], WasmBuilder.IR.NumType_i32)
+        WasmBuilder.if_(b)
+        WasmBuilder.local_get(b, s)
+        WasmBuilder.local_get(b, v)
+        WasmBuilder.struct_set(b, info.struct_, t.field_index[fields["right"]])
+        WasmBuilder.else_(b)
+        WasmBuilder.local_get(b, s)
+        WasmBuilder.local_get(b, v)
+        WasmBuilder.struct_set(b, info.struct_, t.field_index[fields["left"]])
+        WasmBuilder.var"end"(b)
+        # dart's void intrinsics leave the null of the top type, Julia's nothing
+        WasmBuilder.ref_null(b, WasmBuilder.IR.HeapType_none)
+        return t.top_type[]
+    end
+    reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: no symbol-data operation $op"), at)
+end
+
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" generate_static_intrinsic(::Val{:string_data_op}, target::Core.MethodInstance)::Union{Symbol,Nothing} =
     target.def in methods(wasm_string_length) ? :length : target.def in methods(wasm_string_codeunit) ? :codeunit :
     target.def in methods(wasm_string_write!) ? :write : target.def in methods(wasm_string_alloc) ? :alloc : target.def in methods(wasm_string_copy!) ? :copy :
@@ -912,7 +983,7 @@ end
             reject!(Unquarantined("src/symbols.jl get_mangled_symbol_name: a Symbol's name read under minify, where a symbol constant's name is its ordinal and Julia's String(::Symbol) is its name"), at)
         local yinfo = get(t.class_info, Symbol, nothing)
         yinfo === nothing && reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a Symbol's name where Symbol has no class info"), at)
-        local yname = only(class_instance_fields(Symbol, at))
+        local yname = only(f for f in class_instance_fields(Symbol, at) if f.name == "_name")
         yname.name == "_name" && yname.type === String ||
             reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: Symbol's field $(yname.name)::$(yname.type), not its name String"), at)
         translate_expression(code_gen, args[1], yinfo.non_nullable_type)

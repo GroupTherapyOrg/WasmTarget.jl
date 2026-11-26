@@ -389,6 +389,52 @@ foreigncall no host supplies. Under minify a symbol constant's `_name` is its or
     GC.@preserve s unsafe_string(Base.unsafe_convert(Ptr{UInt8}, s))
 
 """
+    wasm_symbol_new(name, hash) -> Symbol
+
+A new Symbol of `name` and `hash`, no children: the object julia/src/symbol.c:35 mk_symbol allocates,
+its `left` and `right` NULL (:42-43), its precomputed `hash` (:44) and its name (:45-46), over
+WasmTarget's layout one `struct.new` of the Symbol class (src/julia/classes.jl _symbol_instance_fields),
+`name` the symbol's own String (mk_symbol's caller passes a copy, as Julia's memcpy copies the bytes).
+The code generator lowers the call (src/intrinsics.jl, its symbol-data arm); natively no Symbol is made
+but Julia's own symbol table's, so the body raises.
+"""
+@quarantine pin"julia/src/symbol.c:35 mk_symbol" "Julia's mk_symbol allocates a jl_sym_t of the name, no children and its hash; WasmTarget's is a struct.new of the Symbol class's fields" Core.Symbol @noinline wasm_symbol_new(name::String, hash::UInt64)::Symbol =
+    _wasm_only(Symbol)
+
+"""
+    wasm_symbol_hash(s) -> UInt64
+
+`s`'s precomputed hash, the `hash` field of julia.h:147 jl_sym_t that mk_symbol stores
+(julia/src/symbol.c:44, hash_symbol of its name), over WasmTarget's layout a `struct.get` of the
+Symbol class's `hash` (src/intrinsics.jl, its symbol-data arm). Natively the value mk_symbol stored,
+hash_symbol of the name (src/julia/runtime/hashing.jl), which is Julia's own `objectid` of the symbol.
+"""
+@quarantine pin"julia/src/julia.h:147 jl_sym_t" "Julia reads a Symbol's precomputed hash from its jl_sym_t (julia/src/builtins.c:491 jl_object_id_, julia/src/symbol.c:57 symtab_lookup); WasmTarget's is a struct.get of the Symbol class's hash field" Core.Symbol @noinline wasm_symbol_hash(s::Symbol)::UInt64 =
+    hash_symbol(String(s))
+
+"""
+    wasm_symbol_child(s, right) -> Union{Nothing,Symbol}
+
+The symbol table's child of `s`, `right` or `left` as `right` says (julia.h:147 jl_sym_t, read by
+julia/src/symbol.c:51 symtab_lookup), `nothing` for NULL, over WasmTarget's layout a `struct.get` of the
+Symbol class's `right` or `left` (src/intrinsics.jl, its symbol-data arm, which tests `right`).
+Natively the children are Julia's own table's, which WasmTarget never reads, so the body raises.
+"""
+@quarantine pin"julia/src/julia.h:147 jl_sym_t" "Julia's symbol table reads a node's left or right child (julia/src/symbol.c:51 symtab_lookup); WasmTarget's is a struct.get of the Symbol class's field" Core.Symbol @noinline wasm_symbol_child(s::Symbol, right::Bool)::Union{Nothing,Symbol} =
+    _wasm_only(Union{Nothing,Symbol})
+
+"""
+    wasm_symbol_set_child!(s, right, v) -> Nothing
+
+Hangs `v` below `s` in the symbol table, as `right` or `left` child: the store through the slot
+julia/src/symbol.c:51 symtab_lookup found (`jl_atomic_store_release(slot, node)`, :96), over WasmTarget's
+layout a `struct.set` of the Symbol class's `right` or `left` (src/intrinsics.jl, its symbol-data arm,
+which tests `right`). Natively the body raises.
+"""
+@quarantine pin"julia/src/symbol.c:78 _jl_symbol" "Julia's _jl_symbol stores a new symbol through the slot symtab_lookup found, a node's left or right child; WasmTarget's is a struct.set of the Symbol class's field" Core.Symbol @noinline wasm_symbol_set_child!(s::Symbol, right::Bool, v::Symbol)::Nothing =
+    (_wasm_only(Int); nothing)
+
+"""
     wasm_memory_string(m, n) -> String
 
 A String of the first `n` bytes of `m` (`0 < n <= length(m)`): Julia's jl_genericmemory_to_string

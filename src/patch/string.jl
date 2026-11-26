@@ -20,6 +20,13 @@ end
 
 @quarantine "julia/base/strings/string.jl:118 String of a Symbol copies the bytes at its jl_symbol_name pointer; WasmGC reads the Symbol's name, dart's Symbol.getName; Base's @assume_effects :total is not carried over, so no call of it folds" Base.String @consistent_overlay METHOD_TABLE Base.String(s::Symbol) = wasm_symbol_name(s)
 
+# Core's Symbol of a String (julia/base/boot.jl:687): _Symbol of the String's jl_string_ptr and its size,
+# jl_symbol_n's (julia/src/symbol.c:113); WasmGC has no pointer, so the port of jl_symbol_n takes the String
+# whose data array holds the bytes (src/julia/runtime/rtutils.jl jl_symbol_n), interning it in the module's
+# symbol table, which every symbol constant is interned in too, so the Symbol is the constant of its name.
+# Base's @_foldable_meta is not carried over: no claim, so no call of it folds on one
+@quarantine "julia/base/boot.jl:687 Symbol of a String is jl_symbol_n of its jl_string_ptr and size; WasmGC has no pointer, so the port of jl_symbol_n reads the String's data array" Core.Symbol @consistent_overlay METHOD_TABLE Core.Symbol(s::String) = jl_symbol_n(s)
+
 @quarantine "julia/base/strings/string.jl:120 unsafe_wrap of a String as a byte Memory is a jl_string_to_genericmemory foreigncall; WasmGC shares the String's data array" Base.unsafe_wrap @consistent_overlay METHOD_TABLE Base.unsafe_wrap(::Type{Memory{UInt8}}, s::String) = wasm_string_memory(s)
 
 # Base's own body, its foreigncall the runtime's operation: an empty Memory is the empty String

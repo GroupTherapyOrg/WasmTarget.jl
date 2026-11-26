@@ -15,7 +15,6 @@ julia/classes.jl _memoryref_instance_fields
 julia/classes.jl _module_instance_fields
 julia/classes.jl _string_instance_fields
 julia/classes.jl _svec_instance_fields
-julia/classes.jl _symbol_instance_fields
 julia/classes.jl class_implemented_types
 julia/classes.jl class_is_abstract
 julia/classes.jl class_superclass

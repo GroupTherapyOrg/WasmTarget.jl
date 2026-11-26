@@ -253,7 +253,94 @@ end
     return reinterpret(Int128, (res ⊻ reinterpret(UInt128, s)) + reinterpret(UInt128, -s))   # negate if s == -1
 end
 
+# _jl_symbol (julia/src/symbol.c:78), the Symbol of a name holding no NUL: the name too long for a
+# symbol raises ArgumentError (:83, MAX_SYM_LEN :21, jl_sym_t's three words and the tag ahead of the name
+# and its NUL); else the symbol table's node of the name where it is one (symtab_lookup), or a new one
+# (mk_symbol) stored through the slot the lookup found (:96), the table's root or a node's child. One
+# thread runs a module, so the lock and the second lookup under it (:90-93) have nothing to wait for.
+# The code generator calls it for every symbol constant, as Julia's image loader interns each symbol of
+# the image by its name (julia/src/staticdata.c:2044 jl_read_symbols, :2055 `_jl_symbol(str, len)`), so
+# a symbol a program makes at run time (jl_symbol_n) is the constant of its name, one object
+@quarantine pin"julia/src/symbol.c:78 _jl_symbol" "Julia's _jl_symbol answers the symbol table's node of a name, made and stored where it is none; Julia's image loader interns every symbol of the image by its name (julia/src/staticdata.c:2044 jl_read_symbols)" Core.Symbol @noinline function _jl_symbol(name::String)::Symbol
+    local len = ncodeunits(name)
+    len > typemax(Int) - 8 - 3 * 8 - 1 &&
+        Runtime.Error__throw_with_current_stack_trace(ArgumentError("Symbol name too long"))
+    local node, parent, right = symtab_lookup(name)
+    if node === nothing
+        node = mk_symbol(name)
+        parent === nothing ? (jl_symtab[] = node) : wasm_symbol_set_child!(parent, right, node)
+    end
+    return node
+end
+
 # ---- end of Julia's runtime ----
+
+# Julia's symbol table (julia/src/symbol.c:19 `static _Atomic(jl_sym_t*) symtab`): the root of the
+# binary tree of every symbol, ordered by hash and then by name (symtab_lookup), none before the first
+# symbol is made. A final binding holding a mutable object, as object_patch's counter
+# (src/runtime/common/object_patch.jl Object__hash_code_rnd); natively never written: Julia's own table
+# is the one every native symbol lives in, and the bodies that walk this one raise natively
+@quarantine pin"julia/src/symbol.c:51 symtab_lookup" "Julia's symbol table (julia/src/symbol.c:19 symtab), which symtab_lookup walks, is one static root of a binary tree of jl_sym_t nodes; WasmTarget's is a final binding holding a Ref to the root Symbol" Core.Symbol const jl_symtab = Ref{Union{Nothing,Symbol}}(nothing)
+
+# strncmp(str, jl_symbol_name(node), len) (julia/src/symbol.c:60), C's: the difference of the first
+# differing bytes as unsigned chars, a name shorter than `len` ending at its NUL (the byte 0), else 0;
+# `str` holds no NUL (jl_symbol_n's check)
+@quarantine pin"julia/src/symbol.c:51 symtab_lookup" "Julia's symtab_lookup compares a name with a node's by strncmp up to the name's length, the node's NUL-terminated" Base.ncodeunits function symtab_strncmp(str::String, node_name::String, len::Int)::Int
+    local n = ncodeunits(node_name)
+    for i in 0:len-1
+        local a = wasm_string_codeunit(str, i)
+        local b = i < n ? wasm_string_codeunit(node_name, i) : 0x00
+        a == b || return Int(a) - Int(b)
+        a == 0x00 && return 0
+    end
+    return 0
+end
+
+# symtab_lookup (julia/src/symbol.c:51): the node of `name` in the symbol table, walked from its root by
+# (hash, name), a node's hash subtracted as an intptr_t (:57) and its name compared by strncmp where the
+# hashes meet (:59-60), the name found when the two agree to its length and the node's name ends there
+# (:61); less goes left, else right (:67-70). Answers the node, or nothing, and the slot the walk ended
+# at: the node it would hang below (nothing for the root) and whether as its right child
+@quarantine pin"julia/src/symbol.c:51 symtab_lookup" "Julia's symtab_lookup walks the symbol table's binary tree by (hash, strncmp of the name), answering the node and the slot it ended at" Core.Symbol function symtab_lookup(name::String)::Tuple{Union{Nothing,Symbol},Union{Nothing,Symbol},Bool}
+    local len = ncodeunits(name)
+    local h = hash_symbol(name)
+    local parent::Union{Nothing,Symbol} = nothing
+    local right = false
+    local node = jl_symtab[]
+    while node !== nothing
+        local x = reinterpret(Int, h - wasm_symbol_hash(node))
+        if x == 0
+            local node_name = String(node)
+            x = symtab_strncmp(name, node_name, len)
+            x == 0 && ncodeunits(node_name) == len && return (node, parent, right)
+        end
+        parent = node
+        right = !(x < 0)
+        node = wasm_symbol_child(node, right)
+    end
+    return (nothing, parent, right)
+end
+
+# mk_symbol (julia/src/symbol.c:35): a new symbol of a copy of the name's bytes (:45 memcpy), no
+# children, its hash hash_symbol's (:44)
+@quarantine pin"julia/src/symbol.c:35 mk_symbol" "Julia's mk_symbol allocates a symbol of the name's bytes copied, no children and the name's hash" Core.Symbol function mk_symbol(name::String)::Symbol
+    local len = ncodeunits(name)
+    local copy = Base._string_n(len)
+    wasm_string_copy!(copy, 0, name, 0, len)
+    return wasm_symbol_new(copy, hash_symbol(name))
+end
+
+# jl_symbol_n (julia/src/symbol.c:113), the Symbol a program makes of a name's bytes, Core's _Symbol
+# (julia/base/boot.jl:683): a name holding a NUL raises ArgumentError (:115-116), else _jl_symbol's.
+# Under minify a symbol constant's name is its ordinal (src/symbols.jl get_mangled_symbol_name), so the
+# walk's read of a name rejects there, located (src/intrinsics.jl, the symbol_name arm)
+@quarantine pin"julia/src/symbol.c:113 jl_symbol_n" "Julia's jl_symbol_n refuses a name holding a NUL and interns the rest (_jl_symbol)" Core.Symbol function jl_symbol_n(name::String)::Symbol
+    for i in 0:ncodeunits(name)-1
+        wasm_string_codeunit(name, i) == 0x00 &&
+            Runtime.Error__throw_with_current_stack_trace(ArgumentError("Symbol name may not contain \\0"))
+    end
+    return _jl_symbol(name)
+end
 
 # Julia's test of a value's kind by its type tag (julia.h:136 jl_typetagis, as jl_is_datatype and
 # jl_is_uniontype read it): the value's class id against the classes under `K` (getConcreteClassIdRange,

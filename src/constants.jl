@@ -1182,27 +1182,32 @@ dart makes a closure of the torn-off member and its vtable.
     reject!(Internal("dart2wasm/lib/constants.dart:1552 ConstantCreator.visitTypeLiteralConstant: Unreachable - should have been lowered"), "ConstantCreator.visitTypeLiteralConstant")
 
 """
-A symbol: the struct of dart's Symbol class, Julia's `Symbol` (TypeOfConstantVisitor.visitSymbolConstant),
-the object header, then its mangled name as a string constant. A Julia symbol holds its name outside
-its fields (src/julia/classes.jl class_instance_fields), so its class is laid out only once that
-representation is written; until then the class's collection rejects before any symbol constant.
+A symbol: the symbol of its name in the module's symbol table, Julia's `Symbol` (TypeOfConstantVisitor
+.visitSymbolConstant). dart builds the struct of its Symbol class eagerly, the object header and its
+mangled name; Julia's image holds a symbol as its name and its loader interns each one by that name
+(julia/src/staticdata.c:2044 jl_read_symbols, `_jl_symbol(str, len)` :2055), so a symbol a program makes
+at run time (jl_symbol_n) is the constant of its name, one object. The constant's initializer is that
+call, the name's string constant passed to the runtime's `_jl_symbol` (src/julia/runtime/rtutils.jl), no
+WebAssembly constant expression, so the constant is lazy, as dart's standalone string constant, whose
+initializer calls the embedder's import (visitStringConstant, `canBeEager: !standalone`).
 """
 @parity "dart2wasm/lib/constants.dart:1556 ConstantCreator.visitSymbolConstant" function visit_symbol_constant(self::ConstantCreator, constant::Symbol)::Union{ConstantInfo,Nothing}
     local translator = self.constants.translator
+    local at = "ConstantCreator.visitSymbolConstant"
     local info = get(translator.class_info, Symbol, nothing)
-    info === nothing && reject!(Internal("dart2wasm/lib/constants.dart:1557 ConstantCreator.visitSymbolConstant: the class Symbol has no class info"), "ConstantCreator.visitSymbolConstant")
-    record_class_allocation(translator.functions[], class_id(info))
+    info === nothing && reject!(Internal("dart2wasm/lib/constants.dart:1557 ConstantCreator.visitSymbolConstant: the class Symbol has no class info"), at)
     local string_type = translator.string_type[]
     local name_constant = NirConst(Core.Const(get_mangled_symbol_name(translator.symbols, constant)))
     local name_info = ensure_constant(self, name_constant)
     local child_constants = ConstantInfo[]
     name_info === nothing || push!(child_constants, name_info)
+    local intern = nir_runtime_member(translator.component, _jl_symbol, at)
     return create_constant(self, NirConst(Core.Const(constant)), child_constants, info.non_nullable_type, function (_::ConstantInfo, b::WasmBuilder.InstructionsBuilder, _::Bool)
-        push_object_header_fields(b, translator, info)
         instantiate_constant(self.constants, b, name_constant, string_type)
-        WasmBuilder.struct_new(b, info.struct_)
+        local outputs = call_function(translator, get_function(translator.functions[], intern), b, intern)
+        convert_type(translator, b, only(outputs), info.non_nullable_type)
         return nothing
-    end; can_be_eager = true)
+    end; can_be_eager = false)
 end
 
 """
