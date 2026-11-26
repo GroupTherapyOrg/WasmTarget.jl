@@ -2500,11 +2500,13 @@ end
 # dart pushes a type parameter's value from one of three places: its type local, a context's captured
 # field, or `this`'s type field. Julia's type parameter is a static parameter of the MethodInstance,
 # which inference makes a constant in every specialized method (makeType makes it as a constant type).
-# One left free is Expr(:static_parameter), which src/julia/nir.jl rejects before code. Julia's
+# One left free is Expr(:static_parameter), which src/julia/nir.jl rejects before code through its
+# generic arms alone, Unquarantined: as an operand at :355 (an Expr outside NirValue), as a statement
+# at :403 (a statement form outside NirStmt); nothing there names static_parameter. Julia's
 # lowering captures no type parameter (Closures makes no context), and a struct's parameters are its
 # type, not its fields. So no type parameter reaches here.
 @parity "dart2wasm/lib/code_generator.dart:3212 AstCodeGenerator.instantiateTypeParameter" instantiate_type_parameter(self::AstCodeGenerator, parameter::TypeVar)::Union{} =
-    reject!(Internal("dart2wasm/lib/code_generator.dart:3212 AstCodeGenerator.instantiateTypeParameter: the type parameter $parameter; Julia's is a static parameter of the MethodInstance, a constant in a specialized method, and one left free is Expr(:static_parameter), which src/julia/nir.jl rejects before code"), "$(julia_text(self.enclosing_member))")
+    reject!(Internal("dart2wasm/lib/code_generator.dart:3212 AstCodeGenerator.instantiateTypeParameter: the type parameter $parameter; Julia's is a static parameter of the MethodInstance, a constant in a specialized method, and one left free is Expr(:static_parameter), which src/julia/nir.jl rejects before code only through its generic arms, Unquarantined: an operand at src/julia/nir.jl:355 (an Expr outside NirValue), a statement at src/julia/nir.jl:403 (a statement form outside NirStmt)"), "$(julia_text(self.enclosing_member))")
 
 """
 Julia's `tuple(x...)`, Kernel's RecordLiteral: a tuple allocated with its fields. dart allocates its

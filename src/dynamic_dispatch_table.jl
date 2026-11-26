@@ -11,9 +11,6 @@ resolve statically but one whose result is Union{}, which it lets through as a w
 a call Julia proved throws, Julia's MethodError where no method matches, else the matched method's own exception, the code generator's to emit (visitStaticInvocation), never a dynamic call. So no NIR statement is a dynamic call, no call shape is
 collected (DynamicCallSiteCollector), and the tables are empty by Julia's answer. If the subset ever admitted a dynamic call, the same code would
 fill them.
-
-Fields to come (1, its dynamic_dispatch_table.dart line): `dynamicSelectors` :41, made by build for
-each collected shape, of which a Julia program has none.
 """
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:25 DynamicDispatchTable" struct DynamicDispatchTable
     translator::KernelNodes
@@ -22,6 +19,9 @@ each collected shape, of which a Julia program has none.
     _defined_class_ids_table::Late{WasmBuilder.TableBuilder}
     _imported_class_ids_table::Late{WasmTableImporter}
     _table::Late{Vector{Union{TableEntry,Nothing}}}
+    # dart's `late final Map<CallShape, DynamicSelector> dynamicSelectors`, assigned by build: a
+    # selector per collected call shape, none in a Julia program
+    dynamic_selectors::Late{LinkedHashMap{CallShape,DynamicSelector}}
     # the struct's one constructor, tagged, with dart's late initializers; dart's constructor at :44
     # is its outer function
     function DynamicDispatchTable(::Val{:_}, translator::KernelNodes)
@@ -33,7 +33,8 @@ each collected shape, of which a Julia program has none.
             Late{WasmBuilder.TableBuilder}("dart2wasm/lib/dynamic_dispatch_table.dart:34 DynamicDispatchTable._definedClassIdsTable"),
             Late{WasmTableImporter}("dart2wasm/lib/dynamic_dispatch_table.dart:35 DynamicDispatchTable._importedClassIdsTable",
                 () -> WasmTableImporter(self.translator, "dynamicDispatchClassIds")),
-            Late{Vector{Union{TableEntry,Nothing}}}("dart2wasm/lib/dynamic_dispatch_table.dart:40 DynamicDispatchTable._table"))
+            Late{Vector{Union{TableEntry,Nothing}}}("dart2wasm/lib/dynamic_dispatch_table.dart:40 DynamicDispatchTable._table"),
+            Late{LinkedHashMap{CallShape,DynamicSelector}}("dart2wasm/lib/dynamic_dispatch_table.dart:42 DynamicDispatchTable.dynamicSelectors"))
         return self
     end
 end
@@ -86,6 +87,8 @@ unique offsets; define the targets and class ids tables. A Julia program has no 
 """
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:52 DynamicDispatchTable.build" function build(self::DynamicDispatchTable, dynamic_call_shapes::Set{CallShape})::Nothing
     local translator = self.translator
+    self.dynamic_selectors[] = LinkedHashMap{CallShape,DynamicSelector}()
+    # dart's loop making a DynamicSelector per shape (:54-59): a shape is the collector's error
     isempty(dynamic_call_shapes) ||
         reject!(Internal("dart2wasm/lib/dynamic_dispatch_table.dart:52 DynamicDispatchTable.build: $(length(dynamic_call_shapes)) dynamic call shape(s), where Julia's trim verifier admits no dynamic call (D32)"), "DynamicDispatchTable.build")
     local rows = Row{TableEntry}[]

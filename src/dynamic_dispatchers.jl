@@ -114,7 +114,7 @@ end
 
     W.local_get(b, nullable_receiver_local)
     create_getter_invocation_object(translator, b, self.caller_shape.name)
-    call_reference(translator, translator.invoke_no_such_method[], b)
+    call_reference(translator, invoke_no_such_method(translator), b)
     W.return_(b)
     W.var"end"(b)
     return nothing
@@ -146,7 +146,7 @@ end
     W.var"end"(b)  # noSuchMethodBlock
     W.local_get(b, nullable_receiver_local)
     create_setter_invocation_object(translator, b, self.caller_shape.name, positional_arg_local)
-    call_reference(translator, translator.invoke_no_such_method[], b)
+    call_reference(translator, invoke_no_such_method(translator), b)
 
     W.drop(b)  # drop noSuchMethod return value
     W.local_get(b, positional_arg_local)
@@ -194,7 +194,7 @@ end
         W.local_get(b, locals[2 + i])
     end
     call_function(translator, get_invocation_creator_stub(translator.functions[], caller_shape), b)
-    call_reference(translator, translator.invoke_no_such_method[], b)
+    call_reference(translator, invoke_no_such_method(translator), b)
     W.return_(b)
     W.var"end"(b)
     return nothing
@@ -211,8 +211,8 @@ trying call-via-field, or run NSM).
     local translator = self.translator::Translator
     W.comment(b, "_emitDynamicDispatchTableCall($caller_shape)")
     local table = translator.dynamic_dispatch_table[]
-    local selector = get(table.dynamic_selectors, caller_shape, nothing)
-    local offset = selector === nothing ? nothing : selector.offset
+    local selector = get(table.dynamic_selectors[], caller_shape, nothing)
+    local offset = selector === nothing ? nothing : selector.offset[]
     (selector === nothing || offset === nothing) && return nothing
 
     local unsuccessful = W.block(b)
@@ -271,8 +271,8 @@ same name that returns a callable (closure or object with `.call` method).
     local translator = self.translator::Translator
     W.comment(b, "_emitDynamicDispatchTableCallViaField")
     local table = translator.dynamic_dispatch_table[]
-    local selector = get(table.dynamic_selectors, GetterCallShape(caller_shape.name), nothing)
-    local offset = selector === nothing ? nothing : selector.offset
+    local selector = get(table.dynamic_selectors[], GetterCallShape(caller_shape.name), nothing)
+    local offset = selector === nothing ? nothing : selector.offset[]
     (selector === nothing || offset === nothing) && return nothing
 
     local class_ids_table = get_class_ids_table(table, b.module_builder)
@@ -363,7 +363,7 @@ end
     local layouter = translator.closure_layouter[]
     local locals = W.locals(self.function_)
     local emit_call_for_type_count(type_count::Int) = begin
-        local representation = get_closure_representation(layouter, type_count, caller_shape.positional_count, caller_shape.named)
+        local representation = get_closure_representation(layouter, type_count, caller_shape.positional_count, String.(caller_shape.named))
         if representation === nothing
             W.unreachable(b)
             return nothing
@@ -384,7 +384,7 @@ end
         end
 
         local vtable = representation.vtable_struct
-        local vtable_index = field_index_for_signature(representation, caller_shape.positional_count, caller_shape.named)
+        local vtable_index = field_index_for_signature(representation, caller_shape.positional_count, String.(caller_shape.named))
 
         W.local_get(b, closure_local)
         W.struct_get(b, layouter.closure_base_struct[], FieldIndex_closure_vtable())
@@ -445,7 +445,7 @@ end
         instantiate_constant(constants, b, empty_array, translator.nullable_object_array_type_ref[])
     else
         for i in 0:length(caller_shape.named) - 1
-            instantiate_constant(constants, b, NirConst(Core.Const(symbol_for_named_parameter(translator.symbols[], caller_shape.named[i + 1]))), translator.top_type[])
+            instantiate_constant(constants, b, NirConst(Core.Const(symbol_for_named_parameter(translator.symbols, String(caller_shape.named[i + 1])))), translator.top_type[])
             W.local_get(b, locals[2 + caller_shape.type_count + caller_shape.positional_count + i])
         end
         W.array_new_fixed(b, translator.nullable_object_array_type[], length(caller_shape.named) * 2)
@@ -489,8 +489,8 @@ shape check fails.
     W.i32_eqz(b)
     W.if_(b)
     W.local_get(b, function_type_local)
-    W.struct_get(b, translator.class_info[translator.function_type_class[]].struct_,
-        translator.field_index[translator.function_type_type_parameter_defaults_field[]])
+    W.struct_get(b, translator.class_info[function_type_class(translator)].struct_,
+        translator.field_index[function_type_type_parameter_defaults_field(translator)])
     W.local_set(b, type_args_local)
     W.var"end"(b)
 
@@ -499,7 +499,7 @@ shape check fails.
     W.local_get(b, type_args_local)
     W.local_get(b, pos_args_local)
     W.local_get(b, named_args_local)
-    call_reference(translator, translator.check_closure_shape[], b)
+    call_reference(translator, check_closure_shape(translator), b)
     W.i32_eqz(b)
     W.br_if(b, no_such_method_block)
 
@@ -509,7 +509,7 @@ shape check fails.
         W.local_get(b, type_args_local)
         W.local_get(b, pos_args_local)
         W.local_get(b, named_args_local)
-        call_reference(translator, translator.check_closure_type[], b)
+        call_reference(translator, check_closure_type(translator), b)
         W.drop(b)
     end
 
@@ -597,17 +597,17 @@ end
 end
 
 @parity "dart2wasm/lib/dynamic_dispatchers.dart:766 createGetterInvocationObject" function create_getter_invocation_object(translator::Translator, b::WasmBuilder.InstructionsBuilder, member_name::Symbol)::Nothing
-    instantiate_constant(translator.constants[], b, NirConst(Core.Const(getter_symbol_from_name(translator.symbols[], member_name))),
+    instantiate_constant(translator.constants[], b, NirConst(Core.Const(getter_symbol_from_name(translator.symbols, member_name))),
         translator.class_info[Symbol].non_nullable_type)
-    call_reference(translator, translator.invocation_getter_factory[], b)
+    call_reference(translator, invocation_getter_factory(translator), b)
     return nothing
 end
 
 @parity "dart2wasm/lib/dynamic_dispatchers.dart:780 createSetterInvocationObject" function create_setter_invocation_object(translator::Translator, b::WasmBuilder.InstructionsBuilder, member_name::Symbol, positional_arg_local::WasmBuilder.IR.Local)::Nothing
-    instantiate_constant(translator.constants[], b, NirConst(Core.Const(setter_symbol_from_name(translator.symbols[], member_name))),
+    instantiate_constant(translator.constants[], b, NirConst(Core.Const(setter_symbol_from_name(translator.symbols, member_name))),
         translator.class_info[Symbol].non_nullable_type)
     local W = WasmBuilder
     W.local_get(b, positional_arg_local)
-    call_reference(translator, translator.invocation_setter_factory[], b)
+    call_reference(translator, invocation_setter_factory(translator), b)
     return nothing
 end

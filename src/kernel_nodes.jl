@@ -48,6 +48,16 @@ lookup takes it where dart's one class takes it as a type argument.
 # order, so Julia's field order is the answer and no sort is needed. A lane's reference is its field
 # (the Kernel table's Field row: an instance field is a ClassField). Any other class is no SIMD
 # vector, which dart's int.parse of a lane name would refuse: it rejects, located
+# dart:core's _FunctionType, the runtime type of a closure (sdk/lib/_internal/wasm/common/type.dart:413),
+# and its typeParameterDefaults field (:422), of dart's runtime library at the pin, not ported: Unported
+# there. dart's only readers are the dynamic dispatchers' closure shape check
+# (dynamic_dispatchers.dart:596), which no Julia program reaches (D32)
+@parity "dart2wasm/lib/kernel_nodes.dart:104 KernelNodes.functionTypeClass" function_type_class(self::KernelNodes)::Union{} =
+    reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:413 _FunctionType"), "KernelNodes.functionTypeClass")
+
+@parity "dart2wasm/lib/kernel_nodes.dart:118 KernelNodes.functionTypeTypeParameterDefaultsField" function_type_type_parameter_defaults_field(self::KernelNodes)::Union{} =
+    reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:422 _FunctionType.typeParameterDefaults"), "KernelNodes.functionTypeTypeParameterDefaultsField")
+
 @parity "dart2wasm/lib/kernel_nodes.dart:316 KernelNodes._getLaneReferences" function _get_lane_references(self::KernelNodes, class_node::DataType)::Vector{ClassField}
     local at = "dart2wasm/lib/kernel_nodes.dart:316 KernelNodes._getLaneReferences"
     local ts = fieldtypes(class_node)
@@ -55,6 +65,19 @@ lookup takes it where dart's one class takes it as a type argument.
     lanes || reject!(Internal("$at: $class_node is no SIMD vector, an NTuple of one VecElement 16 bytes wide"), at)
     return class_instance_fields(class_node, at)
 end
+
+# dart:core's Object._invokeNoSuchMethod (sdk/lib/_internal/wasm/common/object_patch.dart:66), of dart's
+# runtime library at the pin, not ported: Unported there
+@parity "dart2wasm/lib/kernel_nodes.dart:564 KernelNodes.invokeNoSuchMethod" invoke_no_such_method(self::KernelNodes)::Union{} =
+    reject!(Unported("sdk/lib/_internal/wasm/common/object_patch.dart:66 Object._invokeNoSuchMethod"), "KernelNodes.invokeNoSuchMethod")
+
+# dart:core's Invocation.getter and Invocation.setter factories (sdk/lib/core/invocation.dart:49, :60),
+# of dart's core library at the pin, not ported: Unported there
+@parity "dart2wasm/lib/kernel_nodes.dart:594 KernelNodes.invocationGetterFactory" invocation_getter_factory(self::KernelNodes)::Union{} =
+    reject!(Unported("sdk/lib/core/invocation.dart:49 Invocation.getter"), "KernelNodes.invocationGetterFactory")
+
+@parity "dart2wasm/lib/kernel_nodes.dart:599 KernelNodes.invocationSetterFactory" invocation_setter_factory(self::KernelNodes)::Union{} =
+    reject!(Unported("sdk/lib/core/invocation.dart:60 Invocation.setter"), "KernelNodes.invocationSetterFactory")
 
 # dart:core's StackTrace.current, as the target's patch defines it: the standalone patch's
 # (src/runtime/standalone/stack_trace_patch.jl), its method in the closed world, an entry point every
@@ -109,6 +132,14 @@ end
 
 @parity "dart2wasm/lib/kernel_nodes.dart:729 KernelNodes.asInterfaceSubtype0" as_interface_subtype0(self::KernelNodes)::Core.MethodInstance =
     nir_runtime_member(self.component, Runtime._as_interface_subtype0, "KernelNodes.asInterfaceSubtype0")
+
+# dart:core's _checkClosureShape and _checkClosureType (sdk/lib/_internal/wasm/common/type.dart:1772,
+# :1855), of dart's runtime library at the pin, not ported: Unported there
+@parity "dart2wasm/lib/kernel_nodes.dart:749 KernelNodes.checkClosureShape" check_closure_shape(self::KernelNodes)::Union{} =
+    reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:1772 _checkClosureShape"), "KernelNodes.checkClosureShape")
+
+@parity "dart2wasm/lib/kernel_nodes.dart:753 KernelNodes.checkClosureType" check_closure_type(self::KernelNodes)::Union{} =
+    reject!(Unported("sdk/lib/_internal/wasm/common/type.dart:1855 _checkClosureType"), "KernelNodes.checkClosureType")
 
 # dart:_internal's printToConsole, as the target's patch defines it: the JS patch's
 # (src/runtime/js_common/print_patch.jl), its method in the closed world; the standalone patch's
