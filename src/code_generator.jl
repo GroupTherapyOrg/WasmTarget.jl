@@ -1304,8 +1304,7 @@ end
             local p = imm(mi, 1)
             local value = (node.stmts[p]::NirPhi).values[imm(mi, 2)]
             value === nothing && reject!(Internal("src/code_generator.jl visit_block: a COPY of an undefined incoming value"), at)
-            translate_expression(self, something(value), incoming_reg(p).type)
-            WasmBuilder.local_set(b, incoming_reg(p))
+            emit_phi_incoming!(self, something(value), node.types[p], incoming_reg(p), at)
         elseif op == BR
             WasmBuilder.br(b, label_at(imm(mi, 1)))
         elseif op == BR_IF || op == BR_UNLESS

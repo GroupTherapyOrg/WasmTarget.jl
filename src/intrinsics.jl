@@ -3933,23 +3933,31 @@ end
     local konst(v::Integer) = w == WasmBuilder.IR.NumType_i64 ? WasmBuilder.i64_const(b, Int64(v)) : WasmBuilder.i32_const(b, Int64(Int32(v)))
     local eqz() = w == WasmBuilder.IR.NumType_i64 ? WasmBuilder.i64_eqz(b) : WasmBuilder.i32_eqz(b)
     local eq() = w == WasmBuilder.IR.NumType_i64 ? WasmBuilder.i64_eq(b) : WasmBuilder.i32_eq(b)
-    # the condition Julia raises on: y == 0, or, signed division, y == -1 and x == typemin
-    WasmBuilder.local_get(b, y)
-    eqz()
-    if f === I.checked_sdiv_int
+    # the condition Julia raises on: y == 0, or, signed division, y == -1 and x == typemin. Julia's codegen
+    # builds it with LLVM's IRBuilder (julia/src/intrinsics.cpp emit_checked_sdiv/udiv's raise_exception_if),
+    # whose constant folder folds the comparison of a constant divisor at once (IRBuilder's ConstantFolder
+    # FoldCmp): a divisor that is a nonzero constant, and for a signed division not -1, leaves `false` and no
+    # raise is reached, so none is emitted
+    local ycon = args[2] isa NirConst ? args[2].c.val : nothing
+    local never = ycon isa Integer && ycon != 0 && !(f === I.checked_sdiv_int && ycon == -1)
+    if !never
         WasmBuilder.local_get(b, y)
-        konst(-1)
-        eq()
-        WasmBuilder.local_get(b, x)
-        konst(typemin(t))
-        eq()
-        WasmBuilder.i32_and(b)
-        WasmBuilder.i32_or(b)
+        eqz()
+        if f === I.checked_sdiv_int
+            WasmBuilder.local_get(b, y)
+            konst(-1)
+            eq()
+            WasmBuilder.local_get(b, x)
+            konst(typemin(t))
+            eq()
+            WasmBuilder.i32_and(b)
+            WasmBuilder.i32_or(b)
+        end
+        WasmBuilder.if_(b)
+        call(code_gen, nir_runtime_member(translator(self).component, throw_divide_error, "$(julia_text(code_gen.enclosing_member)): a checked division"))
+        WasmBuilder.unreachable(b)
+        WasmBuilder.var"end"(b)
     end
-    WasmBuilder.if_(b)
-    call(code_gen, nir_runtime_member(translator(self).component, throw_divide_error, "$(julia_text(code_gen.enclosing_member)): a checked division"))
-    WasmBuilder.unreachable(b)
-    WasmBuilder.var"end"(b)
     WasmBuilder.local_get(b, x)
     WasmBuilder.local_get(b, y)
     Intrinsifier__binary_operator_map[][w][w][raw](code_gen)

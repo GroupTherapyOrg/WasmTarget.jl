@@ -253,34 +253,40 @@ end
     return reinterpret(Int128, (res ⊻ reinterpret(UInt128, s)) + reinterpret(UInt128, -s))   # negate if s == -1
 end
 
-# _jl_symbol (julia/src/symbol.c:78), the Symbol of a name holding no NUL: the name too long for a
-# symbol raises ArgumentError (:83, MAX_SYM_LEN :21, jl_sym_t's three words and the tag ahead of the name
-# and its NUL); else the symbol table's node of the name where it is one (symtab_lookup), or a new one
+# _jl_symbol (julia/src/symbol.c:78), the Symbol of a name holding no NUL: the symbol table's node of the
+# name where it is one (symtab_lookup), or a new one
 # (mk_symbol) stored through the slot the lookup found (:96), the table's root or a node's child. One
 # thread runs a module, so the lock and the second lookup under it (:90-93) have nothing to wait for.
 # The code generator calls it for every symbol constant, as Julia's image loader interns each symbol of
 # the image by its name (julia/src/staticdata.c:2044 jl_read_symbols, :2055 `_jl_symbol(str, len)`), so
-# a symbol a program makes at run time (jl_symbol_n) is the constant of its name, one object
+# a symbol a program makes at run time (jl_symbol_n) is the constant of its name, one object. Julia's check of
+# a name too long for a symbol (:83, ArgumentError past MAX_SYM_LEN :21, INTPTR_MAX less jl_sym_t's three
+# words, the tag and the NUL) cannot fire here: a String's length is its data array's, a wasm array's u32
+# (array.len), far under it, so the comparison is false for every String, as LLVM folds an i32's zero extension
+# compared past its range; the port leaves it out, and with it the thrower no symbol constant's initializer needs
 @quarantine pin"julia/src/symbol.c:78 _jl_symbol" "Julia's _jl_symbol answers the symbol table's node of a name, made and stored where it is none; Julia's image loader interns every symbol of the image by its name (julia/src/staticdata.c:2044 jl_read_symbols)" Core.Symbol @noinline function _jl_symbol(name::String)::Symbol
-    local len = ncodeunits(name)
-    len > typemax(Int) - 8 - 3 * 8 - 1 &&
-        Runtime.Error__throw_with_current_stack_trace(ArgumentError("Symbol name too long"))
     local node, parent, right = symtab_lookup(name)
     if node === nothing
         node = mk_symbol(name)
-        parent === nothing ? (jl_symtab[] = node) : wasm_symbol_set_child!(parent, right, node)
+        parent === nothing ? (jl_symtab.root = node) : wasm_symbol_set_child!(parent, right, node)
     end
     return node
 end
 
 # ---- end of Julia's runtime ----
 
-# Julia's symbol table (julia/src/symbol.c:19 `static _Atomic(jl_sym_t*) symtab`): the root of the
+# Julia's symbol table (julia/src/symbol.c:19 `static _Atomic(jl_sym_t*) symtab = NULL`): the root of the
 # binary tree of every symbol, ordered by hash and then by name (symtab_lookup), none before the first
-# symbol is made. A final binding holding a mutable object, as object_patch's counter
-# (src/runtime/common/object_patch.jl Object__hash_code_rnd); natively never written: Julia's own table
-# is the one every native symbol lives in, and the bodies that walk this one raise natively
-@quarantine pin"julia/src/symbol.c:51 symtab_lookup" "Julia's symbol table (julia/src/symbol.c:19 symtab), which symtab_lookup walks, is one static root of a binary tree of jl_sym_t nodes; WasmTarget's is a final binding holding a Ref to the root Symbol" Core.Symbol const jl_symtab = Ref{Union{Nothing,Symbol}}(nothing)
+# symbol is made. A C static is initialized, never undefined, so its cell is a struct whose one field every
+# constructor sets (no `new()` leaving it #undef, as RefValue's has, whose read Julia's codegen null-checks
+# and raises UndefRefError from); a final binding holds the one cell, as object_patch's counter
+# (src/runtime/common/object_patch.jl Object__hash_code_rnd). Natively never written: Julia's own table is
+# the one every native symbol lives in, and the bodies that walk this one raise natively
+@quarantine pin"julia/src/symbol.c:51 symtab_lookup" "Julia's symbol table (julia/src/symbol.c:19 symtab), which symtab_lookup walks, is one static root of a binary tree of jl_sym_t nodes, initialized to NULL; WasmTarget's is a cell whose one field, always set, holds the root Symbol" Core.Symbol mutable struct SymbolTable
+    root::Union{Nothing,Symbol}
+end
+
+@quarantine pin"julia/src/symbol.c:51 symtab_lookup" "Julia's symbol table (julia/src/symbol.c:19 symtab) is one static root, NULL before the first symbol; WasmTarget's final binding holds its one cell, none in its root" Core.nothing const jl_symtab = SymbolTable(nothing)
 
 # strncmp(str, jl_symbol_name(node), len) (julia/src/symbol.c:60), C's: the difference of the first
 # differing bytes as unsigned chars, a name shorter than `len` ending at its NUL (the byte 0), else 0;
@@ -306,7 +312,7 @@ end
     local h = hash_symbol(name)
     local parent::Union{Nothing,Symbol} = nothing
     local right = false
-    local node = jl_symtab[]
+    local node = jl_symtab.root
     while node !== nothing
         local x = reinterpret(Int, h - wasm_symbol_hash(node))
         if x == 0
@@ -411,6 +417,34 @@ run time knows) share.
             local g = run_time_type_gap(p)
             g === nothing || return g
         end
+    end
+    return nothing
+end
+
+"""
+    emit_phi_incoming!(self, value, phi_type, reg, at)
+
+One incoming value of a phi written into its register, Julia's emit_function's phi edges
+(julia/src/codegen.cpp:9504-9511), visit_block's COPY (src/code_generator.jl): a value whose run-time type may not be the phi's ("must be careful to emit
+undef here (rather than a bitcast or load of val) if the runtime type of val isn't phiType") is stored only where
+emit_isa_and_defined holds (emit_guarded_test), the phi undef on this edge otherwise: no value of it is observed
+there. A type of none of the phi's values stores nothing, as an Upsilon with no value does (codegen.cpp:6060);
+one that may be either is stored under Julia's isa test (types.dart emitIsTest), the register keeping what it held
+where the test fails, never a checked cast that traps; a subtype's is translated to the register's type and stored.
+"""
+@quarantine pin"julia/src/cgutils.cpp:2018 emit_isa_and_defined" "Julia's emit_function, its phi edges (julia/src/codegen.cpp:9490-9511), stores an incoming value whose run-time type may not be the phi's only where emit_isa_and_defined holds, the phi undef on that edge otherwise; WasmTarget's register keeps what it held there" Base.typeintersect function emit_phi_incoming!(self, value::NirValue, phi_type, reg, at::String)::Nothing
+    local b = self.b[]
+    local vt = nir_value_type(self.body, value)
+    if vt === Union{} || vt <: phi_type
+        Dart2Wasm.translate_expression(self, value, reg.type)
+        WasmBuilder.local_set(b, reg)
+    elseif typeintersect(vt, phi_type) !== Union{}
+        Dart2Wasm.translate_expression(self, value, Nothing <: vt ? self.translator.top_type[] : self.translator.top_type_non_nullable[])
+        Dart2Wasm.emit_is_test(self.translator.types[], self, phi_type, vt; location = at)
+        WasmBuilder.if_(b)
+        Dart2Wasm.translate_expression(self, value, reg.type)
+        WasmBuilder.local_set(b, reg)
+        WasmBuilder.var"end"(b)
     end
     return nothing
 end
