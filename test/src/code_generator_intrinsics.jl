@@ -71,7 +71,10 @@ end
     @test emits(p, call(Core.:(===), x, W.NirArgument(3))) == ["local.get", "i64.reinterpret_f64", "local.get", "i64.reinterpret_f64", "i64.eq"]
     @test emits(g, call(Core.:(===), x, lit(Int64(3)))) == ["i32.const 0"]   # disjoint types: never egal (emit_f_is)
     @test emits(g, call(Core.ifelse, lit(true), x, x)) == ["local.get", "local.get", "i32.const 1", "select"]
-    @test absent(g, call(Core.ifelse, lit(true), x, lit(1.0)))
+    # values of two Julia types (Float64, Nothing) select their boxes, each boxed by its own class, as Julia's
+    # emit_ifelse's boxed arm (julia/src/intrinsics.cpp:1154, `isboxed = t1 != t2`), in a world holding both
+    local boxed = emits(p, call(Core.ifelse, lit(true), x, lit(nothing)))
+    @test "struct.new" in boxed && last(boxed) == "select"
     # conversions between full-width types, each its one instruction (a bitcast between two integers of
     # one width none); a narrow one puts the operand's form back; fpext has no arm
     @test emits(g, call(I.sext_int, lit(Int64), x)) == ["local.get", "i64.extend_i32_s"]

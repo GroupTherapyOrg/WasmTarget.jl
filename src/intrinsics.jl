@@ -3684,21 +3684,27 @@ end
     return i64
 end
 
-# Julia's `ifelse`: both values computed, one chosen by the Bool, wasm's typed select
+# Julia's `ifelse`: both values computed, one chosen by the Bool, wasm's typed select, as Julia's emit_ifelse
+# (julia/src/intrinsics.cpp:1154) selects: unboxed, of the one type, where both values are of the same Julia type
+# (`isboxed = t1 != t2 || !deserves_stack(t1)`), else between their boxes, each value boxed by its own type
+# (convert_julia_type to the Union, then the select of the boxed pointers): here each translated to the top type,
+# which boxes a primitive by its own class (translate_expression), never two classes of one wasm type (Int64 and
+# UInt64, both i64) selected raw and boxed by the statement's Union
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:ifelse}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local b = self.code_gen.b
-    local i32, i64, f32, f64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64, WasmBuilder.IR.NumType_f32, WasmBuilder.IR.NumType_f64
-    local w = type_of_exp(self, args[2])
+    local i32 = WasmBuilder.IR.NumType_i32
+    dart_type_of(self, args[1]) === Bool || return nothing
+    local t1 = dart_type_of(self, args[2])
+    local t2 = dart_type_of(self, args[3])
     # a reference too (a 128-bit integer's struct): wasm's typed select takes any value type
-    if dart_type_of(self, args[1]) === Bool && type_of_exp(self, args[3]) == w
-        translate_expression(code_gen, args[2], w)
-        translate_expression(code_gen, args[3], w)
-        translate_expression(code_gen, args[1], i32)
-        WasmBuilder.select(b[], w)
-        return w
-    end
-    return nothing
+    local w = t1 === t2 ? type_of_exp(self, args[2]) :
+        Nothing <: t1 || Nothing <: t2 ? translator(self).top_type[] : translator(self).top_type_non_nullable[]
+    translate_expression(code_gen, args[2], w)
+    translate_expression(code_gen, args[3], w)
+    translate_expression(code_gen, args[1], i32)
+    WasmBuilder.select(b[], w)
+    return w
 end
 
 # Julia's conversions, `(T, x)`: the type converted to, then the value (dart's wasmI32FromInt,
