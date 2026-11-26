@@ -10158,8 +10158,9 @@ end
 # u8_nextchar (julia/src/support/utf8.c:269) to the first jl_op_suffix_char (julia_extensions.c:163). The
 # operator lists are julia-parser.scm's definitions at the julia pin, their symbols copied as written and
 # built as the parser builds them, when WasmTarget loads. The overlay is consistent: natively it computes
-# Base's answer, which test/src/unicode.jl compares at every operator, its dotted and suffixed forms
-# and every character to U+FFFF, and it re-reads the C tables copied here from their pinned files.
+# Base's answer, which test/src/julia_parser_ops.jl compares at every operator the pinned julia-parser.scm's
+# defines name, its dotted and suffixed forms and every character to U+FFFF, and test/src/unicode.jl
+# re-reads the C tables copied here from their pinned files.
 
 # julia-parser.scm's operator lists at the julia pin, each definition copied from its own define and pinned at
 # that line (julia/src/julia-parser.scm, a unit of JULIA_FILES), a |...| symbol read as femtolisp reads it; the
