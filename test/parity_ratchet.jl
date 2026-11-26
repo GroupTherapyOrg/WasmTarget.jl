@@ -3491,6 +3491,14 @@ const BOUNDED_BREAKS = (
      "why_unfield(f[4]) if len(f) > 4 else \"\")", "f[4] if len(f) > 4 else \"\")", 53),
     ("a why written with its newlines raw", "dev/climb/measure.py",
      "    return w.replace(\"\\\\\", \"\\\\\\\\\").replace(\"\\n\", \"\\\\n\")", "    return w", 53),
+    # the lead pulls a queued item by one command; a round never raises on one that left (2026-11-26 10:58:29Z)
+    ("a round raising on an item that left the queue mid-round", "dev/climb/lander.py",
+     "            if now_ is None:   # withdrawn while the round judged it", "            if False:   # withdrawn while the round judged it", 54),
+    ("withdraw leaving the item queued", "dev/climb/lander.py", "        q[:] = [x for x in q if x.get(\"hold_id\") != hold_id]", "        pass", 54),
+    ("a withdrawn item's commit not kept", "dev/climb/lander.py",
+     "            common_write(f\"the withdrawn branch {branch}\")\n            git(\"branch\", \"-m\", item[\"branch\"], branch)",
+     "            common_write(f\"the withdrawn branch {branch}\")\n            git(\"branch\", \"-D\", item[\"branch\"])", 54),
+    ("a withdraw with no event", "dev/climb/lander.py", "        event(\"withdrawn\", hold=", "        (lambda *a, **k: None)(\"withdrawn\", hold=", 54),
     # a measurement's own directory is its holder's (L1)
     ("measurements of one base sharing one directory (L1)", "dev/climb/measure.py",
      "    w = tempfile.mkdtemp(prefix=f\"{role}-{task}@{os.getpid()}-{door.BOOT}-\", dir=root)",

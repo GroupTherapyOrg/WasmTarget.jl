@@ -912,6 +912,10 @@ door's, run as Dale on paths no build user writes.
   hand fix would have landed on a green check whether or not the case passed); an audit finding's and a src-test red's
   hand fix carry no hold, judged by their landing check as before. The stall note of an overdue fix-first hold that is
   parked leads with that command, its key quoted whole. No slot starts a move while `queue_cap` commits wait (D50).
+  The lead pulls a queued item (superseded, or red where its landing would only drop it) by `climb.py withdraw <hold id>
+  <why>` alone (`lander.withdraw`: out of the queue under the state lock, its commit on withdrawn/<hold id>-<stamp>, one
+  event), never by an edit of ready.json; a round in flight that reaches an item after it left records `land-withdrawn`
+  and moves on.
   A hand commit never bundles src with harness work: `enqueue` refuses an item whose commits change `src/` beside
   a path no move may change (the harness, the judge's files, the rules), naming both sets (`measure.bundled`,
   A106E2; door-probe rows), so src lands in a commit of its own, under its own message and clauses.

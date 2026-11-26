@@ -2893,3 +2893,67 @@ try:
         fault(f"a record's escaped why read back: {M.src_record(h53)[1]['a.jl'][3]!r}")
 except Exception as e:
     fault(f"a src record with a why of several lines raised {type(e).__name__}: {str(e)[:240]}")
+
+# 54. the lead pulls a queued item by one command, and a round never raises on an item that left mid-round
+# (lander.withdraw, land_round): withdraw removes the hold's item under the state lock, keeps its commit on
+# withdrawn/<hold id>-<stamp> and writes one `withdrawn` event; a hold the queue does not hold is a ClimbError; and a
+# land_round whose item leaves the queue while it is judged (after its rebased check) records `land-withdrawn` and
+# moves on. 2026-11-26 10:58:29Z: a superseded item pulled by a hand edit of ready.json, the round raised StopIteration
+#: limit 30
+names54 = ("pause", "waits", "power_ok", "reconcile", "fixfirst_overdue", "fixfirst_binds", "src_unverified", "unverified_binds",
+           "src_gap_spawn", "origin_scored", "admits", "land_tree", "item_problems", "admissible", "rebased_check", "landing_set")
+real54 = {k: getattr(L, k) for k in names54}
+try:
+    core.claim_repo()
+    g("checkout", "-q", "--detach", h)
+    g("update-ref", f"refs/remotes/origin/{core.MARCH}", h)
+    open(f"{repo}/src/w54.jl", "w").write("w = 1\n"); g("add", "-A"); g("commit", "-q", "-m", "c54"); c54 = g("rev-parse", "HEAD")
+    g("branch", "-f", "ready/w54a-1", c54); g("branch", "-f", "ready/w54b-1", c54)
+    mk54 = lambda n: {"branch": f"ready/w54{n}-1", "hold": f"a hold of section 54 ({n})", "hold_id": f"w54{n}", "sha": c54,
+                      "kind": "hand", "base": h}
+    core.save_json("ready.json", [mk54("a"), mk54("b")])
+    it54 = L.withdraw("w54a", "superseded by a later hand commit")
+    q54 = core.state_json("ready.json", [])
+    br54 = [b for b in g("branch", "--list", "withdrawn/w54a-*", "--format=%(refname:short)").split()]
+    ev54 = [e for e in core.events() if e["kind"] == "withdrawn" and e.get("hold_id") == "w54a"]
+    if it54["hold_id"] != "w54a" or [x["hold_id"] for x in q54] != ["w54b"] or len(br54) != 1 or g("rev-parse", br54[0]) != c54 \
+            or len(ev54) != 1 or "superseded" not in ev54[0].get("why", "") or g("branch", "--list", "ready/w54a-1"):
+        fault(f"withdraw: returned {it54.get('hold_id')}, the queue {[x['hold_id'] for x in q54]}, branches {br54}, events {ev54}")
+    try:
+        L.withdraw("w54none", "no such hold"); fault("withdraw of a hold the queue does not hold raised nothing")
+    except core.ClimbError:
+        pass
+    # a round whose item leaves the queue while it is judged
+    L.pause, L.waits, L.power_ok, L.reconcile = (lambda: False), (lambda *a: False), (lambda: True), (lambda: None)
+    L.fixfirst_overdue, L.fixfirst_binds, L.unverified_binds = (lambda: []), (lambda o: None), (lambda b, f: None)
+    L.src_unverified, L.src_gap_spawn, L.origin_scored = (lambda h_: (0, [])), (lambda o: None), (lambda: True)
+    L.admits = lambda x, o=None, s=None: True
+    L.land_tree = lambda: f"{tmp}/slot54"
+    os.makedirs(f"{tmp}/slot54", exist_ok=True)
+    g("worktree", "add", "-q", "--detach", f"{tmp}/slot54w", h)
+    L.land_tree = lambda: f"{tmp}/slot54w"
+    L.item_problems = lambda item: []
+    L.admissible = lambda slot: (("ADMISSIBLE", ""), "")
+    def reb54(item):   # the lead withdraws it while its rebased check runs
+        L.withdraw(item["hold_id"], "withdrawn mid-round")
+        return [], False
+    L.rebased_check = reb54
+    reached54 = []
+    L.landing_set = lambda item: reached54.append(item["hold_id"]) or ({"why": "planted"}, None)
+    try:
+        rc54 = L.land_round()
+    except StopIteration:
+        rc54 = "StopIteration"
+    lw54 = [e for e in core.events() if e["kind"] == "land-withdrawn" and "section 54 (b)" in e.get("hold", "")]
+    if rc54 == "StopIteration" or reached54 or len(lw54) != 1:
+        fault(f"a round whose item left mid-round: returned {rc54!r}, went on to its set for {reached54}, land-withdrawn events {len(lw54)} (one, the round moving on)")
+except Exception as e:
+    import traceback
+    fault(f"withdraw raised {type(e).__name__}: {str(e)[:240]} {traceback.format_exc()[-300:]}")
+finally:
+    for k, v in real54.items():
+        setattr(L, k, v)
+    with contextlib.suppress(Exception):
+        g("worktree", "remove", "--force", f"{tmp}/slot54w")
+    with contextlib.suppress(Exception):
+        g("update-ref", "-d", f"refs/remotes/origin/{core.MARCH}")

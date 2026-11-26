@@ -232,6 +232,29 @@ def measured_fix(item):
     h = item.get("h") or {}
     return item["kind"] == "hand" and bool(item.get("fixfirst")) and bool(h.get("require_pass")) and bool(h.get("cases"))
 
+def withdraw(hold_id, why):
+    """`climb.py withdraw <hold id> <why>`: the lead's one way to pull a queued item (superseded by a later hand commit, or
+    red where its landing would only drop it): removed from the queue under the state lock, its commit kept on the
+    branch withdrawn/<hold id>-<stamp>, one `withdrawn` event with why. A round in flight that reaches the item after it
+    left reads it withdrawn and moves on (land_round). 2026-11-26 10:58:29Z: a superseded hand item pulled by editing
+    ready.json by hand left the round in flight raising StopIteration. Returns the item; a hold id the queue does not
+    hold is a ClimbError."""
+    out = []
+    def pull(q):
+        out[:] = [x for x in q if x.get("hold_id") == hold_id]
+        q[:] = [x for x in q if x.get("hold_id") != hold_id]
+    update_json("ready.json", [], pull)
+    if not out:
+        raise ClimbError(f"withdraw: the queue holds no item of hold {hold_id!r}")
+    for item in out:
+        branch = None
+        if git("rev-parse", "-q", "--verify", f"refs/heads/{item['branch']}", check=False):
+            branch = f"withdrawn/{hold_id}-{now().strftime('%Y%m%dT%H%M%S')}"
+            common_write(f"the withdrawn branch {branch}")
+            git("branch", "-m", item["branch"], branch)
+        event("withdrawn", hold=item["hold"], hold_id=hold_id, sha=item.get("sha"), branch=branch, why=why[:300])
+    return out[0]
+
 def unqueue(item, **kw):
     update_json("ready.json", [], lambda q: q.__setitem__(slice(None), [dict(x, **kw) if kw and x["branch"] == item["branch"] else x
                                                                        for x in q if kw or x["branch"] != item["branch"]]))
@@ -1158,7 +1181,10 @@ def land_round():
                 unqueue(item, errors=0)
             if bad:
                 drop(item, "landing-red" if stop else "done-elsewhere", "rebased onto origin:\n" + "\n".join(bad[:20]), stop=stop); continue
-            item = next(x for x in state_json("ready.json", []) if x["branch"] == item["branch"])   # its rebased rows
+            now_ = next((x for x in state_json("ready.json", []) if x["branch"] == item["branch"]), None)   # its rebased rows
+            if now_ is None:   # withdrawn while the round judged it (withdraw): the round moves on, never an exception
+                event("land-withdrawn", hold=item["hold"], sha=item["sha"][:10]); continue
+            item = now_
             git("checkout", "-q", "-f", "--detach", item["rebased"]["commit"], cwd=slot)   # the commit it measured (A7-5)
             try:
                 ss, files = landing_set(item)   # the set the check runs, chosen before it from origin's code and state (R1, R6)

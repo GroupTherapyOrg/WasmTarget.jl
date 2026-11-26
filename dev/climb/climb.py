@@ -17,6 +17,8 @@ candidate wrote: every such process runs as a build user behind the door (dev/cl
     python3 dev/climb/climb.py enqueue <ref> --fixes <key>  a hand fix of a known red (fix-first entry <key>), which
                                                    the lander admits while that red is overdue (core.admits)
     python3 dev/climb/climb.py unpark <hold id>    a parked hold climbs again (an overdue fix-first's stall names it)
+    python3 dev/climb/climb.py withdraw <hold id> <why>  a queued item pulled from the queue (superseded or red), its commit
+                                                   kept on withdrawn/<hold id>-<stamp>, one event; never an edit of ready.json
     python3 dev/climb/climb.py score-tick          one look at origin/wt2: the alarms, a score, the judge's eval and an
                                                    audit when due
     python3 dev/climb/climb.py slot <climb-N>      one move in that slot, then exit
@@ -433,6 +435,7 @@ def main():
     e = sp.add_parser("enqueue"); e.add_argument("ref"); e.add_argument("title", nargs="?", default=None)
     e.add_argument("--fixes", default=None, help="the fix-first entry's key this hand commit fixes: admitted while it is overdue")
     up = sp.add_parser("unpark"); up.add_argument("hold_id")
+    wd = sp.add_parser("withdraw"); wd.add_argument("hold_id"); wd.add_argument("why")
     ag = sp.add_parser("admit-gap"); ag.add_argument("label"); ag.add_argument("kind"); ag.add_argument("why")
     j = sp.add_parser("judge-eval"); j.add_argument("-n", type=int, default=None)
     so = sp.add_parser("slot"); so.add_argument("name")
@@ -489,6 +492,12 @@ def main():
         else:
             it = enqueue(a.ref, a.title, "hand")
         print(f"queued {it['sha'][:10]} as {it['branch']}")
+    elif a.cmd == "withdraw":   # the lead's one way to pull a queued item (lander.withdraw), never an edit of ready.json
+        try:
+            it = withdraw(a.hold_id, a.why)
+        except ClimbError as e:
+            sys.exit(str(e))
+        print(f"withdrew {it['sha'][:10]} ({it['hold'][:80]})")
     elif a.cmd == "unpark":   # the one command that unparks a hold (an overdue fix-first's stall names it)
         update_json("parked.json", {}, lambda p: p.pop(a.hold_id, None)); event("unparked", hold_id=a.hold_id)
         print(f"unparked {a.hold_id}")
