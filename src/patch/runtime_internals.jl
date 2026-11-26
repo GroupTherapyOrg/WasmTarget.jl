@@ -21,6 +21,6 @@
 # spent, is Julia's runtime fatal (src/runtime/common/object_patch.jl Object__object_hash_code: jl_no_exc_handler, the
 # text to the host, then the trap), which is no exception, so no `try` of the program is there to keep. Folding is
 # unchanged.
-@quarantine "julia/base/runtime_internals.jl:854 objectid calls the runtime's jl_object_id through a ccall under @_total_meta; WasmGC calls the runtime's function ported, under the same effects, :total: its one stop, the spent identity counter, is fatal, never an exception" Base.objectid @consistent_overlay METHOD_TABLE @assume_effects :total function Base.objectid(x)
+@quarantine pin"julia/base/runtime_internals.jl:854 objectid" "julia/base/runtime_internals.jl:854 objectid calls the runtime's jl_object_id through a ccall under @_total_meta; WasmGC calls the runtime's function ported, under the same effects, :total: its one stop, the spent identity counter, is fatal, never an exception" Base.objectid @consistent_overlay METHOD_TABLE @assume_effects :total function Base.objectid(x)
     return jl_object_id(x)
 end

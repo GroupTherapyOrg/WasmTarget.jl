@@ -9,12 +9,12 @@
 
 # dart's `_Category` enum, its index order kept: a category at or past `dot` is one character long
 # (_singleCharCategory)
-@quarantine "dart's mini JS parser names each character's category (pkg/js_ast/lib/src/builder.dart:394 _Category)" Core.Symbol const JS_CATEGORIES::Tuple{Vararg{Symbol}} = (
+@quarantine pin"pkg/js_ast/lib/src/builder.dart:394 _Category" "dart's mini JS parser names each character's category (pkg/js_ast/lib/src/builder.dart:394 _Category)" Core.Symbol const JS_CATEGORIES::Tuple{Vararg{Symbol}} = (
     :none, :alpha, :numeric, :string, :symbol, :assignment, :dot, :lparen, :rparen, :lbrace, :rbrace,
     :lsquare, :rsquare, :comma, :query, :colon, :semicolon, :arrow, :hash, :whitespace, :other)
 
 # dart's `_Category._asciiTable`, one category per code unit below 128, as written
-@quarantine "dart's mini JS parser's table of the ASCII code units' categories (pkg/js_ast/lib/src/builder.dart:417 _Category._asciiTable)" Core.Symbol const JS_ASCII_TABLE::Tuple{Vararg{Symbol}} = (
+@quarantine pin"pkg/js_ast/lib/src/builder.dart:417 _Category._asciiTable" "dart's mini JS parser's table of the ASCII code units' categories (pkg/js_ast/lib/src/builder.dart:417 _Category._asciiTable)" Core.Symbol const JS_ASCII_TABLE::Tuple{Vararg{Symbol}} = (
     :other, :other, :other, :other, :other, :other, :other, :other,        # 0-7
     :other, :whitespace, :whitespace, :other, :other, :whitespace,        # 8-13
     :other, :other, :other, :other, :other, :other, :other, :other,        # 14-21
@@ -37,15 +37,15 @@
 
 # dart's operator tables the tokenizer checks a symbol token against (BINARY_PRECEDENCE's keys, 17 an
 # assignment, UNARY_OPERATORS, OPERATORS_THAT_LOOK_LIKE_IDENTIFIERS)
-@quarantine "dart's mini JS parser's binary operators and their precedences (pkg/js_ast/lib/src/builder.dart:489 MiniJsParser.BINARY_PRECEDENCE)" Base.Dict const JS_BINARY_PRECEDENCE::Dict{String,Int} = Dict(
+@quarantine pin"pkg/js_ast/lib/src/builder.dart:489 MiniJsParser.BINARY_PRECEDENCE" "dart's mini JS parser's binary operators and their precedences (pkg/js_ast/lib/src/builder.dart:489 MiniJsParser.BINARY_PRECEDENCE)" Base.Dict const JS_BINARY_PRECEDENCE::Dict{String,Int} = Dict(
     "+=" => 17, "-=" => 17, "*=" => 17, "/=" => 17, "%=" => 17, "^=" => 17, "|=" => 17, "&=" => 17,
     "<<=" => 17, ">>=" => 17, ">>>=" => 17, "**=" => 17, "=" => 17, "||" => 14, "&&" => 13, "|" => 12,
     "^" => 11, "&" => 10, "!=" => 9, "==" => 9, "!==" => 9, "===" => 9, "<" => 8, "<=" => 8, ">=" => 8,
     ">" => 8, "in" => 8, "instanceof" => 8, "<<" => 7, ">>" => 7, ">>>" => 7, "+" => 6, "-" => 6,
     "*" => 5, "/" => 5, "%" => 5, "**" => 4)
-@quarantine "dart's mini JS parser's unary operators (pkg/js_ast/lib/src/builder.dart:528 MiniJsParser.UNARY_OPERATORS)" Base.Set const JS_UNARY_OPERATORS::Set{String} = Set(
+@quarantine pin"pkg/js_ast/lib/src/builder.dart:528 MiniJsParser.UNARY_OPERATORS" "dart's mini JS parser's unary operators (pkg/js_ast/lib/src/builder.dart:528 MiniJsParser.UNARY_OPERATORS)" Base.Set const JS_UNARY_OPERATORS::Set{String} = Set(
     ["++", "--", "+", "-", "~", "!", "typeof", "void", "delete", "await"])
-@quarantine "dart's mini JS parser's operators spelt as identifiers (pkg/js_ast/lib/src/builder.dart:541 MiniJsParser.OPERATORS_THAT_LOOK_LIKE_IDENTIFIERS)" Base.Set const JS_OPERATORS_LIKE_IDENTIFIERS::Set{String} = Set(
+@quarantine pin"pkg/js_ast/lib/src/builder.dart:541 MiniJsParser.OPERATORS_THAT_LOOK_LIKE_IDENTIFIERS" "dart's mini JS parser's operators spelt as identifiers (pkg/js_ast/lib/src/builder.dart:541 MiniJsParser.OPERATORS_THAT_LOOK_LIKE_IDENTIFIERS)" Base.Set const JS_OPERATORS_LIKE_IDENTIFIERS::Set{String} = Set(
     ["typeof", "void", "delete", "in", "instanceof", "await"])
 
 """
@@ -55,7 +55,7 @@ dart's MiniJsParser over `src` (its text as code units), its state as dart keeps
 its category and position, the position read to, and whether a newline was skipped; the constructor
 reads the first token, as dart's does.
 """
-@quarantine "dart's mini JS parser holds its source and its last token (pkg/js_ast/lib/src/builder.dart:462 MiniJsParser)" Core.String mutable struct MiniJsParser
+@quarantine pin"pkg/js_ast/lib/src/builder.dart:462 MiniJsParser" "dart's mini JS parser holds its source and its last token (pkg/js_ast/lib/src/builder.dart:462 MiniJsParser)" Core.String mutable struct MiniJsParser
     const src::Vector{UInt16}
     last_category::Symbol
     last_token::String
@@ -66,18 +66,18 @@ reads the first token, as dart's does.
 end
 
 # a category at or past `dot` is a token of one character (`]]` is two symbols)
-@quarantine "dart's mini JS parser reads a one-character category's token alone (pkg/js_ast/lib/src/builder.dart:481 MiniJsParser._singleCharCategory)" Base.findfirst js_single_char_category(cat::Symbol)::Bool =
+@quarantine pin"pkg/js_ast/lib/src/builder.dart:481 MiniJsParser._singleCharCategory" "dart's mini JS parser reads a one-character category's token alone (pkg/js_ast/lib/src/builder.dart:481 MiniJsParser._singleCharCategory)" Base.findfirst js_single_char_category(cat::Symbol)::Bool =
     findfirst(==(cat), JS_CATEGORIES)::Int >= findfirst(==(:dot), JS_CATEGORIES)::Int
 
-@quarantine "dart's mini JS parser reads a code unit's category from its table (pkg/js_ast/lib/src/builder.dart:550 MiniJsParser._category)" Core.UInt16 js_category(code::UInt16)::Symbol =
+@quarantine pin"pkg/js_ast/lib/src/builder.dart:550 MiniJsParser._category" "dart's mini JS parser reads a code unit's category from its table (pkg/js_ast/lib/src/builder.dart:550 MiniJsParser._category)" Core.UInt16 js_category(code::UInt16)::Symbol =
     code >= length(JS_ASCII_TABLE) ? :other : JS_ASCII_TABLE[Int(code) + 1]
 
 # dart's error: a located rejection naming the parser's message and the position, as MiniJsParserError
 # names them
-@quarantine "dart's mini JS parser throws its error at the position it read to (pkg/js_ast/lib/src/builder.dart:762 MiniJsParser.error)" Core.String js_error(p::MiniJsParser, message::String)::Union{} =
+@quarantine pin"pkg/js_ast/lib/src/builder.dart:762 MiniJsParser.error" "dart's mini JS parser throws its error at the position it read to (pkg/js_ast/lib/src/builder.dart:762 MiniJsParser.error)" Core.String js_error(p::MiniJsParser, message::String)::Union{} =
     reject!(Internal("src/julia/js_parser.jl MiniJsParser: $message at code unit $(p.last_position) of the JS text"), "MiniJsParser")
 
-@quarantine "dart's mini JS parser reads a string literal, its escapes as it reads them (pkg/js_ast/lib/src/builder.dart:580 MiniJsParser.getString)" Core.UInt16 function js_get_string!(p::MiniJsParser, start_position::Int, quote_::UInt16)::String
+@quarantine pin"pkg/js_ast/lib/src/builder.dart:580 MiniJsParser.getString" "dart's mini JS parser reads a string literal, its escapes as it reads them (pkg/js_ast/lib/src/builder.dart:580 MiniJsParser.getString)" Core.UInt16 function js_get_string!(p::MiniJsParser, start_position::Int, quote_::UInt16)::String
     p.position = start_position + 1
     local value = UInt16[]
     while true
@@ -116,7 +116,7 @@ end
 
 # dart's getToken: whitespace and comments skipped, then one token, its category and text. A regexp
 # literal (a token after `/`) is not taken: a `/` is its symbol, as dart reads it before getRegExp
-@quarantine "dart's mini JS parser reads the next token (pkg/js_ast/lib/src/builder.dart:620 MiniJsParser.getToken)" Base.transcode function js_get_token!(p::MiniJsParser)::Nothing
+@quarantine pin"pkg/js_ast/lib/src/builder.dart:620 MiniJsParser.getToken" "dart's mini JS parser reads the next token (pkg/js_ast/lib/src/builder.dart:620 MiniJsParser.getToken)" Base.transcode function js_get_token!(p::MiniJsParser)::Nothing
     local src = p.src
     local n = length(src)
     local at(i::Int) = src[i + 1]   # dart's codeUnitAt, from 0
@@ -205,13 +205,13 @@ end
     return nothing
 end
 
-@quarantine "dart's mini JS parser requires a token of a category (pkg/js_ast/lib/src/builder.dart:725 MiniJsParser._expectCategory)" Core.Symbol function js_expect_category!(p::MiniJsParser, cat::Symbol)::Nothing
+@quarantine pin"pkg/js_ast/lib/src/builder.dart:725 MiniJsParser._expectCategory" "dart's mini JS parser requires a token of a category (pkg/js_ast/lib/src/builder.dart:725 MiniJsParser._expectCategory)" Core.Symbol function js_expect_category!(p::MiniJsParser, cat::Symbol)::Nothing
     cat === p.last_category || js_error(p, "Expected $cat")
     js_get_token!(p)
     return nothing
 end
 
-@quarantine "dart's mini JS parser takes a token of a category when it is next (pkg/js_ast/lib/src/builder.dart:730 MiniJsParser._acceptCategory)" Core.Symbol function js_accept_category!(p::MiniJsParser, cat::Symbol)::Bool
+@quarantine pin"pkg/js_ast/lib/src/builder.dart:730 MiniJsParser._acceptCategory" "dart's mini JS parser takes a token of a category when it is next (pkg/js_ast/lib/src/builder.dart:730 MiniJsParser._acceptCategory)" Core.Symbol function js_accept_category!(p::MiniJsParser, cat::Symbol)::Bool
     cat === p.last_category || return false
     js_get_token!(p)
     return true
@@ -220,7 +220,7 @@ end
 # dart's parsePrimary, the forms an import object's value takes: a name, a string or number, an object
 # or array literal; `true`, `false`, `null` and `this` are names here, their nodes not built. A
 # parenthesized expression, a function, a regexp or a hole rejects, located
-@quarantine "dart's mini JS parser reads a primary expression (pkg/js_ast/lib/src/builder.dart:784 MiniJsParser.parsePrimary)" Base.:(==) function js_parse_primary!(p::MiniJsParser)::Nothing
+@quarantine pin"pkg/js_ast/lib/src/builder.dart:784 MiniJsParser.parsePrimary" "dart's mini JS parser reads a primary expression (pkg/js_ast/lib/src/builder.dart:784 MiniJsParser.parsePrimary)" Base.:(==) function js_parse_primary!(p::MiniJsParser)::Nothing
     local last = p.last_token
     if js_accept_category!(p, :alpha)
         last == "function" && js_error(p, "a function literal, which the import object's reader does not take")
@@ -243,7 +243,7 @@ end
 
 # dart's parseObjectInitializer: its properties until the closing brace, comma separated, a trailing
 # comma taken; the property names, as dart's ObjectInitializer holds them, a hole's `nothing`
-@quarantine "dart's mini JS parser reads an object initializer (pkg/js_ast/lib/src/builder.dart:888 MiniJsParser.parseObjectInitializer)" Core.String function js_parse_object_initializer!(p::MiniJsParser)::Vector{Union{String,Nothing}}
+@quarantine pin"pkg/js_ast/lib/src/builder.dart:888 MiniJsParser.parseObjectInitializer" "dart's mini JS parser reads an object initializer (pkg/js_ast/lib/src/builder.dart:888 MiniJsParser.parseObjectInitializer)" Core.String function js_parse_object_initializer!(p::MiniJsParser)::Vector{Union{String,Nothing}}
     local properties = Union{String,Nothing}[]
     while true
         js_accept_category!(p, :rbrace) && break
@@ -256,7 +256,7 @@ end
 
 # dart's parseMethodDefinitionOrProperty: a name (an identifier, a string, an operator spelt as one,
 # or a hole, `#name`) and, after a colon, its value; a method definition rejects, located
-@quarantine "dart's mini JS parser reads an object initializer's property (pkg/js_ast/lib/src/builder.dart:899 MiniJsParser.parseMethodDefinitionOrProperty)" Core.String function js_parse_method_definition_or_property!(p::MiniJsParser)::Union{String,Nothing}
+@quarantine pin"pkg/js_ast/lib/src/builder.dart:899 MiniJsParser.parseMethodDefinitionOrProperty" "dart's mini JS parser reads an object initializer's property (pkg/js_ast/lib/src/builder.dart:899 MiniJsParser.parseMethodDefinitionOrProperty)" Core.String function js_parse_method_definition_or_property!(p::MiniJsParser)::Union{String,Nothing}
     local identifier = p.last_token
     local property_name::Union{String,Nothing} = identifier
     if js_accept_category!(p, :alpha) || js_accept_category!(p, :string) || js_accept_category!(p, :symbol)
@@ -273,7 +273,7 @@ end
 end
 
 # dart's parseMember: a primary, then its `.name` and `[expression]` accesses (getDotRhs)
-@quarantine "dart's mini JS parser reads a member expression (pkg/js_ast/lib/src/builder.dart:929 MiniJsParser.parseMember)" Base.in function js_parse_member!(p::MiniJsParser)::Nothing
+@quarantine pin"pkg/js_ast/lib/src/builder.dart:929 MiniJsParser.parseMember" "dart's mini JS parser reads a member expression (pkg/js_ast/lib/src/builder.dart:929 MiniJsParser.parseMember)" Base.in function js_parse_member!(p::MiniJsParser)::Nothing
     js_parse_primary!(p)
     while true
         if js_accept_category!(p, :dot)
@@ -298,7 +298,7 @@ end
 # value is a member expression, so parseConditional's `?:`, parseBinary's operators, parseUnaryLow's and
 # parseUnaryHigh's prefixes, parsePostfix's `++`/`--`, parseCall's calls and `new`, and the assignment
 # operators are not ported; each, met after a member expression, rejects, located
-@quarantine "dart's mini JS parser reads an assignment expression, here down to its member expression alone (pkg/js_ast/lib/src/builder.dart:1076 MiniJsParser.parseAssignment)" Base.in function js_parse_assignment!(p::MiniJsParser)::Nothing
+@quarantine pin"pkg/js_ast/lib/src/builder.dart:1076 MiniJsParser.parseAssignment" "dart's mini JS parser reads an assignment expression, here down to its member expression alone (pkg/js_ast/lib/src/builder.dart:1076 MiniJsParser.parseAssignment)" Base.in function js_parse_assignment!(p::MiniJsParser)::Nothing
     p.last_category === :alpha && p.last_token == "new" && js_error(p, "a new expression, which the import object's reader does not take")
     js_parse_member!(p)
     p.last_category in (:comma, :rbrace, :rsquare, :none) ||

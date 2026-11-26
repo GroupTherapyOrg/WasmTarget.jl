@@ -23,24 +23,24 @@ end
 # generator emits one only where its code calls it.
 
 # jl_diverror_exception, raised by checked_sdiv_int and its kin at a zero divisor (runtime_intrinsics.c)
-@quarantine "Julia's runtime raises DivideError where a checked integer division fails" Core.DivideError @noinline throw_divide_error()::Union{} =
+@quarantine unpinned "Julia's runtime raises DivideError where a checked integer division fails" Core.DivideError @noinline throw_divide_error()::Union{} =
     Runtime.Error__throw_with_current_stack_trace(DivideError())
 
 # the ArgumentError Julia's codegen raises where memorynew's element count is negative or its byte size
 # too large for the address width (cgutils.cpp emit_memorynew's error_unless over jlargumenterror_func,
 # genericmemory.c _new_genericmemory_'s jl_exceptionf), its message Julia's
-@quarantine "julia/src/cgutils.cpp:4563 emit_memorynew raises ArgumentError where a GenericMemory's size is invalid, as julia/src/genericmemory.c:55 _new_genericmemory_ does" Core.ArgumentError @noinline throw_invalid_memory_size()::Union{} =
+@quarantine pin"julia/src/cgutils.cpp:4563 emit_memorynew" "julia/src/cgutils.cpp:4563 emit_memorynew raises ArgumentError where a GenericMemory's size is invalid, as julia/src/genericmemory.c:55 _new_genericmemory_ does" Core.ArgumentError @noinline throw_invalid_memory_size()::Union{} =
     Runtime.Error__throw_with_current_stack_trace(ArgumentError("invalid GenericMemory size: the number of elements is either negative or too large for system address width"))
 
 # jl_memory_exception (julia.h), the OutOfMemoryError Julia's allocator throws where a memory's
 # allocation (genericmemory.c jl_alloc_genericmemory_unchecked, through jl_gc_managed_malloc) cannot be
 # satisfied
-@quarantine "julia/src/genericmemory.c:30 jl_alloc_genericmemory_unchecked raises Julia's OutOfMemoryError where a memory's allocation cannot be satisfied" Core.OutOfMemoryError @noinline throw_out_of_memory()::Union{} =
+@quarantine pin"julia/src/genericmemory.c:30 jl_alloc_genericmemory_unchecked" "julia/src/genericmemory.c:30 jl_alloc_genericmemory_unchecked raises Julia's OutOfMemoryError where a memory's allocation cannot be satisfied" Core.OutOfMemoryError @noinline throw_out_of_memory()::Union{} =
     Runtime.Error__throw_with_current_stack_trace(OutOfMemoryError())
 
 # jl_atomic_error, raised by Julia's codegen (cgutils.cpp emit_atomic_error) where an access's atomic
 # ordering does not fit its field, with codegen's message
-@quarantine "julia/src/rtutils.c:181 jl_atomic_error raises ConcurrencyViolationError with codegen's message" Core.ConcurrencyViolationError @noinline throw_atomic_error(msg::String)::Union{} =
+@quarantine pin"julia/src/rtutils.c:181 jl_atomic_error" "julia/src/rtutils.c:181 jl_atomic_error raises ConcurrencyViolationError with codegen's message" Core.ConcurrencyViolationError @noinline throw_atomic_error(msg::String)::Union{} =
     Runtime.Error__throw_with_current_stack_trace(ConcurrencyViolationError(msg))
 
 # jl_error (julia/src/rtutils.c:35), which the builtins raise where Julia's runtime refuses an operation
@@ -50,7 +50,7 @@ end
     Runtime.Error__throw_with_current_stack_trace(ErrorException(msg))
 
 # jl_undefref_exception, raised where an undefined field or array element is read (rtutils.c)
-@quarantine "Julia's runtime raises UndefRefError where an undefined reference is read" Core.UndefRefError @noinline throw_undef_ref_error()::Union{} =
+@quarantine unpinned "Julia's runtime raises UndefRefError where an undefined reference is read" Core.UndefRefError @noinline throw_undef_ref_error()::Union{} =
     Runtime.Error__throw_with_current_stack_trace(UndefRefError())
 
 # jl_undefined_var_error, which Julia's codegen calls where a variable is read before it is assigned
@@ -59,18 +59,18 @@ end
 # constructor, whose world is jl_get_tls_world_age's (julia/base/boot.jl UndefVarError). dart raises a
 # late local read before its write in dart code (sdk/lib/_internal/wasm/common/error_utils.dart:188
 # _throwLateErrorLocalNI, LateError.localNI); Julia's error is its runtime's
-@quarantine "julia/src/rtutils.c:142 jl_undefined_var_error raises UndefVarError with the variable, the task's world age and the scope" Core.UndefVarError @noinline jl_undefined_var_error(var::Symbol, @nospecialize(scope::Any))::Union{} =
+@quarantine pin"julia/src/rtutils.c:142 jl_undefined_var_error" "julia/src/rtutils.c:142 jl_undefined_var_error raises UndefVarError with the variable, the task's world age and the scope" Core.UndefVarError @noinline jl_undefined_var_error(var::Symbol, @nospecialize(scope::Any))::Union{} =
     Runtime.Error__throw_with_current_stack_trace(UndefVarError(var, scope))
 
 # jl_bounds_error_int, raised with the indexed value and the integer index where a bounds check fails
 # (rtutils.c); BoundsError's constructor specializes on its index, so the index is an Int, as the C
 # runtime's size_t
-@quarantine "Julia's runtime raises BoundsError with the value and the index where a bounds check fails" Core.BoundsError @noinline throw_bounds_error(@nospecialize(a::Any), i::Int)::Union{} =
+@quarantine unpinned "Julia's runtime raises BoundsError with the value and the index where a bounds check fails" Core.BoundsError @noinline throw_bounds_error(@nospecialize(a::Any), i::Int)::Union{} =
     Runtime.Error__throw_with_current_stack_trace(BoundsError(a, i))
 
 # jl_has_no_field_error (julia/src/rtutils.c:169), raised by jl_field_index (julia/src/datatype.c:1781)
 # where a type has no field of the name: FieldError of the type and the name
-@quarantine "julia/src/rtutils.c:169 jl_has_no_field_error raises FieldError with the type and the field's name" Core.FieldError @noinline throw_field_error(t::DataType, fld::Symbol)::Union{} =
+@quarantine pin"julia/src/rtutils.c:169 jl_has_no_field_error" "julia/src/rtutils.c:169 jl_has_no_field_error raises FieldError with the type and the field's name" Core.FieldError @noinline throw_field_error(t::DataType, fld::Symbol)::Union{} =
     Runtime.Error__throw_with_current_stack_trace(FieldError(t, fld))
 
 # jl_type_error (julia/src/rtutils.c:135), raised by jl_new_structv (julia/src/datatype.c:1639) where a
@@ -83,7 +83,7 @@ end
 # Julia's inference proved no method matches a call: MethodError of the function and its arguments'
 # tuple (jl_f_tuple). Julia records the task's world age; a compiled program runs in no session's world,
 # so the error carries Base's own default, MethodError's two-argument constructor's
-@quarantine "julia/src/gf.c:3057 jl_method_error raises MethodError with the function and the tuple of its arguments" Core.MethodError @noinline throw_method_error(@nospecialize(f::Any), @nospecialize(args::Tuple))::Union{} =
+@quarantine pin"julia/src/gf.c:3057 jl_method_error" "julia/src/gf.c:3057 jl_method_error raises MethodError with the function and the tuple of its arguments" Core.MethodError @noinline throw_method_error(@nospecialize(f::Any), @nospecialize(args::Tuple))::Union{} =
     Runtime.Error__throw_with_current_stack_trace(MethodError(f, args))
 
 # Julia's egal of two values of any classes, which Julia's codegen calls for `===` where it cannot
@@ -91,7 +91,7 @@ end
 # type tags, then jl_egal__unboxed): jl_egal_ (julia.h:1885), its pointer and tag tests and
 # jl_egal__unboxed_'s switch over the value's class, the intrinsifier's egal arm (wasm_egal), each
 # class's arm builtins.c's own. A root of every closed world, as every function of this section
-@quarantine "julia/src/julia.h:1885 jl_egal_ compares two values by their pointers, their type tags and then jl_egal__unboxed_'s arm for their class" Core.Bool @noinline jl_egal(@nospecialize(a::Any), @nospecialize(b::Any))::Bool =
+@quarantine pin"julia/src/julia.h:1885 jl_egal_" "julia/src/julia.h:1885 jl_egal_ compares two values by their pointers, their type tags and then jl_egal__unboxed_'s arm for their class" Core.Bool @noinline jl_egal(@nospecialize(a::Any), @nospecialize(b::Any))::Bool =
     wasm_egal(a, b)
 
 """
@@ -102,20 +102,20 @@ classes (src/intrinsics.jl, the egal arm): each class's arm Julia's own (builtin
 jl_egal__bitstag, :100 compare_fields), a field that holds a reference compared by jl_egal again.
 Natively Julia's `===`.
 """
-@quarantine "julia/src/builtins.c:237 jl_egal__unboxed compares two values of one type by that type's arm; WasmTarget's arm is a class-id switch the intrinsifier writes" Core.:(===) @noinline wasm_egal(@nospecialize(a::Any), @nospecialize(b::Any))::Bool = a === b
+@quarantine pin"julia/src/builtins.c:237 jl_egal__unboxed" "julia/src/builtins.c:237 jl_egal__unboxed compares two values of one type by that type's arm; WasmTarget's arm is a class-id switch the intrinsifier writes" Core.:(===) @noinline wasm_egal(@nospecialize(a::Any), @nospecialize(b::Any))::Bool = a === b
 
 # Julia's type of a type tag: a value's header holds its tag, the type read from the table of tags'
 # types (julia.h:971 jl_to_typeof over jl_small_typeof). A class id is WasmTarget's tag of every
 # class, its type read from the table of each class's type value, translator.classes by id; the code
 # generator lowers the call to that read
 # (src/intrinsics.jl), and natively no tag exists, so the body raises
-@quarantine "julia/src/julia.h:971 jl_to_typeof reads a type tag's type from the table of tags' types (jl_small_typeof)" Core.DataType @noinline jl_to_typeof(tag::Int32) =
+@quarantine pin"julia/src/julia.h:971 jl_to_typeof" "julia/src/julia.h:971 jl_to_typeof reads a type tag's type from the table of tags' types (jl_small_typeof)" Core.DataType @noinline jl_to_typeof(tag::Int32) =
     _wasm_only(Core.DataType)
 
 # JL_TYPECHK (julia.h), the check Julia's isa and typeassert builtins make of their type argument
 # (builtins.c:584 in jl_f_isa, :591 in jl_f_typeassert): the value itself where it is a type, else
 # Julia's TypeError naming the builtin; the code generator calls it before a run-time type test
-@quarantine "julia/src/builtins.c:581 jl_f_isa checks its type argument (JL_TYPECHK), raising TypeError naming the builtin, as jl_f_typeassert does" Core.TypeError @noinline jl_typechk_type(fname::Symbol, @nospecialize(t::Any))::Type =
+@quarantine pin"julia/src/builtins.c:581 jl_f_isa" "julia/src/builtins.c:581 jl_f_isa checks its type argument (JL_TYPECHK), raising TypeError naming the builtin, as jl_f_typeassert does" Core.TypeError @noinline jl_typechk_type(fname::Symbol, @nospecialize(t::Any))::Type =
     jl_typetagis(t, Type) ? Runtime.unsafe_cast(Type, t) : Runtime.Error__throw_with_current_stack_trace(TypeError(fname, "", Type, t))
 
 # A tuple's field tested as Julia tests the tuple: jl_isa(x, T) of a tuple is jl_subtype(jl_typeof(x), T)
@@ -125,13 +125,13 @@ Natively Julia's `===`.
 # (Int64, 1) isa Tuple{Type{Int64},Int64} is false. Any other value is a subtype by its type exactly
 # where jl_isa holds it. The field test of Record._checkRecordType (src/intrinsics.jl), where dart calls
 # _isSubtype.
-@quarantine "julia/src/subtype.c:1348 subtype_tuple tests a tuple's fields by their types, each field's jl_typeof, so a type value in a field by its kind" Core.Bool @noinline jl_subtype_typeof(@nospecialize(o::Any), t::Type)::Bool =
+@quarantine pin"julia/src/subtype.c:1348 subtype_tuple" "julia/src/subtype.c:1348 subtype_tuple tests a tuple's fields by their types, each field's jl_typeof, so a type value in a field by its kind" Core.Bool @noinline jl_subtype_typeof(@nospecialize(o::Any), t::Type)::Bool =
     jl_typetagis(o, Type) ? Runtime._TypeUniverse_is_subtype(jl_to_typeof(Runtime.ClassID_get_id(o)), t) : Runtime._is_subtype(o, t)
 
 # jl_egal of two host references, a field of a class the egal arm compares (src/intrinsics.jl): wasm
 # reads no externref's bits, so the two are compared as dart compares two JS values, JSValue's ==, by
 # areEqualInJS, JS's === (Runtime.are_equal_in_js)
-@quarantine "sdk/lib/_internal/wasm/js_common/js_helper.dart:42 JSValue.== compares two JS values by areEqualInJS, JS's ===, where Julia's jl_egal compares a field's bits (julia/src/builtins.c:100 compare_fields), which wasm cannot read of a host reference" Core.Bool @noinline jl_egal_host_references(l::WasmExternRef, r::WasmExternRef)::Bool =
+@quarantine pin"sdk/lib/_internal/wasm/js_common/js_helper.dart:42 JSValue.==" "sdk/lib/_internal/wasm/js_common/js_helper.dart:42 JSValue.== compares two JS values by areEqualInJS, JS's ===, where Julia's jl_egal compares a field's bits (julia/src/builtins.c:100 compare_fields), which wasm cannot read of a host reference" Core.Bool @noinline jl_egal_host_references(l::WasmExternRef, r::WasmExternRef)::Bool =
     Runtime.are_equal_in_js(l, r)
 
 # compiler-rt's 128-bit division and remainder (compiler-rt/lib/builtins at the llvm pin), the libcalls
@@ -143,7 +143,7 @@ Natively Julia's `===`.
 
 # The 128-bit dividend (u1, u0) divided by v where the quotient fits in 64 bits, and the remainder
 # (Hacker's Delight's divlu: Knuth's Algorithm D in 32-bit digits)
-@quarantine "compiler-rt/lib/builtins/udivmodti4.c:23 udiv128by64to64default divides a 128-bit dividend by a 64-bit divisor in 32-bit digits, Knuth's Algorithm D" Core.UInt64 @noinline function udiv128by64to64default(u1::UInt64, u0::UInt64, v::UInt64)::Tuple{UInt64,UInt64}
+@quarantine pin"compiler-rt/lib/builtins/udivmodti4.c:23 udiv128by64to64default" "compiler-rt/lib/builtins/udivmodti4.c:23 udiv128by64to64default divides a 128-bit dividend by a 64-bit divisor in 32-bit digits, Knuth's Algorithm D" Core.UInt64 @noinline function udiv128by64to64default(u1::UInt64, u0::UInt64, v::UInt64)::Tuple{UInt64,UInt64}
     local n_udword_bits = 64
     local b = UInt64(1) << (n_udword_bits ÷ 2)   # Number base (32 bits)
     local un64::UInt64 = u1; local un10::UInt64 = u0
@@ -188,11 +188,11 @@ Natively Julia's `===`.
 end
 
 # The 128-by-64 step: x86-64's divq where the target is x86-64, udiv128by64to64default elsewhere, wasm among them
-@quarantine "compiler-rt/lib/builtins/udivmodti4.c:84 udiv128by64to64 takes udiv128by64to64default on a target other than x86-64" Core.UInt64 @noinline udiv128by64to64(u1::UInt64, u0::UInt64, v::UInt64)::Tuple{UInt64,UInt64} =
+@quarantine pin"compiler-rt/lib/builtins/udivmodti4.c:84 udiv128by64to64" "compiler-rt/lib/builtins/udivmodti4.c:84 udiv128by64to64 takes udiv128by64to64default on a target other than x86-64" Core.UInt64 @noinline udiv128by64to64(u1::UInt64, u0::UInt64, v::UInt64)::Tuple{UInt64,UInt64} =
     udiv128by64to64default(u1, u0, v)
 
 # a / b and a % b
-@quarantine "compiler-rt/lib/builtins/udivmodti4.c:100 __udivmodti4 is the quotient and remainder of two 128-bit integers, a 64-bit divisor through the 128-by-64 step, a wider one by shift and subtract" Core.UInt128 @noinline function udivmodti4(a::UInt128, b::UInt128)::Tuple{UInt128,UInt128}
+@quarantine pin"compiler-rt/lib/builtins/udivmodti4.c:100 __udivmodti4" "compiler-rt/lib/builtins/udivmodti4.c:100 __udivmodti4 is the quotient and remainder of two 128-bit integers, a 64-bit divisor through the 128-by-64 step, a wider one by shift and subtract" Core.UInt128 @noinline function udivmodti4(a::UInt128, b::UInt128)::Tuple{UInt128,UInt128}
     local n_utword_bits = 128
     local dividend = a
     local divisor = b
@@ -238,13 +238,13 @@ end
 end
 
 # a / b
-@quarantine "compiler-rt/lib/builtins/udivti3.c:19 __udivti3 is __udivmodti4's quotient" Core.UInt128 @noinline udivti3(a::UInt128, b::UInt128)::UInt128 = udivmodti4(a, b)[1]
+@quarantine pin"compiler-rt/lib/builtins/udivti3.c:19 __udivti3" "compiler-rt/lib/builtins/udivti3.c:19 __udivti3 is __udivmodti4's quotient" Core.UInt128 @noinline udivti3(a::UInt128, b::UInt128)::UInt128 = udivmodti4(a, b)[1]
 
 # a % b
-@quarantine "compiler-rt/lib/builtins/umodti3.c:19 __umodti3 is __udivmodti4's remainder" Core.UInt128 @noinline umodti3(a::UInt128, b::UInt128)::UInt128 = udivmodti4(a, b)[2]
+@quarantine pin"compiler-rt/lib/builtins/umodti3.c:19 __umodti3" "compiler-rt/lib/builtins/umodti3.c:19 __umodti3 is __udivmodti4's remainder" Core.UInt128 @noinline umodti3(a::UInt128, b::UInt128)::UInt128 = udivmodti4(a, b)[2]
 
 # a / b, signed: the magnitudes' quotient, negated where the signs differ
-@quarantine "compiler-rt/lib/builtins/divti3.c:24 __divti3 returns compiler-rt/lib/builtins/int_div_impl.inc:73 __divXi3, the magnitudes' quotient (COMPUTE_UDIV, __udivmodti4's) with the operands' signs' xor" Core.Int128 @noinline function divti3(a::Int128, b::Int128)::Int128
+@quarantine pin"compiler-rt/lib/builtins/divti3.c:24 __divti3" "compiler-rt/lib/builtins/divti3.c:24 __divti3 returns compiler-rt/lib/builtins/int_div_impl.inc:73 __divXi3, the magnitudes' quotient (COMPUTE_UDIV, __udivmodti4's) with the operands' signs' xor" Core.Int128 @noinline function divti3(a::Int128, b::Int128)::Int128
     local N = 127
     local s_a = a >> N   # s_a = a < 0 ? -1 : 0
     local s_b = b >> N   # s_b = b < 0 ? -1 : 0
@@ -255,7 +255,7 @@ end
 end
 
 # a % b, signed: the magnitudes' remainder, the dividend's sign
-@quarantine "compiler-rt/lib/builtins/modti3.c:24 __modti3 returns compiler-rt/lib/builtins/int_div_impl.inc:85 __modXi3, the magnitudes' remainder (ASSIGN_UMOD, __udivmodti4's) with the dividend's sign" Core.Int128 @noinline function modti3(a::Int128, b::Int128)::Int128
+@quarantine pin"compiler-rt/lib/builtins/modti3.c:24 __modti3" "compiler-rt/lib/builtins/modti3.c:24 __modti3 returns compiler-rt/lib/builtins/int_div_impl.inc:85 __modXi3, the magnitudes' remainder (ASSIGN_UMOD, __udivmodti4's) with the dividend's sign" Core.Int128 @noinline function modti3(a::Int128, b::Int128)::Int128
     local N = 127
     local s = b >> N   # s = b < 0 ? -1 : 0
     local b_u = reinterpret(UInt128, b ⊻ s) + reinterpret(UInt128, -s)   # negate if s == -1
@@ -480,20 +480,20 @@ program makes it. Natively Julia's own list holds the entries, so this one is ne
 # a kind's one class, or every kind for Type), the intrinsifier's class-id range check. The runtime's
 # type code tests a type value's kind by it, holding no type test of its own (`isa`), as dart's type.dart
 # tests by ClassID.getID. Natively no tag exists, so the body raises
-@quarantine "julia/src/julia.h:136 jl_typetagis tests a value's type tag" Core.Bool @noinline jl_typetagis(@nospecialize(x::Any), ::Type{K}) where {K} =
+@quarantine pin"julia/src/julia.h:136 jl_typetagis" "julia/src/julia.h:136 jl_typetagis tests a value's type tag" Core.Bool @noinline jl_typetagis(@nospecialize(x::Any), ::Type{K}) where {K} =
     _wasm_only(Bool)
 
 # Julia's test of whether a DataType is a tuple type (julia.h:1837 jl_is_tuple_type, its name the tuple's
 # type name): the class the type value denotes, its classId, against the tuple classes of the closed
 # world (each class that is a Tuple type), the intrinsifier's class-id range check; dart's
 # `isRecord`, its _RecordType's class id. Natively no class id exists, so the body raises
-@quarantine "julia/src/julia.h:1837 jl_is_tuple_type tests whether a type is a tuple type" Core.Bool @noinline jl_is_tuple_type(t::DataType) =
+@quarantine pin"julia/src/julia.h:1837 jl_is_tuple_type" "julia/src/julia.h:1837 jl_is_tuple_type tests whether a type is a tuple type" Core.Bool @noinline jl_is_tuple_type(t::DataType) =
     _wasm_only(Bool)
 
 # Julia's test of whether a DataType is a Type{X} (julia.h:1855 jl_is_type_type, its name Type's): the
 # class the type value denotes, its classId, against the closed world's Type{X} classes, the
 # intrinsifier's class-id range check. Natively no class id exists, so the body raises
-@quarantine "julia/src/julia.h:1855 jl_is_type_type tests whether a type is a Type{X}" Core.Bool @noinline jl_is_type_type(t::DataType) =
+@quarantine pin"julia/src/julia.h:1855 jl_is_type_type" "julia/src/julia.h:1855 jl_is_type_type tests whether a type is a Type{X}" Core.Bool @noinline jl_is_type_type(t::DataType) =
     _wasm_only(Bool)
 
 """
@@ -503,7 +503,7 @@ Records a type test against a type value only run time knows (types.dart's `_isS
 of a value, src/runtime/common/type.jl), at `at`, and on the first one registers the link-time check
 of the program's type values (`check_run_time_type_values`).
 """
-@quarantine "dart patches a read once every use is known, in a linking action (pkg/dart2wasm/lib/constants.dart:1860 _ConstantAccessor.loadConstant); a run-time type test is checked against the program's type values once every function is generated" Base.isempty function run_time_type_test!(translator, at::String)::Nothing
+@quarantine pin"pkg/dart2wasm/lib/constants.dart:1860 _ConstantAccessor.loadConstant" "dart patches a read once every use is known, in a linking action (pkg/dart2wasm/lib/constants.dart:1860 _ConstantAccessor.loadConstant); a run-time type test is checked against the program's type values once every function is generated" Base.isempty function run_time_type_test!(translator, at::String)::Nothing
     local tests = translator.types[].rtt[].run_time_type_tests
     isempty(tests) && push!(translator.linking_actions, () -> check_run_time_type_values(translator))
     push!(tests, at)
@@ -523,7 +523,7 @@ a Vararg field, a length only run time knows, is Julia's own, Unquarantined. The
 reading the code generator's general arm (types.jl, a constant type) and the link-time walk (a type only
 run time knows) share.
 """
-@quarantine "julia/src/subtype.c:2511 jl_isa decides a UnionAll by its environment, which the runtime does not port" Base.has_free_typevars function run_time_type_gap(@nospecialize(T::Type))::Union{Nothing,Rejection}
+@quarantine pin"julia/src/subtype.c:2511 jl_isa" "julia/src/subtype.c:2511 jl_isa decides a UnionAll by its environment, which the runtime does not port" Base.has_free_typevars function run_time_type_gap(@nospecialize(T::Type))::Union{Nothing,Rejection}
     (T isa UnionAll || Base.has_free_typevars(T)) &&
         return Unquarantined("src/julia/runtime/rtutils.jl run_time_type_gap: the type $T, a UnionAll or a free TypeVar, which a run-time type test cannot decide (julia/src/subtype.c:1419, its environment)")
     if T isa Union
@@ -592,7 +592,7 @@ the link-time check), then the value checked a type as Julia's isa and typeasser
 (jl_typechk_type, JL_TYPECHK naming `fname`). The type's own value where dart's makeType builds a type
 from the type parameters in scope (types.dart:349).
 """
-@quarantine "julia/src/builtins.c:581 jl_f_isa checks its type argument (JL_TYPECHK); dart's makeType builds a type from its parameters in scope (pkg/dart2wasm/lib/types.dart:349 Types.makeType)" Base.string function run_time_type_value!(code_gen, value::NirValue, fname::Symbol)::Nothing
+@quarantine pin"julia/src/builtins.c:581 jl_f_isa" "julia/src/builtins.c:581 jl_f_isa checks its type argument (JL_TYPECHK); dart's makeType builds a type from its parameters in scope (pkg/dart2wasm/lib/types.dart:349 Types.makeType)" Base.string function run_time_type_value!(code_gen, value::NirValue, fname::Symbol)::Nothing
     local t = code_gen.translator
     local at = "$(julia_text(code_gen.enclosing_member))"
     run_time_type_test!(t, at)
@@ -618,7 +618,7 @@ statement's cache, which run_time_type_gap checks at its statement (src/julia/cl
 An apply_type operand compile time knows is that cache's key, never a run-time value, so the walk passes
 over it as over the type an isa or a typeassert names as a literal.
 """
-@quarantine "julia/src/subtype.c:2511 jl_isa decides a UnionAll by subtyping with an environment, which the runtime does not port; dart patches what every use needs once every use is known (pkg/dart2wasm/lib/constants.dart:1860 _ConstantAccessor.loadConstant)" Base.IdSet function check_run_time_type_values(translator)::Nothing
+@quarantine pin"julia/src/subtype.c:2511 jl_isa" "julia/src/subtype.c:2511 jl_isa decides a UnionAll by subtyping with an environment, which the runtime does not port; dart patches what every use needs once every use is known (pkg/dart2wasm/lib/constants.dart:1860 _ConstantAccessor.loadConstant)" Base.IdSet function check_run_time_type_values(translator)::Nothing
     local at = first(translator.types[].rtt[].run_time_type_tests)
     local seen = Base.IdSet{Any}()
     local visit(@nospecialize(v)) = begin
@@ -676,7 +676,7 @@ The MethodInstance of the runtime's function `f` in the closed world `world`: an
 dart2wasm's KernelNodes names by `index.getProcedure`. None, or more than one, is WasmTarget's own
 defect.
 """
-@quarantine "the runtime's method is found among the closed world's CodeInstances, by its Method" Core.MethodInstance function nir_runtime_member(world::NirWorld, f::Function, at::String)::Core.MethodInstance
+@quarantine unpinned "the runtime's method is found among the closed world's CodeInstances, by its Method" Core.MethodInstance function nir_runtime_member(world::NirWorld, f::Function, at::String)::Core.MethodInstance
     local ms = methods(f)
     local hits = Core.MethodInstance[b.ci.def for b in world if b.ci.def.def in ms]
     length(hits) == 1 || reject!(Internal("src/julia/runtime/rtutils.jl nir_runtime_member: $f has $(length(hits)) specializations in the closed world, not one"), at)
@@ -686,16 +686,16 @@ end
 # the exception tag's export name (src/tags.jl _define_dart_exception_tag): a host matches a Julia
 # exception by the tag the main module exports under it. `$` keeps it apart from every export a
 # program names, a Julia identifier holding none
-@quarantine "dart exports no tag for its host; a Julia program's host matches its exceptions by the exported tag" Core.String const EXCEPTION_TAG_EXPORT::Core.String = "\$exceptionTag"
+@quarantine unpinned "dart exports no tag for its host; a Julia program's host matches its exceptions by the exported tag" Core.String const EXCEPTION_TAG_EXPORT::Core.String = "\$exceptionTag"
 
 # the module of the JS string builtins (`builtins: ['js-string']`, the JS String Builtins proposal's
 # `wasm:js-string`), which the engine supplies or the JS runtime's polyfill stands in for
 # (src/js/runtime_generator.jl's JS_POLYFILL_IMPORT): one name for both
-@quarantine "dart's runtime imports its JS string polyfill (pkg/dart2wasm/lib/js/runtime_blob.dart:126 jsStringPolyfill) under the JS string builtins' module name (runtime_generator.dart:150); WasmTarget's host imports read the same name" Core.String const JS_STRING_BUILTINS_MODULE::Core.String = "wasm:js-string"
+@quarantine pin"pkg/dart2wasm/lib/js/runtime_blob.dart:126 jsStringPolyfill" "dart's runtime imports its JS string polyfill (pkg/dart2wasm/lib/js/runtime_blob.dart:126 jsStringPolyfill) under the JS string builtins' module name (runtime_generator.dart:150); WasmTarget's host imports read the same name" Core.String const JS_STRING_BUILTINS_MODULE::Core.String = "wasm:js-string"
 
 # the standalone embedder's module, which every import of dart's standalone embedder library names
 # (`@pragma("wasm:import", "dart.<name>")`), its functions the embedder's own
-@quarantine "dart's standalone embedder library names its imports' module (sdk/lib/_internal/wasm/standalone/embedder.dart:238 stackTraceGetCurrent); WasmTarget's host imports read the same name" Core.String const STANDALONE_EMBEDDER_MODULE::Core.String = "dart"
+@quarantine pin"sdk/lib/_internal/wasm/standalone/embedder.dart:238 stackTraceGetCurrent" "dart's standalone embedder library names its imports' module (sdk/lib/_internal/wasm/standalone/embedder.dart:238 stackTraceGetCurrent); WasmTarget's host imports read the same name" Core.String const STANDALONE_EMBEDDER_MODULE::Core.String = "dart"
 
 # the library a port's foreign call names for dart's inline JS (`JS<T>(code, ...)` of dart:_js_helper):
 # the runtime's internal interop module, whose name the interop namer gives at the import
@@ -703,7 +703,7 @@ end
 # (nir_js_sites), as Julia's own llvmcall carries its IR text as an argument of the call
 # (julia/src/ccall.cpp:721 emit_llvmcall). Only the runtime's ports may name it, as only dart's internal
 # libraries may import dart:_js_helper (nir_foreign_import)
-@quarantine "dart's inline JS is an import of the internal interop module (pkg/dart2wasm/lib/namer.dart:108 _InteropHelperMemberNamer.interopModuleName); a Julia port names it in its foreign call" Core.String const JS_INTEROP_LIBRARY::Core.String = "dart2wasm"
+@quarantine pin"pkg/dart2wasm/lib/namer.dart:108 _InteropHelperMemberNamer.interopModuleName" "dart's inline JS is an import of the internal interop module (pkg/dart2wasm/lib/namer.dart:108 _InteropHelperMemberNamer.interopModuleName); a Julia port names it in its foreign call" Core.String const JS_INTEROP_LIBRARY::Core.String = "dart2wasm"
 
 """
     nir_statement_frame(body, k) -> Tuple{Method,Int}
@@ -712,7 +712,7 @@ Where statement `k` of `body` was written: the innermost frame of its debug info
 reading, IRShow's buildLineInfoNode), the inlined callee's where Julia inlined it, else the body's own
 method's: its method and line.
 """
-@quarantine "Julia records where each statement was written, inlined frames innermost last (julia/Compiler/src/ssair/show.jl:405 buildLineInfoNode)" Core.Method function nir_statement_frame(body::NirBody, k::Int)::Tuple{Method,Int}
+@quarantine pin"julia/Compiler/src/ssair/show.jl:405 buildLineInfoNode" "Julia records where each statement was written, inlined frames innermost last (julia/Compiler/src/ssair/show.jl:405 buildLineInfoNode)" Core.Method function nir_statement_frame(body::NirBody, k::Int)::Tuple{Method,Int}
     local frames = Base.IRShow.buildLineInfoNode(body.ci.debuginfo, body.ci.def, k)
     local own = body.ci.def.def::Method
     isempty(frames) && return (own, Int(own.line))
@@ -728,7 +728,7 @@ An inline JS site's key, where it was written: its method, by its module, name a
 methods of one name are two), and its line, `"<module>.<name><signature>:<line>"`. Julia's debug info
 records no column, so two sites on one line are one key (nir_js_sites refuses two codes at one).
 """
-@quarantine "dart makes one inline JS procedure per written site (pkg/dart2wasm/lib/js/inline_expander.dart:21 InlineExpander.expand); Julia records a statement's method and line in its debug info, no column" Core.Method nir_js_site(m::Method, line::Int)::String =
+@quarantine pin"pkg/dart2wasm/lib/js/inline_expander.dart:21 InlineExpander.expand" "dart makes one inline JS procedure per written site (pkg/dart2wasm/lib/js/inline_expander.dart:21 InlineExpander.expand); Julia records a statement's method and line in its debug info, no column" Core.Method nir_js_site(m::Method, line::Int)::String =
     "$(m.module).$(m.name)$(Base.unwrap_unionall(m.sig).parameters[2:end]):$line"
 
 """
@@ -743,7 +743,7 @@ written, the innermost frame of its debug info (nir_statement_frame), its method
 `name` is its method's, the base of its import's name; `code` its symbol. Two codes at one site, two
 sites written on one line, refuse, located.
 """
-@quarantine "dart makes one inline JS procedure per written site (pkg/dart2wasm/lib/js/inline_expander.dart:21 InlineExpander.expand); Julia records a site's method and line in its debug info" Core.String function nir_js_sites(world::NirWorld, mi::Core.MethodInstance)::Vector{Tuple{String,String,String}}
+@quarantine pin"pkg/dart2wasm/lib/js/inline_expander.dart:21 InlineExpander.expand" "dart makes one inline JS procedure per written site (pkg/dart2wasm/lib/js/inline_expander.dart:21 InlineExpander.expand); Julia records a site's method and line in its debug info" Core.String function nir_js_sites(world::NirWorld, mi::Core.MethodInstance)::Vector{Tuple{String,String,String}}
     local body = nir_body_of(world, mi)
     local out = Tuple{String,String,String}[]
     for (k, st) in enumerate(body.stmts)
@@ -778,7 +778,7 @@ host library), the JS string builtins' module, which the engine or the runtime's
 (STANDALONE_EMBEDDER_MODULE), which a module compiled without JavaScript imports from. Read once
 (HOST_MODULES).
 """
-@quarantine "Julia's foreign call names a library; the host's libraries are the import object dart's runtime blob declares (its baseImports in pkg/dart2wasm/lib/js/runtime_blob.dart:5 jsRuntimeBlobTemplate), read by dart's own JS parser from the template's one statement declaring it, found by that declaration's text: the template is a module with a class, no program the mini parser takes whole, so the statement is not read as its parseVariableDeclarationList reads one (pkg/js_ast/lib/src/builder.dart:1142 MiniJsParser.parseVariableDeclarationList)" Base.findfirst function host_modules()::Vector{String}
+@quarantine pin"pkg/dart2wasm/lib/js/runtime_blob.dart:5 jsRuntimeBlobTemplate" "Julia's foreign call names a library; the host's libraries are the import object dart's runtime blob declares (its baseImports in pkg/dart2wasm/lib/js/runtime_blob.dart:5 jsRuntimeBlobTemplate), read by dart's own JS parser from the template's one statement declaring it, found by that declaration's text: the template is a module with a class, no program the mini parser takes whole, so the statement is not read as its parseVariableDeclarationList reads one (pkg/js_ast/lib/src/builder.dart:1142 MiniJsParser.parseVariableDeclarationList)" Base.findfirst function host_modules()::Vector{String}
     local template = Dart2Wasm.js_runtime_blob_template[]
     local vars = Dict{String,String}(p.variable => (p.variable == "INTERNAL_IMPORTS_MODULE_NAME" ? "#$(p.variable)" : "")
                                      for p in template._parts if p isa Dart2Wasm._TemplateVariablePart)
@@ -795,7 +795,7 @@ end
 
 # the host's modules, read once from the template (host_modules), as dart's runtime generator holds
 # its template once
-@quarantine "the host's modules are read once, the template being fixed (pkg/dart2wasm/lib/js/runtime_blob.dart:5 jsRuntimeBlobTemplate)" Core.String const HOST_MODULES = Late{Vector{String}}(late"dart2wasm/lib/js/runtime_blob.dart:5 jsRuntimeBlobTemplate", host_modules)
+@quarantine pin"pkg/dart2wasm/lib/js/runtime_blob.dart:5 jsRuntimeBlobTemplate" "the host's modules are read once, the template being fixed (pkg/dart2wasm/lib/js/runtime_blob.dart:5 jsRuntimeBlobTemplate)" Core.String const HOST_MODULES = Late{Vector{String}}(late"dart2wasm/lib/js/runtime_blob.dart:5 jsRuntimeBlobTemplate", host_modules)
 
 """
     NirForeignImport
@@ -817,7 +817,7 @@ precedent(julia: src/ccall.cpp:1980 function_sig_t::emit_a_ccall, which declares
 the module by its symbol and the call site's signature, getOrInsertFunction). Julia's differs: a
 foreign call is a statement, not a declaration, so each call site names its import.
 """
-@quarantine "Julia's ccall lowering reads a foreign call's callee at its call site (julia/src/ccall.cpp:1419 emit_ccall); dart2wasm's ffi transformer makes the callee a wasm:import procedure (pkg/dart2wasm/lib/ffi_native_transformer.dart:160 WasmFfiNativeTransformer.visitProcedure)" Core.Type struct NirForeignImport
+@quarantine pin"julia/src/ccall.cpp:1419 emit_ccall" "Julia's ccall lowering reads a foreign call's callee at its call site (julia/src/ccall.cpp:1419 emit_ccall); dart2wasm's ffi transformer makes the callee a wasm:import procedure (pkg/dart2wasm/lib/ffi_native_transformer.dart:160 WasmFfiNativeTransformer.visitProcedure)" Core.Type struct NirForeignImport
     lib::String
     name::String
     params::Vector{Type}
@@ -830,7 +830,7 @@ end
 # what a function type is made for (_makeFunctionType, _getInputTypes, typeOfReturnValue): dart's
 # Reference, a member or a field's accessor, and the import procedure dart2wasm's ffi transformer
 # synthesizes for a foreign declaration (NirForeignImport), a closed sum matched @exhaustive
-@quarantine "dart types a function for a member's Reference (pkg/dart2wasm/lib/functions.dart:890 _makeFunctionType), the ffi transformer's import procedure among them; a closed sum is a Union in Julia" Core.Union @closed const FunctionTarget = Union{MethodInstance, FieldReference, NirForeignImport}
+@quarantine pin"pkg/dart2wasm/lib/functions.dart:890 _makeFunctionType" "dart types a function for a member's Reference (pkg/dart2wasm/lib/functions.dart:890 _makeFunctionType), the ffi transformer's import procedure among them; a closed sum is a Union in Julia" Core.Union @closed const FunctionTarget = Union{MethodInstance, FieldReference, NirForeignImport}
 
 """
     nir_foreign_operands(node) -> Vector{NirValue}
@@ -838,7 +838,7 @@ end
 The arguments a foreign call passes, one per declared argument type, Julia's `args[6:5+nccallargs]`
 (julia/src/ccall.cpp:1419 emit_ccall); the GC roots after them are no argument.
 """
-@quarantine "Julia's foreigncall lists its arguments after its five header operands (julia/src/ccall.cpp:1419 emit_ccall)" Core.SimpleVector function nir_foreign_operands(node::NirForeignCall)::Vector{NirValue}
+@quarantine pin"julia/src/ccall.cpp:1419 emit_ccall" "Julia's foreigncall lists its arguments after its five header operands (julia/src/ccall.cpp:1419 emit_ccall)" Core.SimpleVector function nir_foreign_operands(node::NirForeignCall)::Vector{NirValue}
     local at = node.args[3]
     local types = at isa NirConst ? at.c.val : nothing
     types isa Core.SimpleVector ||
@@ -856,7 +856,7 @@ reads it (julia/src/ccall.cpp:1419 emit_ccall): its name a literal `(symbol, lib
 code generator rejects it, located; a host call by another convention or with C varargs, which a
 wasm import cannot take, rejects here, located.
 """
-@quarantine "Julia's ccall lowering reads the callee's name, convention and signature from the foreigncall (julia/src/ccall.cpp:571 interpret_symbol_arg)" Core.SimpleVector function nir_foreign_import(body::NirBody, node::NirForeignCall)::Union{NirForeignImport,Nothing}
+@quarantine pin"julia/src/ccall.cpp:571 interpret_symbol_arg" "Julia's ccall lowering reads the callee's name, convention and signature from the foreigncall (julia/src/ccall.cpp:571 interpret_symbol_arg)" Core.SimpleVector function nir_foreign_import(body::NirBody, node::NirForeignCall)::Union{NirForeignImport,Nothing}
     local at = "src/julia/runtime/rtutils.jl nir_foreign_import"
     local sym = node.args[1]
     sym isa NirConst && sym.c.val isa Tuple{Union{Symbol,String},Union{Symbol,String}} || return nothing
@@ -901,7 +901,7 @@ Julia's own libraries (libjulia, libjulia-internal, the executable) is libjulia'
 _is_libjulia_func, and is read here as no libjulia function, nothing, so it reaches
 nir_foreign_import and rejects, located.
 """
-@quarantine "Julia's ccall lowering reads a name with no library as libjulia's own function and keys its special functions by that name (julia/src/ccall.cpp:1419 emit_ccall)" Core.Symbol function nir_libjulia_func(node::NirForeignCall)::Union{Symbol,Nothing}
+@quarantine pin"julia/src/ccall.cpp:1419 emit_ccall" "Julia's ccall lowering reads a name with no library as libjulia's own function and keys its special functions by that name (julia/src/ccall.cpp:1419 emit_ccall)" Core.Symbol function nir_libjulia_func(node::NirForeignCall)::Union{Symbol,Nothing}
     local sym = node.args[1]
     sym isa NirConst && sym.c.val isa Union{Symbol,String} || return nothing
     return Symbol(sym.c.val)
@@ -916,7 +916,7 @@ import type: a class of dart:_wasm's (a WasmArray, WasmExternRef), the operand `
 crosses as that wasm type, nullable, as dart declares such a parameter; any other is Julia's top type,
 `Any`, the one jl_value_t* julia_to_native passes for a boxed argument.
 """
-@quarantine "Julia passes an Any argument as one boxed reference (julia/src/ccall.cpp:528 julia_to_native); dart declares a wasm-typed parameter as its nullable wasm type (sdk/lib/_internal/wasm/js_common/js_string.dart:858 jsStringFromCharCodeArray)" Core.Union function nir_foreign_param_type(@nospecialize(T::Type))::Type
+@quarantine pin"julia/src/ccall.cpp:528 julia_to_native" "Julia passes an Any argument as one boxed reference (julia/src/ccall.cpp:528 julia_to_native); dart declares a wasm-typed parameter as its nullable wasm type (sdk/lib/_internal/wasm/js_common/js_string.dart:858 jsStringFromCharCodeArray)" Core.Union function nir_foreign_param_type(@nospecialize(T::Type))::Type
     local cls = T isa Union ? Base.nonnothingtype(T) : T
     cls isa DataType && (cls <: WasmArray || cls === WasmExternRef) && return Union{Nothing, cls}
     return Any

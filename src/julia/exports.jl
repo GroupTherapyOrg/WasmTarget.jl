@@ -13,7 +13,7 @@ Every ported export directive, in load order: `(module, julia file, target, comb
 the target as dart writes it (relative to the directive's file), the combinator `:show`, `:hide` or
 `:all` (none), and the names it shows or hides.
 """
-@quarantine "Julia keeps no record of a module's re-exports; @dart_export records each directive" Base.Vector const DART_EXPORTS = Vector{Tuple{Module,String,String,Symbol,Vector{Symbol}}}()
+@quarantine unpinned "Julia keeps no record of a module's re-exports; @dart_export records each directive" Base.Vector const DART_EXPORTS = Vector{Tuple{Module,String,String,Symbol,Vector{Symbol}}}()
 
 """
     @dart_export "<target>.dart" [show|hide] Name...
@@ -28,7 +28,7 @@ rust: `pub use m::{A, B}`). Julia's differs: `public` marks a name but a qualifi
 (`WasmBuilder.IR.Catch` resolves whether or not it is public), so the load reads Dart2Wasm's code and
 refuses a reference the directives do not make visible.
 """
-@quarantine "Julia's public cannot re-export or hide; a macro records dart's directive and declares what it shows" Base.esc macro dart_export(target, rest...)
+@quarantine unpinned "Julia's public cannot re-export or hide; a macro records dart's directive and declares what it shows" Base.esc macro dart_export(target, rest...)
     local refuse(why) = throw(ConstructionViolation("@dart_export", "$(_at(__source__)): $why"))
     target isa String && endswith(target, ".dart") || refuse("the target is a \"<file>.dart\" string")
     local comb = isempty(rest) ? :all : rest[1]
@@ -47,7 +47,7 @@ end
 
 # the Julia bindings of the names a `show` lists: each name, and its hierarchy's Abstract<X> where
 # the class is one another extends (dev/skeleton.jl's pair; the types exist before any directive runs)
-@quarantine "a dart class another extends is two Julia types, found by their bindings" Base.parentmodule function _shown_bindings(mod::Module, names::Vector{Symbol})::Vector{Symbol}
+@quarantine unpinned "a dart class another extends is two Julia types, found by their bindings" Base.parentmodule function _shown_bindings(mod::Module, names::Vector{Symbol})::Vector{Symbol}
     local out = Symbol[]
     for n in names
         push!(out, n)
@@ -60,7 +60,7 @@ end
 # the Julia bindings of the names a dart file without export directives declares at top level, read
 # from the registry (every definition of the target, loaded before its barrel) and the pinned line of
 # each (an unnamed extension's member is anchored by its bare name but declared at column 2)
-@quarantine "a file's declared names are its definitions' registry entries, read at the pin" Base.readlines function _declared_names(mod::Module, file::String, target::String)::Vector{Symbol}
+@quarantine unpinned "a file's declared names are its definitions' registry entries, read at the pin" Base.readlines function _declared_names(mod::Module, file::String, target::String)::Vector{Symbol}
     local sdk = _pin_sdk()
     sdk === nothing && return Symbol[]
     local key = findfirst(d -> normpath(_jl_path(d)) == normpath(file), collect(INCLUDED))
@@ -82,7 +82,7 @@ end
 
 # the export directives of a pinned dart file: (line, target, combinator, names), each read from its
 # `export` line to the `;` that closes it
-@quarantine "dart's directives are read from the pinned source, which Julia does not parse" Base.match function _pin_exports(lines::Vector{String})::Vector{Tuple{Int,String,Symbol,Vector{Symbol}}}
+@quarantine unpinned "dart's directives are read from the pinned source, which Julia does not parse" Base.match function _pin_exports(lines::Vector{String})::Vector{Tuple{Int,String,Symbol,Vector{Symbol}}}
     local out = Tuple{Int,String,Symbol,Vector{Symbol}}[]
     local i = 1
     while i <= length(lines)
@@ -106,7 +106,7 @@ end
 
 # a dart file key's path relative to another key's directory, normalized (`src/ir/ir.dart` from
 # `wasm_builder/lib/wasm_builder.dart`)
-@quarantine "a directive's target is a path relative to its file, resolved as a path" Base.Filesystem.normpath _relative_key(from::String, target::String)::String = replace(normpath(joinpath(dirname(from), target)), '\\' => '/')
+@quarantine unpinned "a directive's target is a path relative to its file, resolved as a path" Base.Filesystem.normpath _relative_key(from::String, target::String)::String = replace(normpath(joinpath(dirname(from), target)), '\\' => '/')
 
 """
     check_dart_exports(sdk) -> Int
@@ -117,7 +117,7 @@ directive is; then every name a directive makes visible is Julia `public` in the
 it; then no method of Dart2Wasm refers to a WasmBuilder name wasm_builder.dart does not export
 (`check_wasm_builder_references`). Throws a `ConstructionViolation` naming each fault.
 """
-@quarantine "a library's visible names are composed from dart's directives when the package loads" Base.ispublic function check_dart_exports(sdk::String)::Int
+@quarantine unpinned "a library's visible names are composed from dart's directives when the package loads" Base.ispublic function check_dart_exports(sdk::String)::Int
     local out = String[]
     local key_of = Dict{String,String}(normpath(_jl_path(d)) => d for d in INCLUDED)
     local recorded = Dict{Tuple{String,String},Tuple{Module,Symbol,Vector{Symbol}}}()
@@ -165,7 +165,7 @@ it; then no method of Dart2Wasm refers to a WasmBuilder name wasm_builder.dart d
 end
 
 # the export directives of every in-scope wasm_builder file at the pin, by file key
-@quarantine "dart's directives are read from the pinned files, one table per load" Base.readlines function export_directives(sdk::String)::Dict{String,Vector{Tuple{Int,String,Symbol,Vector{Symbol}}}}
+@quarantine unpinned "dart's directives are read from the pinned files, one table per load" Base.readlines function export_directives(sdk::String)::Dict{String,Vector{Tuple{Int,String,Symbol,Vector{Symbol}}}}
     local directives = Dict{String,Vector{Tuple{Int,String,Symbol,Vector{Symbol}}}}()
     for key in INCLUDED
         startswith(key, "wasm_builder/") || continue
@@ -183,7 +183,7 @@ name)`: through its export directives, each target's visible names filtered by `
 a file with none, the public names it declares at top level (its definitions' anchors, read at the
 pin so an unnamed extension's member, declared at column 2, is left out).
 """
-@quarantine "a library's visible names compose through its directives, as dart's namespace does" Base.get! function visible_names(sdk::String, key::String, directives::Dict{String,Vector{Tuple{Int,String,Symbol,Vector{Symbol}}}} = export_directives(sdk), memo::Dict{String,Set{Tuple{String,Symbol}}} = Dict{String,Set{Tuple{String,Symbol}}}())::Set{Tuple{String,Symbol}}
+@quarantine unpinned "a library's visible names compose through its directives, as dart's namespace does" Base.get! function visible_names(sdk::String, key::String, directives::Dict{String,Vector{Tuple{Int,String,Symbol,Vector{Symbol}}}} = export_directives(sdk), memo::Dict{String,Set{Tuple{String,Symbol}}} = Dict{String,Set{Tuple{String,Symbol}}}())::Set{Tuple{String,Symbol}}
     return get!(memo, key) do
         local s = Set{Tuple{String,Symbol}}()
         if haskey(directives, key)
@@ -223,7 +223,7 @@ class `w.` cannot name stays reachable through a value of it; dart2wasm calls se
 ActiveFunctionSegmentBuilder that `elements.activeFunctionSegmentBuilderFor` returns, a class
 builder.dart does not export.
 """
-@quarantine "a dart name's Julia bindings are its definitions' registry entries and their methods' functions" Base.parentmodule function wasm_builder_reach(visible::Set{Tuple{String,Symbol}})::Set{Tuple{Module,Symbol}}
+@quarantine unpinned "a dart name's Julia bindings are its definitions' registry entries and their methods' functions" Base.parentmodule function wasm_builder_reach(visible::Set{Tuple{String,Symbol}})::Set{Tuple{Module,Symbol}}
     local reach = Set{Tuple{Module,Symbol}}([(WasmBuilder, :IR)])
     for e in REGISTRY
         e isa ParityEntry || continue
@@ -259,12 +259,12 @@ builder.dart does not export.
 end
 
 # every method a definition of Dart2Wasm or its submodules made
-@quarantine "Dart2Wasm's methods are its definitions' registry entries" Base.Method _dart2wasm_methods()::Vector{Method} =
+@quarantine unpinned "Dart2Wasm's methods are its definitions' registry entries" Base.Method _dart2wasm_methods()::Vector{Method} =
     Method[m for e in REGISTRY if _within(e.mod, Dart2Wasm) for m in e.methods]
 
 # the (module, name) a lowered operand names in WasmBuilder or IR: a GlobalRef, or `getproperty(M, :x)`
 # of such a module, through SSA values; nothing for anything else
-@quarantine "lowered code names a binding by GlobalRef or a module's property, Julia's lowered IR" Core.GlobalRef function _wasm_builder_name(code::Vector{Any}, x, depth::Int = 0)::Union{Tuple{Module,Symbol},Nothing}
+@quarantine unpinned "lowered code names a binding by GlobalRef or a module's property, Julia's lowered IR" Core.GlobalRef function _wasm_builder_name(code::Vector{Any}, x, depth::Int = 0)::Union{Tuple{Module,Symbol},Nothing}
     depth > 32 && return nothing
     x isa Core.SSAValue && return _wasm_builder_name(code, code[x.id], depth + 1)
     if x isa GlobalRef
@@ -288,7 +288,7 @@ The `w.` prefix's check: no lowered statement of `methods` names a binding of Wa
 outside `reach` (`wasm_builder_reach`), and no signature names such a type. Throws a
 `ConstructionViolation` naming each reference and the method that makes it.
 """
-@quarantine "a qualified name ignores public; the reach is checked in each method's lowered code" Base.uncompressed_ast function check_wasm_builder_references(methods::Vector{Method}, reach::Set{Tuple{Module,Symbol}})::Int
+@quarantine unpinned "a qualified name ignores public; the reach is checked in each method's lowered code" Base.uncompressed_ast function check_wasm_builder_references(methods::Vector{Method}, reach::Set{Tuple{Module,Symbol}})::Int
     local out = String[]
     local fault(m, mod, n) = push!(out, "$(basename(string(m.file))):$(m.line) $(m.name) refers to $(join(fullname(mod), ".")).$n, which wasm_builder.dart does not export")
     for m in methods
@@ -311,4 +311,4 @@ outside `reach` (`wasm_builder_reach`), and no signature names such a type. Thro
     return 0
 end
 
-@quarantine "the barrel files' assertion, run when the package loads where the pinned checkout exists" Base.Val construction_check(::Val{:check_dart_exports})::Int = check_dart_exports(something(_pin_sdk()))
+@quarantine unpinned "the barrel files' assertion, run when the package loads where the pinned checkout exists" Base.Val construction_check(::Val{:check_dart_exports})::Int = check_dart_exports(something(_pin_sdk()))

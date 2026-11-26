@@ -12,7 +12,7 @@
 
 # The token only this file holds: ClosedWorld's sole constructor takes it, so no code outside this file
 # makes a ClosedWorld (construction_check(::Val{:ClosedWorld}), below).
-@quarantine "Julia has no private constructors; an unexported token held by this file alone stands in for one" Core.DataType struct _SubsetToken
+@quarantine unpinned "Julia has no private constructors; an unexported token held by this file alone stands in for one" Core.DataType struct _SubsetToken
     _SubsetToken() = new()
 end
 
@@ -60,7 +60,7 @@ end
 # WasmInterpreter (lib/WasmInterpreter), so the closed world is inferred over WasmTarget's overlays,
 # walked by Julia's own Compiler.compile!; the walk lives in that package, whose image holds its
 # compiled code apart from WasmTarget's.
-@quarantine "the closed world is inferred by Julia's trim entry over WasmTarget's interpreter, a package of its own" WasmTarget.infer_closed_world _trim_infer(queue::Vector{Any}, world::UInt)::Vector{Any} =
+@quarantine unpinned "the closed world is inferred by Julia's trim entry over WasmTarget's interpreter, a package of its own" WasmTarget.infer_closed_world _trim_infer(queue::Vector{Any}, world::UInt)::Vector{Any} =
     infer_closed_world(queue, world)
 
 # Julia's trim verifier over the closed world: TrimVerifier.get_verify_typeinf_trim (Julia's
@@ -131,7 +131,7 @@ end
 # WasmTarget compiles one entry as an executable does, and exports the ccallables that entry reaches,
 # dart2wasm's precedent: TFA keeps a wasm:export member the program's libraries declare, and the
 # program here is what the entry reaches (A54S2)
-@quarantine "a ccallable is queued for Julia's trim inference as its Method's svec(rettype, signature)" Core.Method function _reached_ccallables(codeinfos::Vector{Any})::Vector{Any}
+@quarantine unpinned "a ccallable is queued for Julia's trim inference as its Method's svec(rettype, signature)" Core.Method function _reached_ccallables(codeinfos::Vector{Any})::Vector{Any}
     local out = Any[]
     local seen = Base.IdSet{Method}()
     for x in codeinfos
@@ -219,7 +219,7 @@ end
 # (Method.ccallable's third entry, `Base.@ccallable "name" f(...)`) else its function's name, as
 # juliac's image exports it; the entry's, its function's name (dart's main). The one statement of the
 # rule: util.jl's getWasmExportPragma reads it, and check_subset refuses two exports sharing a name
-@quarantine "a ccallable's C name is the one Base.@ccallable records in Method.ccallable, else its function's" Core.Method function program_export_name(member::Core.MethodInstance, entry::Core.MethodInstance)::Union{String,Nothing}
+@quarantine unpinned "a ccallable's C name is the one Base.@ccallable records in Method.ccallable, else its function's" Core.Method function program_export_name(member::Core.MethodInstance, entry::Core.MethodInstance)::Union{String,Nothing}
     local method = member.def::Method
     isdefined(method, :ccallable) && return length(method.ccallable) == 3 ? method.ccallable[3]::String : string(method.name)
     member === entry || return nothing
@@ -229,7 +229,7 @@ end
 # Two members of the closed world exporting one name: a program juliac's image would export as one
 # symbol, the user's to rename, a ProgramError naming both methods, located at `at` (WasmTarget's
 # judgment, not Julia's verifier's)
-@quarantine "a C name names one symbol of juliac's image; two methods sharing one are the program's error" Core.MethodInstance function _check_export_names(entry::Core.MethodInstance, codeinfos::Vector{Any}, at::String)::Nothing
+@quarantine unpinned "a C name names one symbol of juliac's image; two methods sharing one are the program's error" Core.MethodInstance function _check_export_names(entry::Core.MethodInstance, codeinfos::Vector{Any}, at::String)::Nothing
     local by_name = Dict{String,Core.MethodInstance}()
     for x in codeinfos
         x isa Core.CodeInstance && x.def isa Core.MethodInstance || continue
@@ -254,7 +254,7 @@ end
 # where its code calls it.
 
 # a root's function, resolved in `mod` along its module path, or nothing
-@quarantine "a root names its function by module path and name, resolved where the package loaded, as dart's visitor reads each annotated procedure (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure)" Core.getglobal function _runtime_entry_function(mod::Module, path::Tuple{Vararg{Symbol}}, name::Symbol)::Union{Function,Nothing}
+@quarantine pin"pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure" "a root names its function by module path and name, resolved where the package loaded, as dart's visitor reads each annotated procedure (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure)" Core.getglobal function _runtime_entry_function(mod::Module, path::Tuple{Vararg{Symbol}}, name::Symbol)::Union{Function,Nothing}
     local m = mod
     for n in path
         isdefined(m, n) || return nothing
@@ -276,7 +276,7 @@ first that does not.
 precedent(juliac: an entrypoint with no matching method fails the build, jl_add_ccallable_entrypoints
 and Base.Experimental.entrypoint). Julia's differs: the roots are data, so the load resolves them.
 """
-@quarantine "the runtime roots are resolved when the package loads, by Julia's method table, as dart's visitor resolves each annotated procedure (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure)" Base.methods function check_runtime_roots(mod::Module, roots)::Int
+@quarantine pin"pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure" "the runtime roots are resolved when the package loads, by Julia's method table, as dart's visitor resolves each annotated procedure (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure)" Base.methods function check_runtime_roots(mod::Module, roots)::Int
     for (path, name) in roots
         local f = _runtime_entry_function(mod, path, name)
         f === nothing && throw(ConstructionViolation("RUNTIME_ROOTS", "$(join((path..., name), '.')) names no function"))
@@ -288,7 +288,7 @@ end
 
 # the MethodInstance of each runtime root at `world`, its one method's compileable specialization, as
 # the entry's
-@quarantine "a runtime root is the specialization Julia compiles for it, as juliac's entrypoint takes it, and every one is a root, as dart's visitor roots each (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure)" Base.methods function _runtime_roots(world::UInt)::Vector{Any}
+@quarantine pin"pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure" "a runtime root is the specialization Julia compiles for it, as juliac's entrypoint takes it, and every one is a root, as dart's visitor roots each (pkg/vm/lib/transformations/type_flow/native_code.dart:144 PragmaEntryPointsVisitor.visitProcedure)" Base.methods function _runtime_roots(world::UInt)::Vector{Any}
     local out = Any[]
     for (path, name) in RUNTIME_ROOTS
         local f = something(_runtime_entry_function(@__MODULE__, path, name))
@@ -316,7 +316,7 @@ end
 # jl_get_compile_hint_specialization, the call Compiler/src/precompile.jl's add_entrypoint makes; 1.12's
 # compileable_specialization_for_call, which its trim inference and verifier use); nothing when Julia
 # names none.
-@quarantine "the entry is the specialization Julia compiles for it, its compileable signature, as juliac's entrypoint takes it" Core.Compiler.compileable_specialization_for_call function _entry_specialization(@nospecialize(sig::Type), world::UInt)::Union{Nothing,Core.MethodInstance}
+@quarantine unpinned "the entry is the specialization Julia compiles for it, its compileable signature, as juliac's entrypoint takes it" Core.Compiler.compileable_specialization_for_call function _entry_specialization(@nospecialize(sig::Type), world::UInt)::Union{Nothing,Core.MethodInstance}
     @static if VERSION >= v"1.13-"
         return ccall(:jl_get_compile_hint_specialization, Any, (Any, Csize_t, Cint), sig, world, 1)
     else
@@ -326,7 +326,7 @@ end
 
 # Each description Julia's trim verifier gives (Compiler/src/verifytrim.jl's CallMissing and
 # CCallableMissing, 1.12 and 1.13), read into its TrimErrorKind
-@quarantine "Julia's verifier states each error's kind as text, read here into the closed set of kinds" Base.Dict const TRIM_ERROR_KINDS = Dict{String,TrimErrorKind}(
+@quarantine unpinned "Julia's verifier states each error's kind as text, read here into the closed set of kinds" Base.Dict const TRIM_ERROR_KINDS = Dict{String,TrimErrorKind}(
     "unresolved invoke" => unresolved_invoke,
     "unresolved call to (unknown) builtin" => unresolved_builtin_call,
     "unresolved call to function" => unresolved_function_call,
@@ -352,7 +352,7 @@ end
 # One error the verifier reports, kept as Julia gives it: its kind, its statement and Julia's stack
 # frames for it (verify_create_stackframes over the verifier's parents); a description with no kind
 # in TRIM_ERROR_KINDS is an Internal rejection, the table behind this Julia's verifier
-@quarantine "the verifier's error and the stack frames Julia builds for it (julia/Compiler/src/verifytrim.jl:125 verify_create_stackframes), kept as Julia gives them" Core.Compiler.TrimVerifier.verify_create_stackframes function _trim_error(@nospecialize(cause), parents, at::String)::TrimError
+@quarantine pin"julia/Compiler/src/verifytrim.jl:125 verify_create_stackframes" "the verifier's error and the stack frames Julia builds for it (julia/Compiler/src/verifytrim.jl:125 verify_create_stackframes), kept as Julia gives them" Core.Compiler.TrimVerifier.verify_create_stackframes function _trim_error(@nospecialize(cause), parents, at::String)::TrimError
     local kind = get(TRIM_ERROR_KINDS, string(cause.desc), nothing)
     kind === nothing && reject!(Internal("src/julia/subset.jl TRIM_ERROR_KINDS: Julia $VERSION's trim verifier reports \"$(cause.desc)\", a description it has no kind for"), at)
     cause isa Core.Compiler.TrimVerifier.CCallableMissing && return TrimError(kind, nothing, 0, Base.StackTraces.StackFrame[], TrimCCallableMissing(cause))
@@ -390,7 +390,7 @@ holding Julia's own record, its statement and its stack frames.
 
 formal(dev/formal/NirHandoff.tla): every reached ccallable's record queued and judged, none the entry never reaches
 """
-@quarantine "the strict subset is the one Julia's trim verifier accepts over unmodified Base, never re-guessed (julia/Compiler/src/verifytrim.jl:300 get_verify_typeinf_trim), its roots the entry and the runtime's, as juliac adds each entrypoint (julia/src/gf.c:3910 jl_add_entrypoint)" Base.signature_type function check_subset(@nospecialize(f), argtypes::Tuple, at::String, world::UInt)::ClosedWorld
+@quarantine pin"julia/Compiler/src/verifytrim.jl:300 get_verify_typeinf_trim" "the strict subset is the one Julia's trim verifier accepts over unmodified Base, never re-guessed (julia/Compiler/src/verifytrim.jl:300 get_verify_typeinf_trim), its roots the entry and the runtime's, as juliac adds each entrypoint (julia/src/gf.c:3910 jl_add_entrypoint)" Base.signature_type function check_subset(@nospecialize(f), argtypes::Tuple, at::String, world::UInt)::ClosedWorld
     local sig = Base.signature_type(f, argtypes)
     local mi = _entry_specialization(sig, world)
     if mi === nothing
@@ -436,7 +436,7 @@ end
 # the typestate's assertion, run when the package loads: ClosedWorld and its token each have one
 # constructor method, both in this file, ClosedWorld's taking the token (a construction, L220); and
 # its next state, src/julia/nir.jl's NirWorld, which build_nir makes from a ClosedWorld, the same
-@quarantine "the typestate's assertion, run when the package loads, its runtime roots each resolved to one method as juliac resolves an entrypoint (julia/src/gf.c:3910 jl_add_entrypoint)" Base.Val construction_check(::Val{:ClosedWorld})::Int =
+@quarantine pin"julia/src/gf.c:3910 jl_add_entrypoint" "the typestate's assertion, run when the package loads, its runtime roots each resolved to one method as juliac resolves an entrypoint (julia/src/gf.c:3910 jl_add_entrypoint)" Base.Val construction_check(::Val{:ClosedWorld})::Int =
     check_sole_constructor(ClosedWorld, _SubsetToken, @__FILE__) +
     check_sole_constructor(NirWorld, _NirToken, joinpath(@__DIR__, "nir.jl")) +
     # a ClosedWorld holds every runtime root: each one names one method
@@ -445,7 +445,7 @@ end
 # no method of WasmTarget but check_subset names the token or makes either: read in every method's
 # lowered code when the package loads. A stopgap, not a construction (L224): Julia has no module
 # privacy, so the wrong choice stays writable and this read finds it (A36S3, A37S1, A38)
-@quarantine "Julia has no module privacy; WasmTarget's own lowered code is read when the package loads" Base.moduleroot check_closed_world_makers()::Int =
+@quarantine unpinned "Julia has no module privacy; WasmTarget's own lowered code is read when the package loads" Base.moduleroot check_closed_world_makers()::Int =
     check_sole_maker(Base.moduleroot(@__MODULE__), ClosedWorld, _SubsetToken, (only(methods(check_subset)),),
                      (which(check_closed_world_makers, Tuple{}), which(construction_check, Tuple{Val{:ClosedWorld}})),
                      (joinpath(@__DIR__, "parity.jl"), joinpath(@__DIR__, "construction.jl")))

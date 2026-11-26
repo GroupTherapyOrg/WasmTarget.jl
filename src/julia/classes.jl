@@ -7,20 +7,20 @@
 
 # Julia's kinds, the concrete types of a type as a value, read from Base.iskindtype over Core's
 # bindings (src/julia/construction.jl, core_kinds), never a copy of its list (D3, D5)
-@quarantine "a type is a value in Julia, its class one of Julia's kinds, which Base.iskindtype names" Core.DataType const _KINDS = core_kinds()::Tuple{Vararg{DataType}}
+@quarantine unpinned "a type is a value in Julia, its class one of Julia's kinds, which Base.iskindtype names" Core.DataType const _KINDS = core_kinds()::Tuple{Vararg{DataType}}
 
 # Whether a value's class tells whether it is of the type `T`: each kind wholly in `T` or wholly out of
 # it. Julia's isa tests a type value against a type that splits its kind (Type{Int} holds Int and no
 # other DataType) by the value itself, any other value by its class (julia/src/subtype.c:2511 jl_isa:
 # `jl_is_type_type(t)`, then `jl_subtype(jl_typeof(x), t)`)
-@quarantine "julia/src/subtype.c:2511 jl_isa tests a type value by itself where the type splits its kind, any other value by its class (jl_typeof)" Base.typeintersect told_by_class(@nospecialize(T::Type))::Bool =
+@quarantine pin"julia/src/subtype.c:2511 jl_isa" "julia/src/subtype.c:2511 jl_isa tests a type value by itself where the type splits its kind, any other value by its class (jl_typeof)" Base.typeintersect told_by_class(@nospecialize(T::Type))::Bool =
     all(k -> k <: T || typeintersect(k, T) === Union{}, _KINDS)
 
 # a record of a fixed arity's (TupleRecord{N}, or Tuple{} for the empty shape), one arm of RecordArity
-@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses keys each record class by its RecordShape, its positional count here" Core.Int struct FixedArity
+@quarantine pin"pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses" "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses keys each record class by its RecordShape, its positional count here" Core.Int struct FixedArity
     n::Int
 end
-@quarantine "julia/src/builtins.c:946 jl_f_tuple builds a tuple of the arity its argument count gives at run time" Core.DataType struct RunTimeArity end
+@quarantine pin"julia/src/builtins.c:946 jl_f_tuple" "julia/src/builtins.c:946 jl_f_tuple builds a tuple of the arity its argument count gives at run time" Core.DataType struct RunTimeArity end
 
 """
     RecordArity
@@ -37,7 +37,7 @@ precedent(rust: enum + exhaustive match; dart: sealed class + exhaustive switch)
 `Union` of concrete structs where Rust declares an enum and dart a sealed hierarchy, and its
 exhaustiveness checked when the package loads, since Julia checks no match at compile time.
 """
-@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses keys its classes by RecordShape, a closed set of shapes; a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const RecordArity = Union{FixedArity, RunTimeArity}
+@quarantine pin"pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses" "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses keys its classes by RecordShape, a closed set of shapes; a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const RecordArity = Union{FixedArity, RunTimeArity}
 
 """
     record_member_tests(translator, T, field_checked) -> Union{Nothing,Vector{Tuple{Int,DataType,DataType}}}
@@ -51,7 +51,7 @@ field whose type no checker helper decides (`field_checked`, types.jl's canUseTy
 emitIsTest, makeType and the runtime's _isSubtype), as dart's every record type does. The one reading of
 both: canUseTypeCheckHelper refuses the helper by it, and the is checker emits what it lists.
 """
-@quarantine "julia/src/subtype.c:1348 subtype_tuple: a tuple type's subtypes are those of its arity whose every field is a subtype of the type's, so a member is a product of its fields' tests where its shape at the arity is a DataType" Base.typeintersect function record_member_tests(translator, @nospecialize(T::Type), field_checked)::Union{Nothing,Vector{Tuple{Int,DataType,DataType}}}
+@quarantine pin"julia/src/subtype.c:1348 subtype_tuple" "julia/src/subtype.c:1348 subtype_tuple: a tuple type's subtypes are those of its arity whose every field is a subtype of the type's, so a member is a product of its fields' tests where its shape at the arity is a DataType" Base.typeintersect function record_member_tests(translator, @nospecialize(T::Type), field_checked)::Union{Nothing,Vector{Tuple{Int,DataType,DataType}}}
     local out = Tuple{Int,DataType,DataType}[]
     local arities = translator.class_id_numbering[].covered_arities
     for t in Base.uniontypes(T)
@@ -98,7 +98,7 @@ class's two halves) has no wasm representation and is Unquarantined; a class wit
 the closed world, is Internal (a register class's too: its box is its class's). The one source of the
 fact: visitInstanceConstant rejects with it, and type_value_unmade reads it.
 """
-@quarantine "dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant makes an instance constant of its class's info; a Julia primitive type with no builtin type and no integer register has none but a 128-bit integer's" Base.isprimitivetype function constant_unmade(translator, cls::DataType)::Union{Rejection,Nothing}
+@quarantine pin"dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant" "dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant makes an instance constant of its class's info; a Julia primitive type with no builtin type and no integer register has none but a 128-bit integer's" Base.isprimitivetype function constant_unmade(translator, cls::DataType)::Union{Rejection,Nothing}
     haskey(translator.builtin_types[], cls) && return nothing
     isprimitivetype(cls) && !type_expand_integer(cls) && !managed_pointer(cls) && !register_constant_class(translator, cls) &&
         return Unquarantined("src/constants.jl visitInstanceConstant: a constant of the primitive type $cls, with no wasm representation")
@@ -116,7 +116,7 @@ makes it: a parameter that is a value of a primitive type whose constant is not 
 each of which visitInstanceConstant rejects, found in `T`'s parameters and in theirs: a parameter value is
 unmade exactly where constant_unmade rejects its class, the one source of which constants are made.
 """
-@quarantine "julia/src/julia.h:971 jl_to_typeof reads every tag's type from its table; a type value whose parameter is a primitive whose constant is not made, or a value of no class, has no constant (src/julia/classes.jl constant_unmade)" Core.typeof function type_value_unmade(translator, @nospecialize(T))::Union{Nothing,Some}
+@quarantine pin"julia/src/julia.h:971 jl_to_typeof" "julia/src/julia.h:971 jl_to_typeof reads every tag's type from its table; a type value whose parameter is a primitive whose constant is not made, or a value of no class, has no constant (src/julia/classes.jl constant_unmade)" Core.typeof function type_value_unmade(translator, @nospecialize(T))::Union{Nothing,Some}
     local walk(@nospecialize(x)) = begin
         if x isa Union
             local a = walk(x.a)
@@ -398,7 +398,7 @@ relates classes, so it answers a test only where a value's class tells it (`told
 that splits a kind's instances (Type{X}) is tested by the value itself, so it takes the arm only where
 the null case alone is tested, which reads no table.
 """
-@quarantine "julia/src/subtype.c:2511 jl_isa tests a type value by itself where the type splits its kind, any other value by its class (jl_typeof), the relation the class table holds" Base.haskey function is_interface_class_type(translator, @nospecialize(T::Type), check_only_null_assignability::Bool)::Bool
+@quarantine pin"julia/src/subtype.c:2511 jl_isa" "julia/src/subtype.c:2511 jl_isa tests a type value by itself where the type splits its kind, any other value by its class (jl_typeof), the relation the class table holds" Base.haskey function is_interface_class_type(translator, @nospecialize(T::Type), check_only_null_assignability::Bool)::Bool
     T isa DataType || return false
     haskey(translator.class_info, T) || return false
     return check_only_null_assignability || told_by_class(T)
@@ -431,7 +431,7 @@ values, each met once, and a parametric instance (`Vector{Int64}`) is a class of
 formal(dev/formal/ValueClasses.tla): every class a value can have listed once, closed under supertype and fields, nothing extra
 formal(dev/formal/TypeParamClasses.tla): where a type value is held, every listed class's type parameters are listed, at any depth, nothing extra, the pass ends
 """
-@quarantine "a Julia program declares no class list; its classes are the types Julia inferred for its values over the closed world julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel infers for a trimmed program" Base.unwrap_unionall function closed_world_classes(world::NirWorld, at::String)::Vector{DataType}
+@quarantine pin"julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel" "a Julia program declares no class list; its classes are the types Julia inferred for its values over the closed world julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel infers for a trimmed program" Base.unwrap_unionall function closed_world_classes(world::NirWorld, at::String)::Vector{DataType}
     local out = DataType[]
     local seen = Base.IdSet{DataType}()
     local objs = Set{NirConst}()
@@ -528,12 +528,12 @@ end
 
 # whether `v`, the function an _apply_iterate statement applies, is Julia's tuple builtin, a literal or a constant
 # binding: jl_f__apply_iterate's `f == BUILTIN(tuple)` (julia/src/builtins.c:696), the one test of a splat into a tuple
-@quarantine "julia/src/builtins.c:661 jl_f__apply_iterate applies its function to the arguments it gathers; the tuple builtin's application is the tuple of them (:946 jl_f_tuple)" Core.tuple applies_tuple(v::NirValue)::Bool =
+@quarantine pin"julia/src/builtins.c:661 jl_f__apply_iterate" "julia/src/builtins.c:661 jl_f__apply_iterate applies its function to the arguments it gathers; the tuple builtin's application is the tuple of them (:946 jl_f_tuple)" Core.tuple applies_tuple(v::NirValue)::Bool =
     v isa NirConst ? v.c.val === Core.tuple : v isa NirGlobal && nir_binding_is_constant(v.binding) && v.binding.value === Core.tuple
 
 # the record class a tuple of static type `T` takes where its class only run time knows: its arity's,
 # a fixed one; a tuple of no fixed length brings none (the code generator rejects it where it meets it)
-@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses: its recordClasses holds one class per record shape, which a tuple of open elements takes" Base.unwrap_unionall function _meet_tuple_record!(out::Vector{DataType}, seen::Base.IdSet{DataType}, @nospecialize(T), at::String)::Nothing
+@quarantine pin"pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses" "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses: its recordClasses holds one class per record shape, which a tuple of open elements takes" Base.unwrap_unionall function _meet_tuple_record!(out::Vector{DataType}, seen::Base.IdSet{DataType}, @nospecialize(T), at::String)::Nothing
     local tt = Base.unwrap_unionall(T)
     tt isa DataType && tt <: Tuple && !any(p -> p isa Core.TypeofVararg, tt.parameters) || return nothing
     _meet_value!(out, seen, tuple_record_class(length(tt.parameters)), at)
@@ -561,7 +561,7 @@ differs: its tuple's type is its elements' (jl_f_tuple), so a tuple of a concret
 own class and only an open one is a record; the typeof of an open tuple, a type made at run time,
 stays a rejection (A68S3).
 """
-@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:280 _RecordClassGenerator._generateFields gives a record class a top-typed field per element, a tuple's record here" Core.Union struct TupleRecord{N}
+@quarantine pin"pkg/dart2wasm/lib/record_class_generator.dart:280 _RecordClassGenerator._generateFields" "pkg/dart2wasm/lib/record_class_generator.dart:280 _RecordClassGenerator._generateFields gives a record class a top-typed field per element, a tuple's record here" Core.Union struct TupleRecord{N}
     _never::Union{}
 end
 
@@ -569,7 +569,7 @@ end
 # Tuple{} itself, the class of Julia's one empty tuple (julia/src/julia.h:1134 jl_emptytuple), which has
 # no field to box, so the empty tuple is never boxed (and a class of no field of its own shares its
 # superclass's struct, so its reference could not be told apart from that struct's other classes)
-@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses: its recordClasses maps each shape to its class, a tuple's arity to its record here" Core.Int tuple_record_class(n::Int)::DataType = n == 0 ? Tuple{} : TupleRecord{n}
+@quarantine pin"pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses" "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses: its recordClasses maps each shape to its class, a tuple's arity to its record here" Core.Int tuple_record_class(n::Int)::DataType = n == 0 ? Tuple{} : TupleRecord{n}
 
 # the record a value of the class `c` is boxed into where it is held at the top type (convertType's box, unboxed where
 # Julia narrows it back): its arity's record where `c` is a concrete tuple class of at least one field; else nothing, a
@@ -577,7 +577,7 @@ end
 # (tuple_record_class(0)): it has no field to box, so `fieldcount(c) > 0` is the arity-0 case, never boxed. The one
 # statement of the boxing rule, read by the walk (each concrete tuple class brings its record), top_held_classes and
 # convertType
-@quarantine "pkg/dart2wasm/lib/translator.dart:1597 Translator.convertType boxes a value type where it flows into an open slot; a concrete tuple class is boxed into its arity's record" Core.Tuple boxed_record_class(@nospecialize(c))::Union{DataType,Nothing} =
+@quarantine pin"pkg/dart2wasm/lib/translator.dart:1597 Translator.convertType" "pkg/dart2wasm/lib/translator.dart:1597 Translator.convertType boxes a value type where it flows into an open slot; a concrete tuple class is boxed into its arity's record" Core.Tuple boxed_record_class(@nospecialize(c))::Union{DataType,Nothing} =
     c isa DataType && c <: Tuple && isconcretetype(c) && fieldcount(c) > 0 ? tuple_record_class(fieldcount(c)) : nothing
 
 """
@@ -598,17 +598,17 @@ precedent(julia: builtins.c:738 arg_heap, the buffer jl_f__apply_iterate fills; 
 nullableObjectArrayTypeRef; cpython: PyTupleObject, one object of any length). Julia's differs: it
 allocates `jl_datatype_size(tt)` of a type it finds or makes; this keeps the buffer, whose type is never made.
 """
-@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses keys a record class by its shape; a shape of run-time arity is Julia's alone (julia/src/builtins.c:946 jl_f_tuple), its class the record of that shape" WasmTarget.TupleRecord const TupleRecordArray = TupleRecord{RunTimeArity()}
+@quarantine pin"pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses" "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses keys a record class by its shape; a shape of run-time arity is Julia's alone (julia/src/builtins.c:946 jl_f_tuple), its class the record of that shape" WasmTarget.TupleRecord const TupleRecordArray = TupleRecord{RunTimeArity()}
 
 # the arity of the record class `c` (TupleRecord, Tuple{} for the empty shape, TupleRecordArray), or nothing for any other class
-@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses: its recordClasses keys each class by its shape, a record's arity its parameter here" Core.DataType tuple_record_arity(@nospecialize(c))::Union{RecordArity,Nothing} =
+@quarantine pin"pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses" "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses: its recordClasses keys each class by its shape, a record's arity its parameter here" Core.DataType tuple_record_arity(@nospecialize(c))::Union{RecordArity,Nothing} =
     c === Tuple{} ? FixedArity(0) : c === TupleRecordArray ? RunTimeArity() :
     c isa DataType && c <: TupleRecord && c.parameters[1] isa Int ? FixedArity(c.parameters[1]) : nothing
 
 # the arities whose record class is among `classes` (the closed world's): Julia's tuple types its cache
 # holds (jltypes.c:1133 lookup_typevalue), the one answer of which arities a record covers, computed once
 # when the class ids are fixed (src/class_info.jl ClassIdNumbering.covered_arities), which every reader reads
-@quarantine "julia/src/jltypes.c:1133 lookup_typevalue finds a tuple type in its cache; the closed world's record classes are the arities it holds" Base.Set function record_arities(classes)::Set{Int}
+@quarantine pin"julia/src/jltypes.c:1133 lookup_typevalue" "julia/src/jltypes.c:1133 lookup_typevalue finds a tuple type in its cache; the closed world's record classes are the arities it holds" Base.Set function record_arities(classes)::Set{Int}
     local out = Set{Int}()
     for c in classes
         local r = tuple_record_arity(c)
@@ -623,7 +623,7 @@ end
 # run time; the empty shape's class is Tuple{}, the type of Julia's one empty tuple, which its entry
 # holds. The one source of which classes the typeof table holds no entry for and to_typeof answers by
 # their own arms (src/intrinsics.jl, record_typeof)
-@quarantine "julia/src/jltypes.c:2477 jl_inst_arg_tuple_type: a tuple's type is the tuple type of its elements' types, which a record class's tag does not name but the empty tuple's, Tuple{}" Core.Tuple record_typeof_unmade(@nospecialize(c))::Bool =
+@quarantine pin"julia/src/jltypes.c:2477 jl_inst_arg_tuple_type" "julia/src/jltypes.c:2477 jl_inst_arg_tuple_type: a tuple's type is the tuple type of its elements' types, which a record class's tag does not name but the empty tuple's, Tuple{}" Core.Tuple record_typeof_unmade(@nospecialize(c))::Bool =
     c !== Tuple{} && tuple_record_arity(c) !== nothing
 
 # Julia's typeof of a value of the record class `c` (record_typeof_unmade) whose inferred type is `T`, known
@@ -633,7 +633,7 @@ end
 # jl_f_tuple would find or make at run time (julia/src/builtins.c:946), which src/intrinsics.jl to_typeof
 # raises for (formal(dev/formal/TupleRecordSplat.tla) TypeofAgrees); the array class's arity only run
 # time knows, so no type of its pins one
-@quarantine "julia/src/builtins.c:946 jl_f_tuple: a tuple's type is the tuple type of its elements' types; where Julia's inferred type of the value holds one tuple type of its arity, that leaf type is every such tuple's" Base.typeintersect function record_typeof(@nospecialize(T), @nospecialize(c))::Union{DataType,Nothing}
+@quarantine pin"julia/src/builtins.c:946 jl_f_tuple" "julia/src/builtins.c:946 jl_f_tuple: a tuple's type is the tuple type of its elements' types; where Julia's inferred type of the value holds one tuple type of its arity, that leaf type is every such tuple's" Base.typeintersect function record_typeof(@nospecialize(T), @nospecialize(c))::Union{DataType,Nothing}
     return @exhaustive something(tuple_record_arity(c))::RecordArity begin
         (f::FixedArity) => (local shape = typeintersect(T, NTuple{f.n,Any}); shape isa DataType && isconcretetype(shape) ? shape : nothing)
         RunTimeArity => nothing
@@ -642,7 +642,7 @@ end
 
 # the Julia-only row of the fatal gap where record_typeof pins no type (src/intrinsics.jl, the fatal arm, which reports
 # it as Unquarantined's text at the statement's run-time location): the record class, the one text of it
-@quarantine "julia/src/builtins.c:946 jl_f_tuple makes a tuple's type at run time where its cache has none, a DataType WasmTarget never makes (audit A68S3)" Base.string record_typeof_message(@nospecialize(c))::String =
+@quarantine pin"julia/src/builtins.c:946 jl_f_tuple" "julia/src/builtins.c:946 jl_f_tuple makes a tuple's type at run time where its cache has none, a DataType WasmTarget never makes (audit A68S3)" Base.string record_typeof_message(@nospecialize(c))::String =
     string("julia/src/jltypes.c:2477 jl_inst_arg_tuple_type: typeof of a tuple held as ", c, ", whose type, the tuple type of its elements' types, is not made at run time (audit A68S3)")
 
 # the table of each class's type value, by class id (translator.classes, the one map from an id to its class): the
@@ -650,7 +650,7 @@ end
 # for a class whose type value has no constant (type_value_unmade) and for a tuple's record, whose values' type is
 # their elements' (record_typeof_unmade). The one list of the type values typeof answers: src/intrinsics.jl to_typeof's
 # table and the rows of its lookup of a tuple's type (tuple_type_rows) read it
-@quarantine "julia/src/julia.h:971 jl_to_typeof reads a tag's type from the table of tags' types; WasmTarget's tag is the class id, its table each class's type value where a constant of it is made" Core.DataType type_value_entries(translator)::Vector{Union{Nothing,DataType}} =
+@quarantine pin"julia/src/julia.h:971 jl_to_typeof" "julia/src/julia.h:971 jl_to_typeof reads a tag's type from the table of tags' types; WasmTarget's tag is the class id, its table each class's type value where a constant of it is made" Core.DataType type_value_entries(translator)::Vector{Union{Nothing,DataType}} =
     Union{Nothing,DataType}[info.cls === nothing || type_value_unmade(translator, info.cls) !== nothing || record_typeof_unmade(info.cls) ? nothing : info.cls for info in translator.classes[]]
 
 # the closed world's tuple types of `n` elements among the table's entries (type_value_entries), in its order: the
@@ -659,7 +659,7 @@ end
 # :1133). A row whose element no value's typeof is, a Type{X} (jl_typeof answers no Type{X}: (Int64,) is a
 # Tuple{DataType}) or a type the table holds no entry of, is the type of no tuple of the world: left out, it is never
 # matched, as no field's typeof could equal its element
-@quarantine "julia/src/jltypes.c:1133 lookup_typevalue finds a tuple type in its cache by its elements' types; the closed world's tuple types are the cache a program can hit" Core.Tuple function tuple_type_rows(entries::Vector{Union{Nothing,DataType}}, n::Int)::Vector{DataType}
+@quarantine pin"julia/src/jltypes.c:1133 lookup_typevalue" "julia/src/jltypes.c:1133 lookup_typevalue finds a tuple type in its cache by its elements' types; the closed world's tuple types are the cache a program can hit" Core.Tuple function tuple_type_rows(entries::Vector{Union{Nothing,DataType}}, n::Int)::Vector{DataType}
     local held = Base.IdSet{DataType}(e for e in entries if e !== nothing)
     return DataType[e for e in entries if e !== nothing && e <: Tuple && isconcretetype(e) && fieldcount(e) == n &&
                     all(p -> p isa DataType && !Base.isType(p) && p in held, e.parameters)]
@@ -672,7 +672,7 @@ end
 # admits an arity no record covers, a Vararg member always (dev/formal/TupleRecordSplat.tla IsaAgrees, its
 # Broken variant HoldsOmitsArray); the one rule the class-id ranges (getConcreteClassIdRange) and the type
 # rules (_buildTypeRules) read
-@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses: a value of a record type is an instance of the record class of its shape, a tuple's arity here" Base.typeintersect function open_tuple_holds(@nospecialize(T), @nospecialize(c), arities::Set{Int})::Bool
+@quarantine pin"pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses" "pkg/dart2wasm/lib/record_class_generator.dart:84 generateRecordClasses: a value of a record type is an instance of the record class of its shape, a tuple's arity here" Base.typeintersect function open_tuple_holds(@nospecialize(T), @nospecialize(c), arities::Set{Int})::Bool
     local r = tuple_record_arity(c)
     r === nothing && return false
     return @exhaustive r::RecordArity begin
@@ -695,7 +695,7 @@ end
 # a Set.identity of the constants met, record_class_generator.dart:773; kernel's
 # VisitOnceConstantVisitor.visitConstant, visitor.dart:1546, the same rule). Julia's differs: a constant
 # is no canonical node, so an immutable value is met by === (its NirConst key), a mutable one by identity.
-@quarantine "a constant's object graph is walked once per object, as dart2wasm's record class collection visits each constant's children once (pkg/dart2wasm/lib/record_class_generator.dart:773 _RecordVisitor.defaultConstantReference); a Julia constant is keyed by === where dart's canonical node is keyed by identity" Base.Set function _meet_constant!(out::Vector{DataType}, seen::Base.IdSet{DataType}, objs::Set{NirConst}, @nospecialize(v), at::String)::Nothing
+@quarantine pin"pkg/dart2wasm/lib/record_class_generator.dart:773 _RecordVisitor.defaultConstantReference" "a constant's object graph is walked once per object, as dart2wasm's record class collection visits each constant's children once (pkg/dart2wasm/lib/record_class_generator.dart:773 _RecordVisitor.defaultConstantReference); a Julia constant is keyed by === where dart's canonical node is keyed by identity" Base.Set function _meet_constant!(out::Vector{DataType}, seen::Base.IdSet{DataType}, objs::Set{NirConst}, @nospecialize(v), at::String)::Nothing
     if !isbits(v)
         local key = NirConst(Core.Const(v))
         key in objs && return nothing
@@ -788,7 +788,7 @@ Julia's `supertype` chain to the first class every instance shares.
 
 formal(dev/formal/UnionAllClass.tla): the class met has no free variable, holds every instance, and is their nearest common superclass; the walk ends
 """
-@quarantine "pkg/dart2wasm/lib/translator.dart:940 Translator.toMostSpecificInterfaceType walks a type parameter to its bound, an interface type, the class representing every value of the type; a Julia UnionAll's instances are each a class of their own, their nearest common superclass on Julia's supertype chain" Base.supertype function unionall_class(@nospecialize(U::UnionAll), at::String)::DataType
+@quarantine pin"pkg/dart2wasm/lib/translator.dart:940 Translator.toMostSpecificInterfaceType" "pkg/dart2wasm/lib/translator.dart:940 Translator.toMostSpecificInterfaceType walks a type parameter to its bound, an interface type, the class representing every value of the type; a Julia UnionAll's instances are each a class of their own, their nearest common superclass on Julia's supertype chain" Base.supertype function unionall_class(@nospecialize(U::UnionAll), at::String)::DataType
     local c = Base.unwrap_unionall(U)
     c isa DataType || reject!(Unquarantined("src/julia/classes.jl: the UnionAll type $U, whose body $c is no class"), at)
     # a class with a free variable of U's is no class a value has, and Julia's subtyping reads that variable
@@ -802,7 +802,7 @@ formal(dev/formal/UnionAllClass.tla): the class met has no free variable, holds 
 end
 
 # a class met by the walk: itself, its supertype chain, and a concrete non-kind class's field types
-@quarantine "pkg/dart2wasm/lib/class_info.dart:420 ClassInfoCollector._createStructForClass meets a class's supertypes before it; a Julia class's parent is its supertype and its fields' classes Julia's field types (class_field_type)" Base.fieldcount function _meet_class!(out::Vector{DataType}, seen::Base.IdSet{DataType}, t::DataType, at::String)::Nothing
+@quarantine pin"pkg/dart2wasm/lib/class_info.dart:420 ClassInfoCollector._createStructForClass" "pkg/dart2wasm/lib/class_info.dart:420 ClassInfoCollector._createStructForClass meets a class's supertypes before it; a Julia class's parent is its supertype and its fields' classes Julia's field types (class_field_type)" Base.fieldcount function _meet_class!(out::Vector{DataType}, seen::Base.IdSet{DataType}, t::DataType, at::String)::Nothing
     t in seen && return nothing
     push!(seen, t)
     push!(out, t)
@@ -847,7 +847,7 @@ three mutable classes jl_egal compares by content, String (its bytes), SimpleVec
 and DataType (the type it is), Julia's src/builtins.c jl_egal__unboxed_. The one source of that
 rule, read by the code generator's `==` fallback and the intrinsifier's `===`.
 """
-@quarantine "Julia's egal compares a mutable object by identity, except the String, SimpleVector and DataType it compares by content (builtins.c)" Base.ismutabletype function egal_by_identity(T::Type)::Bool
+@quarantine unpinned "Julia's egal compares a mutable object by identity, except the String, SimpleVector and DataType it compares by content (builtins.c)" Base.ismutabletype function egal_by_identity(T::Type)::Bool
     return T isa DataType && ismutabletype(T) && !(T === String || T === Core.SimpleVector || T === DataType)
 end
 
@@ -857,7 +857,7 @@ end
 dart's `cls.superclass`: Julia's `supertype`, `nothing` for `Any`, the root (Julia's own
 `supertype(Any)` is `Any`).
 """
-@quarantine "a class's parent is Julia's supertype; Any, the root, has none" Base.supertype class_superclass(c::DataType)::Union{DataType,Nothing} = c === Any ? nothing : supertype(c)
+@quarantine unpinned "a class's parent is Julia's supertype; Any, the root, has none" Base.supertype class_superclass(c::DataType)::Union{DataType,Nothing} = c === Any ? nothing : supertype(c)
 
 """
     class_is_abstract(c) -> Bool
@@ -865,7 +865,7 @@ dart's `cls.superclass`: Julia's `supertype`, `nothing` for `Any`, the root (Jul
 dart's `cls.isAbstract`, a class no value has exactly: Julia's `!isconcretetype` (an abstract type,
 or a covariant Tuple such as `Tuple{Any}`).
 """
-@quarantine "a class is abstract when no value has it exactly: Julia's isconcretetype" Base.isconcretetype class_is_abstract(c::DataType)::Bool = !isconcretetype(c)
+@quarantine unpinned "a class is abstract when no value has it exactly: Julia's isconcretetype" Base.isconcretetype class_is_abstract(c::DataType)::Bool = !isconcretetype(c)
 
 """
     class_implemented_types(c, classes) -> Vector{DataType}
@@ -878,7 +878,7 @@ class that is not concrete implements none: each concrete subtype of a class off
 class's implementor itself, so a class's ranges (getConcreteClassIdRange) hold every concrete class
 Julia's `<:` says is its subtype.
 """
-@quarantine "a class's subtypes off its supertype chain are Julia's <:, its covariant Tuples" Base.supertype function class_implemented_types(c::DataType, classes::Vector{DataType})::Vector{DataType}
+@quarantine unpinned "a class's subtypes off its supertype chain are Julia's <:, its covariant Tuples" Base.supertype function class_implemented_types(c::DataType, classes::Vector{DataType})::Vector{DataType}
     isconcretetype(c) || return DataType[]
     local chain = Base.IdSet{DataType}()
     local s = c
@@ -1089,7 +1089,7 @@ other class whose data Julia holds outside its fields rejects, located, until it
 written. After a struct's own fields come their set flags (`class_is_set_field`), one per field an
 allocation may leave undefined whose type admits `nothing`, dart's late lowering's `#isSet` fields.
 """
-@quarantine "pkg/dart2wasm/lib/class_info.dart:539 ClassInfoCollector._generateFields reads a class's instance fields; a Julia class's are its fieldnames, fieldtypes and isconst, a primitive type holding one value" Base.isconst function class_instance_fields(c::DataType, at::String)::Vector{ClassField}
+@quarantine pin"pkg/dart2wasm/lib/class_info.dart:539 ClassInfoCollector._generateFields" "pkg/dart2wasm/lib/class_info.dart:539 ClassInfoCollector._generateFields reads a class's instance fields; a Julia class's are its fieldnames, fieldtypes and isconst, a primitive type holding one value" Base.isconst function class_instance_fields(c::DataType, at::String)::Vector{ClassField}
     class_is_abstract(c) && return ClassField[]
     # a tuple's record (TupleRecord): a top-typed field per element, dart's record fields $1..$N
     local arity = tuple_record_arity(c)
@@ -1138,7 +1138,7 @@ boxed (`jl_field_isptr`, a memory's `arrayelem_isboxed`), or inline holding a po
 (`jl_type_hasptr`, a memory's `first_ptr >= 0`). An inline slot of bits (a primitive, an isbits
 struct, an isbits union) is never #undef: it holds bits.
 """
-@quarantine "julia/src/cgutils.cpp:2768 field_may_be_null tests a slot's reference as jl_field_isptr || jl_type_hasptr" Base.allocatedinline holds_reference(@nospecialize(T))::Bool =
+@quarantine pin"julia/src/cgutils.cpp:2768 field_may_be_null" "julia/src/cgutils.cpp:2768 field_may_be_null tests a slot's reference as jl_field_isptr || jl_type_hasptr" Base.allocatedinline holds_reference(@nospecialize(T))::Bool =
     !Base.allocatedinline(T) || (T isa DataType && !Base.datatype_pointerfree(T))
 
 """
@@ -1148,7 +1148,7 @@ The element size of the concrete memory type `M`, the constant arm of Julia's co
 emit_genericmemoryelsize, read from the type's own layout: its size, plus the selector byte of an
 isbits union (`arrayelem_isunion`, `Base.datatype_arrayelem`'s 2) where `add_isunion`.
 """
-@quarantine "julia/src/cgutils.cpp:3292 emit_genericmemoryelsize: a memory type's element size is its layout's size, plus an isbits union's selector byte where add_isunion" Base.datatype_layoutsize generic_memory_elsize(M::DataType, add_isunion::Bool)::Int =
+@quarantine pin"julia/src/cgutils.cpp:3292 emit_genericmemoryelsize" "julia/src/cgutils.cpp:3292 emit_genericmemoryelsize: a memory type's element size is its layout's size, plus an isbits union's selector byte where add_isunion" Base.datatype_layoutsize generic_memory_elsize(M::DataType, add_isunion::Bool)::Int =
     Base.datatype_layoutsize(M) + (add_isunion && Base.datatype_arrayelem(M) == 2 ? 1 : 0)
 
 """
@@ -1158,7 +1158,7 @@ Whether field `i` of the struct `c` may be undefined (#undef), Julia's codegen's
 the ones every constructor assigns (the trailing `n_uninitialized` of its type's name,
 `Core.Compiler.datatype_min_ninitialized`) holding a reference (`holds_reference`).
 """
-@quarantine "julia/src/cgutils.cpp:2768 field_may_be_null: a field past n_uninitialized's start holding a reference" Core.Compiler.datatype_min_ninitialized field_may_be_null(c::DataType, i::Int)::Bool =
+@quarantine pin"julia/src/cgutils.cpp:2768 field_may_be_null" "julia/src/cgutils.cpp:2768 field_may_be_null: a field past n_uninitialized's start holding a reference" Core.Compiler.datatype_min_ninitialized field_may_be_null(c::DataType, i::Int)::Bool =
     1 <= i <= fieldcount(c) && i > Core.Compiler.datatype_min_ninitialized(c) && holds_reference(class_field_type(c, i))
 
 """
@@ -1172,7 +1172,7 @@ leaves out, a write sets it (late_lowering.dart:382), a read raises UndefRefErro
 getter throws (:295), and `isdefined` reads it. Every other field that may be undefined keeps the
 null for #undef (useNull). The one test the layout, an allocation, a read, a write and `isdefined` ask.
 """
-@quarantine "pkg/front_end/lib/src/kernel/late_lowering.dart:12 lateIsSetSuffix names a potentially nullable late slot's set flag (useIsSetField)" Core.Bool function class_is_set_field(field::ClassField)::Union{ClassField,Nothing}
+@quarantine pin"pkg/front_end/lib/src/kernel/late_lowering.dart:12 lateIsSetSuffix" "pkg/front_end/lib/src/kernel/late_lowering.dart:12 lateIsSetSuffix names a potentially nullable late slot's set flag (useIsSetField)" Core.Bool function class_is_set_field(field::ClassField)::Union{ClassField,Nothing}
     field.index > 0 && field_may_be_null(field.cls, field.index) && _needs_is_set(field.type) || return nothing
     return ClassField(field.cls, 0, field.name * "#isSet", Bool, field.mutable)
 end
@@ -1198,7 +1198,7 @@ class_info.dart like any class). Julia's differs: its kinds are runtime classes 
 (`DataType.name`, `.parameters`, ...) are Julia's internals, so a type value takes dart's layout
 where dart has one, and Julia's own fields where only Julia has the kind.
 """
-@quarantine "a type is a value in Julia, its class a kind whose own fields are the runtime's internals" Core.TypeofBottom function _kind_instance_fields(c::DataType, at::String)::Vector{ClassField}
+@quarantine unpinned "a type is a value in Julia, its class a kind whose own fields are the runtime's internals" Core.TypeofBottom function _kind_instance_fields(c::DataType, at::String)::Vector{ClassField}
     local nullable = ClassField(c, 0, "isDeclaredNullable", Bool, false)
     c === DataType && return ClassField[nullable, ClassField(c, 0, "classId", Int32, false),
         ClassField(c, Base.fieldindex(c, :parameters), "parameters", fieldtype(c, :parameters), false)]
@@ -1228,9 +1228,9 @@ null value (Julia's `nothing`, Nothing's `instance`) is never read as #undef or 
     gap::String
 end
 
-@quarantine "julia/src/builtins.c:1023 jl_f_getfield answers a set field's value" Core.UInt8 const KIND_ENTRY_SET = UInt8(1)
-@quarantine "julia/src/builtins.c:1023 jl_f_getfield reads the field by jl_get_nth_field_checked, which raises UndefRefError for a field that is #undef" Core.UInt8 const KIND_ENTRY_UNDEF = UInt8(0)
-@quarantine "a value no constant of the closed world holds ends the program at its read, located, as Julia's runtime ends one it cannot continue (julia/src/init.c:194 jl_exit), the fatal arm (src/intrinsics.jl Val(:fatal))" Core.UInt8 const KIND_ENTRY_GAP = UInt8(2)
+@quarantine pin"julia/src/builtins.c:1023 jl_f_getfield" "julia/src/builtins.c:1023 jl_f_getfield answers a set field's value" Core.UInt8 const KIND_ENTRY_SET = UInt8(1)
+@quarantine pin"julia/src/builtins.c:1023 jl_f_getfield" "julia/src/builtins.c:1023 jl_f_getfield reads the field by jl_get_nth_field_checked, which raises UndefRefError for a field that is #undef" Core.UInt8 const KIND_ENTRY_UNDEF = UInt8(0)
+@quarantine pin"julia/src/init.c:194 jl_exit" "a value no constant of the closed world holds ends the program at its read, located, as Julia's runtime ends one it cannot continue (julia/src/init.c:194 jl_exit), the fatal arm (src/intrinsics.jl Val(:fatal))" Core.UInt8 const KIND_ENTRY_GAP = UInt8(2)
 
 """
     kind_field_table(translator, i, at) -> KindFieldTable
@@ -1303,7 +1303,7 @@ end
 # whether a constant of the closed world holds `x`, an element of a type value's `types`: a type value of
 # the table (`held`), a Union or UnionAll of held ones where its kind is a class, Union{}; else a value of a
 # class a constant of is made (constant_unmade, the one source)
-@quarantine "dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant makes a constant of a class the closed world holds; a type value's, the typeof table's" Core.typeof function _kind_value_held(translator, held::Base.IdSet{DataType}, @nospecialize(x))::Bool
+@quarantine pin"dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant" "dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant makes a constant of a class the closed world holds; a type value's, the typeof table's" Core.typeof function _kind_value_held(translator, held::Base.IdSet{DataType}, @nospecialize(x))::Bool
     x === Union{} && return true
     x isa DataType && return x in held
     x isa Union && return constant_unmade(translator, Union) === nothing &&
@@ -1343,7 +1343,7 @@ precedent(dart: `_InterfaceType.typeArguments`, a WasmArray<_Type> field; rust: 
 length-carrying slice behind a pointer). Julia's differs: its SimpleVector stores the elements
 inline after the length, where wasm's array is an object of its own the struct references.
 """
-@quarantine "a SimpleVector's data lies outside its fields: Julia's jl_svec_t, an immutable pointer array" Core.SimpleVector function _svec_instance_fields(c::DataType, at::String)::Vector{ClassField}
+@quarantine unpinned "a SimpleVector's data lies outside its fields: Julia's jl_svec_t, an immutable pointer array" Core.SimpleVector function _svec_instance_fields(c::DataType, at::String)::Vector{ClassField}
     c === Core.SimpleVector || reject!(Internal("src/julia/classes.jl _svec_instance_fields: $c, no SimpleVector"), at)
     return ClassField[ClassField(c, 0, "data", ImmutableWasmArray{eltype(c)}, false)]
 end
@@ -1387,7 +1387,7 @@ OneByteString, an i8 wasm array of code units; rust: `String`, a UTF-8 byte buff
 its String stores the bytes inline after the length, where wasm's array is an object the struct
 references.
 """
-@quarantine "a String's data lies outside its fields (Julia's jl_string_len, jl_string_data), its UTF-8 bytes in place of dart's host externref, since Base indexes the bytes; immutable once made by Julia's convention, not by the wasm type" Core.String function _string_instance_fields(c::DataType, at::String)::Vector{ClassField}
+@quarantine unpinned "a String's data lies outside its fields (Julia's jl_string_len, jl_string_data), its UTF-8 bytes in place of dart's host externref, since Base indexes the bytes; immutable once made by Julia's convention, not by the wasm type" Core.String function _string_instance_fields(c::DataType, at::String)::Vector{ClassField}
     c === String || reject!(Internal("src/julia/classes.jl _string_instance_fields: $c, no String"), at)
     return ClassField[ClassField(c, 0, "_data", WasmArray{WasmI8}, false)]
 end
@@ -1429,7 +1429,7 @@ Reshaped: `T` — an element type Julia stores inline as a union of bits types (
 allocatedinline, its selector bytes after the data, genericmemory.c `jl_genericmemory_typetagdata`)
 is stored boxed, its answers the same, as is an inline struct of bits, whose class a box holds.
 """
-@quarantine "a Memory's element storage is Julia's layout of its element type, julia/src/genericmemory.c:55 _new_genericmemory_'s element size: inline bits by size, else a reference" Base.isprimitivetype function _memory_element_storage(@nospecialize(T), at::String)::Type
+@quarantine pin"julia/src/genericmemory.c:55 _new_genericmemory_" "a Memory's element storage is Julia's layout of its element type, julia/src/genericmemory.c:55 _new_genericmemory_'s element size: inline bits by size, else a reference" Base.isprimitivetype function _memory_element_storage(@nospecialize(T), at::String)::Type
     # a pointer is a managed pointer, its class's struct (managed_pointer), held by reference
     managed_pointer(T) && return Union{T,Nothing}
     if T isa DataType && isprimitivetype(T)
@@ -1513,7 +1513,7 @@ uses null for unset (`useNull`). WasmTarget's `nothing` is dart's null, so a ref
 admits `nothing` (`Nothing <: T`, potentially nullable) takes the flag; one Julia stores inline
 (`Base.allocatedinline`) holds bits, never #undef, and takes none.
 """
-@quarantine "pkg/front_end/lib/src/kernel/late_lowering.dart:560 computeIsSetEncoding keeps a potentially nullable slot's set state in a separate flag (useIsSetField); WasmTarget's nothing is dart's null" Base.allocatedinline _needs_is_set(@nospecialize(T))::Bool =
+@quarantine pin"pkg/front_end/lib/src/kernel/late_lowering.dart:560 computeIsSetEncoding" "pkg/front_end/lib/src/kernel/late_lowering.dart:560 computeIsSetEncoding keeps a potentially nullable slot's set state in a separate flag (useIsSetField); WasmTarget's nothing is dart's null" Base.allocatedinline _needs_is_set(@nospecialize(T))::Bool =
     !Base.allocatedinline(T) && Nothing <: T
 
 """
@@ -1528,7 +1528,7 @@ memory of union or zero-size elements, its index from 0 (genericmemory.c, `jl_me
 answering `ptr_or_offset + 1`); a wasm array has no addresses, so the index form, Julia's own, is
 the only one.
 """
-@quarantine "a MemoryRef is Julia's element address or index beside its memory; a wasm array has no addresses, so the index" Core.GenericMemoryRef function _memoryref_instance_fields(c::DataType, at::String)::Vector{ClassField}
+@quarantine unpinned "a MemoryRef is Julia's element address or index beside its memory; a wasm array has no addresses, so the index" Core.GenericMemoryRef function _memoryref_instance_fields(c::DataType, at::String)::Vector{ClassField}
     c <: Core.GenericMemoryRef || reject!(Internal("src/julia/classes.jl _memoryref_instance_fields: $c, no GenericMemoryRef"), at)
     c.parameters[1] === :not_atomic && c.parameters[3] === Core.CPU ||
         reject!(Unquarantined("src/julia/classes.jl _memoryref_instance_fields: $c, an atomic memory reference or one of another address space"), at)
@@ -1570,7 +1570,7 @@ end
 # Julia's image writer queues without recursing into them and prunes (julia/src/staticdata.c:866-867, :3311-3316), each
 # a field of Core.TypeName, checked when the package loads: a Julia that renames one refuses the load, never a walk that
 # recurses into a cache under a new name
-@quarantine "julia/src/staticdata.c:2544 jl_prune_type_cache_hash prunes a TypeName's cache, and :2572 jl_prune_type_cache_linear its linearcache" Core.TypeName const TYPENAME_CACHES::Tuple{Symbol,Symbol} = let names = (:cache, :linearcache)
+@quarantine pin"julia/src/staticdata.c:2544 jl_prune_type_cache_hash" "julia/src/staticdata.c:2544 jl_prune_type_cache_hash prunes a TypeName's cache, and :2572 jl_prune_type_cache_linear its linearcache" Core.TypeName const TYPENAME_CACHES::Tuple{Symbol,Symbol} = let names = (:cache, :linearcache)
     for n in names
         n in fieldnames(Core.TypeName) ||
             throw(ConstructionViolation("TYPENAME_CACHES", "$n is no field of Core.TypeName in this Julia ($(join(fieldnames(Core.TypeName), ", "))): the type caches Julia's image writer prunes (julia/src/staticdata.c:3311-3316) are not where src/julia/classes.jl reads them"))
@@ -1677,13 +1677,13 @@ precedent(julia: jl_module_t, its name its first field after the header; dart: n
 value). Julia's differs: a module is a value a program can hold (a GlobalRef's `mod`, TypeError's
 context), so it is a class, its layout Julia's own leading field.
 """
-@quarantine "a Module's data lies outside its fields (Julia's jl_module_t); dart has no library value, so the layout is Julia's own, its leading name" Core.Module function _module_instance_fields(c::DataType, at::String)::Vector{ClassField}
+@quarantine unpinned "a Module's data lies outside its fields (Julia's jl_module_t); dart has no library value, so the layout is Julia's own, its leading name" Core.Module function _module_instance_fields(c::DataType, at::String)::Vector{ClassField}
     c === Module || reject!(Internal("src/julia/classes.jl _module_instance_fields: $c, no Module"), at)
     return ClassField[ClassField(c, 0, "name", Symbol, false)]
 end
 
 # a field's name, its Julia name as text: a struct's field's, or a module binding's
-@quarantine "a Julia field is named by its fieldname, a Symbol or a tuple's position, and a binding by its Symbol, as kernel names a member by its Name's text (pkg/kernel/lib/src/ast/names.dart:25 Name.text)" Core.GlobalRef field_name(field::Union{ClassField,GlobalRef})::String =
+@quarantine pin"pkg/kernel/lib/src/ast/names.dart:25 Name.text" "a Julia field is named by its fieldname, a Symbol or a tuple's position, and a binding by its Symbol, as kernel names a member by its Name's text (pkg/kernel/lib/src/ast/names.dart:25 Name.text)" Core.GlobalRef field_name(field::Union{ClassField,GlobalRef})::String =
     field isa ClassField ? field.name : string(field.name)
 
 """
@@ -1694,14 +1694,14 @@ body, Julia's own name for a statement. dart keys TFA's selector metadata by the
 (DispatchTable.procedureAttributeMetadata); a Julia field access calls no member, so its site is named
 by position, which a rebuilt NIR keeps.
 """
-@quarantine "dart keys TFA's selector metadata by TreeNode (dart2wasm/lib/dispatch_table.dart:399 DispatchTable.procedureAttributeMetadata); a Julia field access has no Member, so the enclosing MethodInstance and the statement's SSA index name its site" Core.MethodInstance struct FieldAccessSite
+@quarantine pin"dart2wasm/lib/dispatch_table.dart:399 DispatchTable.procedureAttributeMetadata" "dart keys TFA's selector metadata by TreeNode (dart2wasm/lib/dispatch_table.dart:399 DispatchTable.procedureAttributeMetadata); a Julia field access has no Member, so the enclosing MethodInstance and the statement's SSA index name its site" Core.MethodInstance struct FieldAccessSite
     member::Core.MethodInstance
     index::Int
 end
 
 # a field selector's calls: its field's name, whether it is the setter, its call count, the classes
 # its receivers' types admit, and its call sites
-@quarantine "a field selector's calls, Julia's field accesses on receivers its inference left abstract, as TFA counts a selector's calls in its TableSelectorInfo (pkg/vm/lib/metadata/table_selector.dart:10 TableSelectorInfo)" Core.DataType mutable struct FieldSelectorCalls
+@quarantine pin"pkg/vm/lib/metadata/table_selector.dart:10 TableSelectorInfo" "a field selector's calls, Julia's field accesses on receivers its inference left abstract, as TFA counts a selector's calls in its TableSelectorInfo (pkg/vm/lib/metadata/table_selector.dart:10 TableSelectorInfo)" Core.DataType mutable struct FieldSelectorCalls
     const name::String
     const is_setter::Bool
     call_count::Int
@@ -1713,16 +1713,16 @@ end
 # id by id, and their classes, each id's in the translator's class list (dart's translator.classes,
 # indexed by class id): the one projection of the one reading, which every site taking a type's
 # concrete classes calls
-@quarantine "a type's concrete classes are the ids dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange answers, each a class of the translator's list" Core.Type concrete_class_ids(t, T::Type)::Vector{Int} =
+@quarantine pin"dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange" "a type's concrete classes are the ids dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange answers, each a class of the translator's list" Core.Type concrete_class_ids(t, T::Type)::Vector{Int} =
     Int[id for r in Dart2Wasm.get_concrete_class_id_range(t.class_id_numbering[], T) for id in r.start:r.end_]
-@quarantine "a type's concrete classes are the ids dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange answers, each a class of the translator's list" Core.DataType concrete_classes(t, T::Type)::Vector{DataType} =
+@quarantine pin"dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange" "a type's concrete classes are the ids dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange answers, each a class of the translator's list" Core.DataType concrete_classes(t, T::Type)::Vector{DataType} =
     DataType[t.classes[][id + 1].cls for id in concrete_class_ids(t, T)]
 
 # the classes, each with its id, a value of static type `T` has once held at the top type (convertType's
 # box): its concrete classes, and the record each concrete tuple class among them is boxed into there
 # (TupleRecord; the walk meets every concrete tuple class's record); the one answer of which records an
 # operand's value can be, read by typeof's record arms (src/intrinsics.jl to_typeof)
-@quarantine "a type's concrete classes are the ids dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange answers; a tuple of a concrete type held at the top type is its arity's record, as dart's convertType boxes a value type on upcast (translator.dart:1597)" Core.Type function top_held_classes(t, T::Type)::Vector{Tuple{Int,DataType}}
+@quarantine pin"dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange" "a type's concrete classes are the ids dart2wasm/lib/class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange answers; a tuple of a concrete type held at the top type is its arity's record, as dart's convertType boxes a value type on upcast (translator.dart:1597)" Core.Type function top_held_classes(t, T::Type)::Vector{Tuple{Int,DataType}}
     local out = Tuple{Int,DataType}[]
     for (id, c) in zip(concrete_class_ids(t, T), concrete_classes(t, T))
         push!(out, (id, c))
@@ -1792,7 +1792,7 @@ end
 # field's selector; a class it reaches past its fields raises Julia's BoundsError at the site
 # (classes_without_field), never through the selector; a position naming different fields in different
 # classes is no one named selector, a located rejection
-@quarantine "Julia's getfield reads a position or a name as one field index of the receiver's own type (julia/src/builtins.c:994 get_checked_fieldindex), one name for the classes holding the field" Base.only function field_selector_name(@nospecialize(f), admitted::Vector{DataType})::String
+@quarantine pin"julia/src/builtins.c:994 get_checked_fieldindex" "Julia's getfield reads a position or a name as one field index of the receiver's own type (julia/src/builtins.c:994 get_checked_fieldindex), one name for the classes holding the field" Base.only function field_selector_name(@nospecialize(f), admitted::Vector{DataType})::String
     local at = "src/julia/classes.jl field_selector_name"
     f isa Symbol && return string(f)
     local names = String[]
@@ -1817,7 +1817,7 @@ record), which DispatchTable.build passes, less those holding no field of its na
 (classes_without_field), which raise Julia's FieldError or BoundsError at the site. DispatchTable.build (src/dispatch_table.jl)
 reads it where dart reads TFA's selector ids. A receiver of a concrete type is a direct access, no call of a selector.
 """
-@quarantine "a field access on a receiver Julia's inference left abstract is dart's dynamic call through the dispatch table, which TFA registers when the call is not direct (pkg/vm/lib/transformations/type_flow/table_selector_assigner.dart:142 TableSelectorAssigner.registerGetterCall)" Core.getfield function field_selector_calls(world::NirWorld, admitted_classes::Function)::Vector{FieldSelectorCalls}
+@quarantine pin"pkg/vm/lib/transformations/type_flow/table_selector_assigner.dart:142 TableSelectorAssigner.registerGetterCall" "a field access on a receiver Julia's inference left abstract is dart's dynamic call through the dispatch table, which TFA registers when the call is not direct (pkg/vm/lib/transformations/type_flow/table_selector_assigner.dart:142 TableSelectorAssigner.registerGetterCall)" Core.getfield function field_selector_calls(world::NirWorld, admitted_classes::Function)::Vector{FieldSelectorCalls}
     local out = FieldSelectorCalls[]
     for b in world, (index, st) in enumerate(b.stmts)
         st isa NirCall || continue

@@ -10,7 +10,7 @@ vertex is a key of `graph`, its edges the key's set. package:collection's
 `stronglyConnectedComponents` (pkgs/collection/lib/src/functions.dart:176), which wasm_builder's
 types.dart:246 calls to form the rec groups.
 """
-@quarantine "package:collection's stronglyConnectedComponents (dart-lang/core be0b1531 pkgs/collection/lib/src/functions.dart:176), which wasm_builder's types.dart:246 calls; a dependency outside the pinned SDK" Base.IdDict function strongly_connected_components(graph::LinkedHashMap{T,LinkedHashSet{T}})::Vector{LinkedHashSet{T}} where {T}
+@quarantine unpinned "package:collection's stronglyConnectedComponents (dart-lang/core be0b1531 pkgs/collection/lib/src/functions.dart:176), which wasm_builder's types.dart:246 calls; a dependency outside the pinned SDK" Base.IdDict function strongly_connected_components(graph::LinkedHashMap{T,LinkedHashSet{T}})::Vector{LinkedHashSet{T}} where {T}
     index = 0
     stack = T[]
     result = LinkedHashSet{T}[]

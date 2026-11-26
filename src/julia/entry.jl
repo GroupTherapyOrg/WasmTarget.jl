@@ -34,7 +34,7 @@ end
 # dartdev's `dart compile wasm` (pkg/dartdev/lib/src/commands/compile.dart:874-875): cfe, tfa,
 # codegen and opt; `optimize = false` leaves opt out, as dartdev's optimization level 0 does
 # (:1002-1010), the library's default phases (compiler_options.dart:64)
-@quarantine "the compile's stages take the ClosedWorld Julia's verifier accepted, a typestate dart's driver has no need of" Core.String function compile_world(world::ClosedWorld, at::String; optimize::Bool = true)::Vector{UInt8}
+@quarantine unpinned "the compile's stages take the ClosedWorld Julia's verifier accepted, a typestate dart's driver has no need of" Core.String function compile_world(world::ClosedWorld, at::String; optimize::Bool = true)::Vector{UInt8}
     local options = Dart2Wasm.WasmCompilerOptions(; main_uri = "", output_file = "main.wasm")
     options.translator_options.standalone = true
     options.translator_options.generate_source_maps = false

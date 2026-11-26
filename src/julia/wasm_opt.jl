@@ -5,7 +5,7 @@
 
 # Binaryen_jll's package id, loaded on the first run: the jll is WasmTarget's dependency, its
 # artifact the wasm-opt executable
-@quarantine "wasm-opt is Binaryen's executable, which Binaryen_jll ships as an artifact" Base.PkgId const _BINARYEN_JLL = Base.PkgId(Base.UUID("a54ac8ab-712d-5a0e-8e11-9296c0d3c20e"), "Binaryen_jll")
+@quarantine unpinned "wasm-opt is Binaryen's executable, which Binaryen_jll ships as an artifact" Base.PkgId const _BINARYEN_JLL = Base.PkgId(Base.UUID("a54ac8ab-712d-5a0e-8e11-9296c0d3c20e"), "Binaryen_jll")
 
 """
     run_wasm_opt(bytes, flags, at) -> Vector{UInt8}
@@ -21,7 +21,7 @@ wasm-opt's output is not built by WasmTarget's builder, so the builder's refusal
 the differential runner checks the optimized module against native Julia beside the unoptimized
 one.
 """
-@quarantine "dart runs wasm-opt as a process over files; Julia's run of Binaryen_jll's executable over temporary files is that call" Base.pipeline function run_wasm_opt(bytes::Vector{UInt8}, flags::Vector{String}, at::String)::Vector{UInt8}
+@quarantine unpinned "dart runs wasm-opt as a process over files; Julia's run of Binaryen_jll's executable over temporary files is that call" Base.pipeline function run_wasm_opt(bytes::Vector{UInt8}, flags::Vector{String}, at::String)::Vector{UInt8}
     local jll = Base.require(_BINARYEN_JLL)
     local wasm_opt = Base.invokelatest(getfield(jll, :wasmopt))::Cmd
     return mktempdir() do dir

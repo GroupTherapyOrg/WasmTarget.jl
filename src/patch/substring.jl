@@ -24,7 +24,7 @@ end
 # Base's body, each byte of the Char's UTF-8 stored into its fresh String's data array, or its byte
 # Vector's elements, in place of through pointer(out, offs); any other `out` stays Base's, a located
 # rejection where it is reached
-@quarantine "julia/base/strings/substring.jl:199 __unsafe_string! of a Char stores its UTF-8 bytes through pointer(out, offs); WasmGC stores the data array's elements (array.set)" Base.__unsafe_string! @consistent_overlay METHOD_TABLE @inline function Base.__unsafe_string!(out::Union{String,Vector{UInt8}}, c::Char, offs::Integer)
+@quarantine pin"julia/base/strings/substring.jl:199 __unsafe_string!" "julia/base/strings/substring.jl:199 __unsafe_string! of a Char stores its UTF-8 bytes through pointer(out, offs); WasmGC stores the data array's elements (array.set)" Base.__unsafe_string! @consistent_overlay METHOD_TABLE @inline function Base.__unsafe_string!(out::Union{String,Vector{UInt8}}, c::Char, offs::Integer)
     local x = bswap(reinterpret(UInt32, c))
     local n = ncodeunits(c)
     local o = Int(offs) - 1
@@ -46,7 +46,7 @@ end
 # pointer(s), its String's pointer past its offset (julia/base/strings/substring.jl:135 pointer), are its
 # String's data array's from that offset, copied as a String's are (array.copy); any other `out` stays
 # Base's, a located rejection where it is reached
-@quarantine "julia/base/strings/substring.jl:223 __unsafe_string! of a SubString{String} copies its bytes from pointer(s), its String's address past its offset; WasmGC copies its String's data array from that offset (array.copy)" Base.__unsafe_string! @consistent_overlay METHOD_TABLE @inline function Base.__unsafe_string!(out::String, s::SubString{String}, offs::Integer)
+@quarantine pin"julia/base/strings/substring.jl:223 __unsafe_string!" "julia/base/strings/substring.jl:223 __unsafe_string! of a SubString{String} copies its bytes from pointer(s), its String's address past its offset; WasmGC copies its String's data array from that offset (array.copy)" Base.__unsafe_string! @consistent_overlay METHOD_TABLE @inline function Base.__unsafe_string!(out::String, s::SubString{String}, offs::Integer)
     local n = sizeof(s)
     wasm_string_copy!(out, Int(offs) - 1, s.string, s.offset, n)
     return n
@@ -60,7 +60,7 @@ end
 # is not carried over, as String(::Symbol)'s :total is not (src/patch/string.jl): Base promises it of an
 # unchecked pointer copy, and the overlay's array.copy is checked, trapping past the String's end, so no
 # call of it is removed or folded on a promise the overlay does not keep
-@quarantine "julia/base/strings/substring.jl:229 __unsafe_string! of a Symbol copies the bytes at its jl_symbol_name pointer; WasmGC copies its name's data array (array.copy), the name dart's Symbol.getName reads; Base's @assume_effects :nothrow is not carried over, the checked array.copy trapping where Base's unchecked copy promises no throw" Base.__unsafe_string! @consistent_overlay METHOD_TABLE @inline function Base.__unsafe_string!(out::String, s::Symbol, offs::Integer)
+@quarantine pin"julia/base/strings/substring.jl:229 __unsafe_string!" "julia/base/strings/substring.jl:229 __unsafe_string! of a Symbol copies the bytes at its jl_symbol_name pointer; WasmGC copies its name's data array (array.copy), the name dart's Symbol.getName reads; Base's @assume_effects :nothrow is not carried over, the checked array.copy trapping where Base's unchecked copy promises no throw" Base.__unsafe_string! @consistent_overlay METHOD_TABLE @inline function Base.__unsafe_string!(out::String, s::Symbol, offs::Integer)
     local n = sizeof(s)
     wasm_string_copy!(out, Int(offs) - 1, wasm_symbol_name(s), 0, n)
     return n
@@ -70,7 +70,7 @@ end
 # s.offset+1) and its ncodeunits, jl_pchar_to_string's copy of those bytes into a fresh String
 # (julia/src/array.c:307, jl_alloc_string then memcpy); WasmGC copies the parent's data array from the offset
 # into the fresh String's (array.copy), as getindex(::String, ::UnitRange) does (src/patch/string.jl)
-@quarantine "julia/base/strings/substring.jl:75 String of a SubString{String} copies its bytes by unsafe_string from pointer(parent, offset+1); WasmGC copies the parent's data array from the offset (array.copy)" Base.String @consistent_overlay METHOD_TABLE function Base.String(s::SubString{String})
+@quarantine pin"julia/base/strings/substring.jl:75 String" "julia/base/strings/substring.jl:75 String of a SubString{String} copies its bytes by unsafe_string from pointer(parent, offset+1); WasmGC copies the parent's data array from the offset (array.copy)" Base.String @consistent_overlay METHOD_TABLE function Base.String(s::SubString{String})
     local n = s.ncodeunits
     local out = Base._string_n(n)
     wasm_string_copy!(out, 0, s.string, s.offset, n)
@@ -80,4 +80,4 @@ end
 # Base's Symbol of a SubString{String} (julia/base/strings/substring.jl:195): jl_symbol_n of its pointer and
 # sizeof; WasmGC has no pointer, so the port of jl_symbol_n (src/julia/runtime/rtutils.jl) takes the String of
 # its bytes, its copy as String(s) makes it
-@quarantine "julia/base/strings/substring.jl:195 Symbol of a SubString{String} is jl_symbol_n of its pointer and size; WasmGC has no pointer, so the port of jl_symbol_n reads a String of its bytes" Core.Symbol @consistent_overlay METHOD_TABLE Core.Symbol(s::SubString{String}) = jl_symbol_n(String(s))
+@quarantine pin"julia/base/strings/substring.jl:195 Symbol" "julia/base/strings/substring.jl:195 Symbol of a SubString{String} is jl_symbol_n of its pointer and size; WasmGC has no pointer, so the port of jl_symbol_n reads a String of its bytes" Core.Symbol @consistent_overlay METHOD_TABLE Core.Symbol(s::SubString{String}) = jl_symbol_n(String(s))

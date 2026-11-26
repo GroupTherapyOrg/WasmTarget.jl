@@ -17,7 +17,7 @@ precedent(c: a forward-declared struct, `struct Module;`; ocaml: a signature bef
 implementation). Julia's differs: it has no forward declaration, so an abstract type stands for the
 struct and its one subtype is checked by reflection when the package loads.
 """
-@quarantine "Julia has no forward struct declaration; the IR's back-pointers to their Module name this abstract type" Core.DataType abstract type AbstractModule end
+@quarantine unpinned "Julia has no forward struct declaration; the IR's back-pointers to their Module name this abstract type" Core.DataType abstract type AbstractModule end
 
 """
     AbstractModuleBuilder
@@ -29,7 +29,7 @@ precedent(c: a forward-declared struct; ocaml: a signature before its implementa
 differs: it has no forward declaration, so an abstract type stands for the struct and its one
 subtype is checked by reflection when the package loads.
 """
-@quarantine "Julia has no forward struct declaration; the builders' back-pointers to their ModuleBuilder name this abstract type" Core.DataType abstract type AbstractModuleBuilder end
+@quarantine unpinned "Julia has no forward struct declaration; the builders' back-pointers to their ModuleBuilder name this abstract type" Core.DataType abstract type AbstractModuleBuilder end
 
 """
     AbstractInstructionsBuilder
@@ -41,7 +41,7 @@ precedent(c: a forward-declared struct; ocaml: a signature before its implementa
 differs: it has no forward declaration, so an abstract type stands for the struct and its one
 subtype is checked by reflection when the package loads.
 """
-@quarantine "Julia has no forward struct declaration; a patchable region's builder names this abstract type" Core.DataType abstract type AbstractInstructionsBuilder end
+@quarantine unpinned "Julia has no forward struct declaration; a patchable region's builder names this abstract type" Core.DataType abstract type AbstractInstructionsBuilder end
 
 """
     check_forward(forward, sole, mod) -> Int
@@ -55,7 +55,7 @@ precedent(julia: InteractiveUtils.subtypes, which reads every loaded module's bi
 way). Julia's differs from a forward-declared struct: an abstract type stays open to any module, so
 the check reads them all where the package loads (A45S3).
 """
-@quarantine "the forward declaration's one subtype, found by reflection over every loaded module's bindings" Base.loaded_modules_array function check_forward(forward::DataType, sole::DataType, mod::Module)::Int
+@quarantine unpinned "the forward declaration's one subtype, found by reflection over every loaded module's bindings" Base.loaded_modules_array function check_forward(forward::DataType, sole::DataType, mod::Module)::Int
     local roots = Module[Base.loaded_modules_array(); Main; mod]
     sole <: forward || throw(ConstructionViolation(string(nameof(forward)), "$sole does not subtype it"))
     local seen = Base.IdSet{Module}()
@@ -79,9 +79,9 @@ the check reads them all where the package loads (A45S3).
 end
 
 # checked when every definition exists (src/WasmTarget.jl calls it after include_dart)
-@quarantine "AbstractModule's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractModule})::Int = check_forward(AbstractModule, WasmBuilder.IR.Module, @__MODULE__)
-@quarantine "AbstractModuleBuilder's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractModuleBuilder})::Int = check_forward(AbstractModuleBuilder, WasmBuilder.ModuleBuilder, @__MODULE__)
-@quarantine "AbstractInstructionsBuilder's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractInstructionsBuilder})::Int = check_forward(AbstractInstructionsBuilder, WasmBuilder.InstructionsBuilder, @__MODULE__)
+@quarantine unpinned "AbstractModule's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractModule})::Int = check_forward(AbstractModule, WasmBuilder.IR.Module, @__MODULE__)
+@quarantine unpinned "AbstractModuleBuilder's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractModuleBuilder})::Int = check_forward(AbstractModuleBuilder, WasmBuilder.ModuleBuilder, @__MODULE__)
+@quarantine unpinned "AbstractInstructionsBuilder's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractInstructionsBuilder})::Int = check_forward(AbstractInstructionsBuilder, WasmBuilder.InstructionsBuilder, @__MODULE__)
 
 """
     AbstractClosures
@@ -94,10 +94,10 @@ precedent(c: a forward-declared struct; ocaml: a signature before its implementa
 differs: it has no forward declaration, so an abstract type stands for the struct and its one
 subtype is checked by reflection when the package loads.
 """
-@quarantine "Julia has no forward struct declaration; a Lambda's back-pointer to its Closures names this abstract type" Core.DataType abstract type AbstractClosures end
+@quarantine unpinned "Julia has no forward struct declaration; a Lambda's back-pointer to its Closures names this abstract type" Core.DataType abstract type AbstractClosures end
 
 # checked when every definition exists (src/WasmTarget.jl calls it after include_dart)
-@quarantine "AbstractClosures's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractClosures})::Int = check_forward(AbstractClosures, Dart2Wasm.Closures, @__MODULE__)
+@quarantine unpinned "AbstractClosures's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractClosures})::Int = check_forward(AbstractClosures, Dart2Wasm.Closures, @__MODULE__)
 
 """
     AbstractLambda
@@ -110,10 +110,10 @@ precedent(c: a forward-declared struct; ocaml: a signature before its implementa
 differs: it has no forward declaration, so an abstract type stands for the struct and its one
 subtype is checked by reflection when the package loads.
 """
-@quarantine "Julia has no forward struct declaration; a LambdaCallTarget's back-pointer to its Lambda names this abstract type" Core.DataType abstract type AbstractLambda end
+@quarantine unpinned "Julia has no forward struct declaration; a LambdaCallTarget's back-pointer to its Lambda names this abstract type" Core.DataType abstract type AbstractLambda end
 
 # checked when every definition exists (src/WasmTarget.jl calls it after include_dart)
-@quarantine "AbstractLambda's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractLambda})::Int = check_forward(AbstractLambda, Dart2Wasm.Lambda, @__MODULE__)
+@quarantine unpinned "AbstractLambda's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractLambda})::Int = check_forward(AbstractLambda, Dart2Wasm.Lambda, @__MODULE__)
 
 """
     AbstractDispatchTable
@@ -126,7 +126,7 @@ precedent(c: a forward-declared struct; ocaml: a signature before its implementa
 differs: it has no forward declaration, so an abstract type stands for the struct and its one
 subtype is checked by reflection when the package loads.
 """
-@quarantine "Julia has no forward struct declaration; a SelectorInfo's back-pointer to its DispatchTable names this abstract type" Core.DataType abstract type AbstractDispatchTable end
+@quarantine unpinned "Julia has no forward struct declaration; a SelectorInfo's back-pointer to its DispatchTable names this abstract type" Core.DataType abstract type AbstractDispatchTable end
 
 # checked when every definition exists (src/WasmTarget.jl calls it after include_dart)
-@quarantine "AbstractDispatchTable's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractDispatchTable})::Int = check_forward(AbstractDispatchTable, Dart2Wasm.DispatchTable, @__MODULE__)
+@quarantine unpinned "AbstractDispatchTable's assertion, run when the package loads" Base.Val construction_check(::Val{:AbstractDispatchTable})::Int = check_forward(AbstractDispatchTable, Dart2Wasm.DispatchTable, @__MODULE__)

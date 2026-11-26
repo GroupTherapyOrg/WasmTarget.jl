@@ -9,7 +9,7 @@
 
 using Base: @assume_effects
 
-@quarantine "julia/base/hashing.jl:198 hash of a String calls the runtime's hash through a pointer, keeping its @assume_effects :total; WasmGC reads the String's bytes" Base.hash @consistent_overlay METHOD_TABLE @assume_effects :total function Base.hash(s::String, h::UInt)
+@quarantine pin"julia/base/hashing.jl:198 hash" "julia/base/hashing.jl:198 hash of a String calls the runtime's hash through a pointer, keeping its @assume_effects :total; WasmGC reads the String's bytes" Base.hash @consistent_overlay METHOD_TABLE @assume_effects :total function Base.hash(s::String, h::UInt)
     h += Base.memhash_seed
     return memhash_seed(s, h % UInt32) + h
 end

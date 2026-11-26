@@ -6,7 +6,7 @@
 
 # whether the dart class at line `ln` of `lines` reaches `target` through extends, implements and
 # with, reading each superclass in the files of the anchor's package (`find`)
-@quarantine "dart's analyzer knows a class's interfaces; Julia reads the pinned class headers" Base.any function _dart_reaches(lines::Vector{String}, ln::Int, target::String, find::Function, depth::Int = 0)::Bool
+@quarantine unpinned "dart's analyzer knows a class's interfaces; Julia reads the pinned class headers" Base.any function _dart_reaches(lines::Vector{String}, ln::Int, target::String, find::Function, depth::Int = 0)::Bool
     depth > 16 && return false
     return any(_dart_supers(lines, ln)) do sup
         sup == target && return true
@@ -26,7 +26,7 @@ precedent(dart: `void write(Serializable object)`, the analyzer refusing a call 
 type; rust: a trait bound checked at each impl). Julia's differs: an implementor that cannot subtype
 Serializable is named in write's signature by hand, so the load checks the names against dart.
 """
-@quarantine "Julia has no interfaces; an implementor outside Serializable's subtypes is checked against dart when the package loads" Base.hasmethod function check_serializable_writable(serialize::Function, write::Function, serializer::DataType, sdk::String)::Int
+@quarantine unpinned "Julia has no interfaces; an implementor outside Serializable's subtypes is checked against dart when the package loads" Base.hasmethod function check_serializable_writable(serialize::Function, write::Function, serializer::DataType, sdk::String)::Int
     local out = String[]
     for m in methods(serialize)
         local ps = Base.unwrap_unionall(m.sig).parameters
@@ -59,5 +59,5 @@ Serializable is named in write's signature by hand, so the load checks the names
 end
 
 # checked when every definition exists and the pinned checkout is there (src/WasmTarget.jl)
-@quarantine "Serializer.write's assertion, run when the package loads" Base.Val construction_check(::Val{:check_serializable_writable})::Int =
+@quarantine unpinned "Serializer.write's assertion, run when the package loads" Base.Val construction_check(::Val{:check_serializable_writable})::Int =
     check_serializable_writable(WasmBuilder.serialize, Base.write, WasmBuilder.Serializer, something(_pin_sdk()))

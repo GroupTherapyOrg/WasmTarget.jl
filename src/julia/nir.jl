@@ -8,12 +8,12 @@
 # not carried: an open abstract node type, `Any` fields and comment anchors fail WT2's load-time checks.
 
 """An operand that is a statement's value, Julia's `Core.SSAValue`; `id` its statement."""
-@quarantine "Julia's optimized IR names a statement's value by SSAValue; dart's Kernel nests the subexpression" Core.SSAValue struct NirSSA
+@quarantine unpinned "Julia's optimized IR names a statement's value by SSAValue; dart's Kernel nests the subexpression" Core.SSAValue struct NirSSA
     id::Int
 end
 
 """An operand that is an argument, Julia's `Core.Argument`; `n` its position, 1 the callee itself."""
-@quarantine "Julia's optimized IR names an argument by its position, Core.Argument" Core.Argument struct NirArgument
+@quarantine unpinned "Julia's optimized IR names an argument by its position, Core.Argument" Core.Argument struct NirArgument
     n::Int
 end
 
@@ -71,7 +71,7 @@ end
 
 """An operand that is a literal (a `QuoteNode`'s payload or any other constant), as Julia's own
 `Core.Const` lattice element holds it."""
-@quarantine "Julia's literal operands are any value; Julia's Const lattice element holds one" Core.QuoteNode struct NirConst
+@quarantine unpinned "Julia's literal operands are any value; Julia's Const lattice element holds one" Core.QuoteNode struct NirConst
     c::Core.Const
 end
 
@@ -84,9 +84,9 @@ end
 # by the type alone made N of them collide, the cache quadratic, A51S13). A value Julia stores flat
 # (isbits), a String, Symbol or Type is hashed itself, and a mutable object by its address (objectid).
 # formal(dev/formal/ConstantHash.tla): the hash agrees with ===, its walk bounded, a key's hash stable
-@quarantine "a literal's hash agrees with === at a bounded cost: Julia's objectid recurses through every path of an immutable value" Base.hash Base.hash(c::NirConst, h::UInt)::UInt = _bounded_hash(c.c.val, h, Ref(64))
+@quarantine unpinned "a literal's hash agrees with === at a bounded cost: Julia's objectid recurses through every path of an immutable value" Base.hash Base.hash(c::NirConst, h::UInt)::UInt = _bounded_hash(c.c.val, h, Ref(64))
 
-@quarantine "an immutable value's hash over its first values, depth first, at most a fixed count of them" Base.hash function _bounded_hash(@nospecialize(v), h::UInt, budget::Base.RefValue{Int})::UInt
+@quarantine unpinned "an immutable value's hash over its first values, depth first, at most a fixed count of them" Base.hash function _bounded_hash(@nospecialize(v), h::UInt, budget::Base.RefValue{Int})::UInt
     budget[] -= 1
     (isbits(v) || v isa Union{String,Symbol,Type}) && return hash(v, h)
     # a mutable object is told by its address, as === tells it, never its contents (which change, and
@@ -111,10 +111,10 @@ subtype nothing, `@closed`, and `value_form` its `@exhaustive` match, checked wh
 precedent(rust: enum + exhaustive match; dart: sealed class + exhaustive switch). Julia's differs: a
 `Union` of concrete types, its exhaustiveness checked when the package loads.
 """
-@quarantine "a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const NirValue = Union{NirSSA, NirArgument, NirGlobal, NirConst}
+@quarantine unpinned "a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const NirValue = Union{NirSSA, NirArgument, NirGlobal, NirConst}
 
 # an operand's form, one arm per kind (dart's switch over a sealed class)
-@quarantine "the operand sum's one match, an exhaustive switch where dart switches over a sealed class" Core.String function value_form(v::NirValue)::String
+@quarantine unpinned "the operand sum's one match, an exhaustive switch where dart switches over a sealed class" Core.String function value_form(v::NirValue)::String
     @exhaustive v::NirValue begin
         NirSSA => "ssa"
         NirArgument => "argument"
@@ -125,56 +125,56 @@ end
 
 # ---- the statement kinds, one per form of Julia's optimized IR ----------------------------------
 """`Expr(:call, f, args...)`: a call Julia's optimizer left; `args` its operands, the callee first."""
-@quarantine "Julia's optimized IR keeps a call as Expr(:call)" Core.Expr struct NirCall
+@quarantine unpinned "Julia's optimized IR keeps a call as Expr(:call)" Core.Expr struct NirCall
     args::Vector{NirValue}
 end
 """`Expr(:invoke, target, f, args...)`: a call Julia resolved; `target` the instance it calls."""
-@quarantine "Julia's optimized IR resolves a call to its MethodInstance or CodeInstance, Expr(:invoke)" Core.Expr struct NirInvoke
+@quarantine unpinned "Julia's optimized IR resolves a call to its MethodInstance or CodeInstance, Expr(:invoke)" Core.Expr struct NirInvoke
     target::Union{Core.MethodInstance, Core.CodeInstance}
     args::Vector{NirValue}
 end
 """`Expr(:new, T, fields...)`: an allocation; `args` its type operand and fields."""
-@quarantine "Julia's optimized IR allocates with Expr(:new)" Core.Expr struct NirNew
+@quarantine unpinned "Julia's optimized IR allocates with Expr(:new)" Core.Expr struct NirNew
     args::Vector{NirValue}
 end
 """`Expr(:foreigncall, name, rt, argtypes, nreq, cc, args...)`: a foreign call, its operands as Julia wrote them."""
-@quarantine "Julia's optimized IR calls a foreign function with Expr(:foreigncall)" Core.Expr struct NirForeignCall
+@quarantine unpinned "Julia's optimized IR calls a foreign function with Expr(:foreigncall)" Core.Expr struct NirForeignCall
     args::Vector{NirValue}
 end
 """`Expr(:boundscheck[, flag])`: whether bounds are checked here."""
-@quarantine "Julia's bounds-check elision, Expr(:boundscheck); dart has none" Core.Expr struct NirBoundscheck
+@quarantine unpinned "Julia's bounds-check elision, Expr(:boundscheck); dart has none" Core.Expr struct NirBoundscheck
     args::Vector{NirValue}
 end
 """`Expr(:gc_preserve_begin, values...)`: the values kept alive until its end."""
-@quarantine "Julia's GC preservation regions, Expr(:gc_preserve_begin); WasmGC needs none but the IR holds them" Core.Expr struct NirGCPreserveBegin
+@quarantine unpinned "Julia's GC preservation regions, Expr(:gc_preserve_begin); WasmGC needs none but the IR holds them" Core.Expr struct NirGCPreserveBegin
     args::Vector{NirValue}
 end
 """`Expr(:gc_preserve_end, token)`: the end of a preservation region."""
-@quarantine "Julia's GC preservation regions, Expr(:gc_preserve_end)" Core.Expr struct NirGCPreserveEnd
+@quarantine unpinned "Julia's GC preservation regions, Expr(:gc_preserve_end)" Core.Expr struct NirGCPreserveEnd
     args::Vector{NirValue}
 end
 """`Expr(:leave, tokens...)`: leaving try regions."""
-@quarantine "Julia's try regions are left with Expr(:leave)" Core.Expr struct NirLeave
+@quarantine unpinned "Julia's try regions are left with Expr(:leave)" Core.Expr struct NirLeave
     args::Vector{NirValue}
 end
 """`Expr(:pop_exception, token)`: restoring the exception stack after a catch."""
-@quarantine "Julia's exception stack, Expr(:pop_exception)" Core.Expr struct NirPopException
+@quarantine unpinned "Julia's exception stack, Expr(:pop_exception)" Core.Expr struct NirPopException
     args::Vector{NirValue}
 end
 """`Expr(:the_exception)`: the exception a catch region received."""
-@quarantine "Julia's caught exception, Expr(:the_exception)" Core.Expr struct NirTheException
+@quarantine unpinned "Julia's caught exception, Expr(:the_exception)" Core.Expr struct NirTheException
     args::Vector{NirValue}
 end
 """`Expr(:loopinfo, hints...)`: loop hints, with no effect on a value."""
-@quarantine "Julia's loop hints, Expr(:loopinfo)" Core.Expr struct NirLoopInfo
+@quarantine unpinned "Julia's loop hints, Expr(:loopinfo)" Core.Expr struct NirLoopInfo
     args::Vector{NirValue}
 end
 """`Expr(:throw_undef_if_not, name, cond)`: an UndefVarError unless `cond`."""
-@quarantine "Julia's undefined-variable check, Expr(:throw_undef_if_not)" Core.Expr struct NirThrowUndefIfNot
+@quarantine unpinned "Julia's undefined-variable check, Expr(:throw_undef_if_not)" Core.Expr struct NirThrowUndefIfNot
     args::Vector{NirValue}
 end
 """`Expr(:cfunction, ...)`: a C function pointer to a Julia function, its operands as Julia wrote them."""
-@quarantine "Julia's @cfunction, Expr(:cfunction)" Core.Expr struct NirCFunction
+@quarantine unpinned "Julia's @cfunction, Expr(:cfunction)" Core.Expr struct NirCFunction
     args::Vector{NirValue}
 end
 """`Expr(:invoke_modify, target, f, args...)`: a resolved modifyfield!-style call; `target` the instance of
@@ -185,46 +185,46 @@ emit_invoke_modify, `lival`), a callee as an invoke's target is, no value of the
     args::Vector{NirValue}
 end
 """`Core.GotoNode`: a jump to statement `label`."""
-@quarantine "Julia's IR is a flat statement list with GotoNode jumps; dart's Kernel is structured" Core.GotoNode struct NirGoto
+@quarantine unpinned "Julia's IR is a flat statement list with GotoNode jumps; dart's Kernel is structured" Core.GotoNode struct NirGoto
     label::Int
 end
 """`Core.GotoIfNot`: a jump to statement `dest` unless `cond`."""
-@quarantine "Julia's conditional jump, GotoIfNot" Core.GotoIfNot struct NirGotoIfNot
+@quarantine unpinned "Julia's conditional jump, GotoIfNot" Core.GotoIfNot struct NirGotoIfNot
     cond::NirValue
     dest::Int
 end
 """`Core.ReturnNode` with a value: the body returns `val`."""
-@quarantine "Julia's return, ReturnNode" Core.ReturnNode struct NirReturn
+@quarantine unpinned "Julia's return, ReturnNode" Core.ReturnNode struct NirReturn
     val::NirValue
 end
 """`Core.ReturnNode` with no value: a statement Julia proved unreachable."""
-@quarantine "Julia marks unreachable code with a ReturnNode of no value" Core.ReturnNode struct NirUnreachable
+@quarantine unpinned "Julia marks unreachable code with a ReturnNode of no value" Core.ReturnNode struct NirUnreachable
 end
 """`Core.PhiNode`: the value from the predecessor statement `edges[k]` is `values[k]`, `nothing` where unassigned."""
-@quarantine "Julia's optimized IR is in SSA form, PhiNode; dart's Kernel merges through variables" Core.PhiNode struct NirPhi
+@quarantine unpinned "Julia's optimized IR is in SSA form, PhiNode; dart's Kernel merges through variables" Core.PhiNode struct NirPhi
     edges::Vector{Int32}
     values::Vector{Union{Nothing, NirValue}}
 end
 """`Core.PiNode`: `val` narrowed to `typ` on this path, as Julia's inference proved."""
-@quarantine "Julia's PiNode narrows a value to a type on one path" Core.PiNode struct NirPi
+@quarantine unpinned "Julia's PiNode narrows a value to a type on one path" Core.PiNode struct NirPi
     val::NirValue
     typ::Type
 end
 """`Core.EnterNode`: a try region whose catch begins at statement `catch_dest`; `scope` its scope, if any."""
-@quarantine "Julia's try regions, EnterNode" Core.EnterNode struct NirEnter
+@quarantine unpinned "Julia's try regions, EnterNode" Core.EnterNode struct NirEnter
     catch_dest::Int
     scope::Union{Nothing, NirValue}
 end
 """`Core.UpsilonNode`: a value a PhiC of a catch region receives, `nothing` where unassigned."""
-@quarantine "Julia's exception phis, UpsilonNode" Core.UpsilonNode struct NirUpsilon
+@quarantine unpinned "Julia's exception phis, UpsilonNode" Core.UpsilonNode struct NirUpsilon
     val::Union{Nothing, NirValue}
 end
 """`Core.PhiCNode`: the value a catch region receives from its Upsilons."""
-@quarantine "Julia's exception phis, PhiCNode" Core.PhiCNode struct NirPhiC
+@quarantine unpinned "Julia's exception phis, PhiCNode" Core.PhiCNode struct NirPhiC
     values::Vector{NirValue}
 end
 """A `nothing` statement: a statement the optimizer emptied."""
-@quarantine "Julia's optimizer leaves an emptied statement as nothing" Core.Nothing struct NirNothing
+@quarantine unpinned "Julia's optimizer leaves an emptied statement as nothing" Core.Nothing struct NirNothing
 end
 """A statement that is a `GlobalRef`: a read of a module binding, `ref`, and `binding`, its facts at the program's
 world (NirBinding)."""
@@ -246,14 +246,14 @@ precedent(rust: enum + exhaustive match; dart: sealed class + exhaustive switch,
 node kinds). Julia's differs: a `Union` of concrete types, its exhaustiveness checked when the package
 loads.
 """
-@quarantine "a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const NirStmt = Union{
+@quarantine unpinned "a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const NirStmt = Union{
     NirCall, NirInvoke, NirNew, NirForeignCall, NirBoundscheck, NirGCPreserveBegin, NirGCPreserveEnd,
     NirLeave, NirPopException, NirTheException, NirLoopInfo, NirThrowUndefIfNot, NirCFunction,
     NirInvokeModify, NirGoto, NirGotoIfNot, NirReturn, NirUnreachable, NirPhi, NirPi, NirEnter,
     NirUpsilon, NirPhiC, NirNothing, NirGlobalRead}
 
 # a statement's form, one arm per kind (dart's switch over a sealed class)
-@quarantine "the statement sum's one match, an exhaustive switch where dart switches over a sealed class" Core.String function stmt_form(st::NirStmt)::String
+@quarantine unpinned "the statement sum's one match, an exhaustive switch where dart switches over a sealed class" Core.String function stmt_form(st::NirStmt)::String
     @exhaustive st::NirStmt begin
         NirCall => "call"
         NirInvoke => "invoke"
@@ -295,7 +295,7 @@ exception stack at statement `i`, the one `the_exception` and `rethrow()` read, 
 decides it: a return or a :leave never does, every other statement unless it carries IR_FLAG_NOTHROW.
 The stackifier reads them as LLVM reads an invoke's unwind edge (src/julia/machine.jl).
 """
-@quarantine "Julia's compiler answers each statement's try handler and whether it can throw; the stackifier reads both" Base.BitVector struct NirHandlers
+@quarantine unpinned "Julia's compiler answers each statement's try handler and whether it can throw; the stackifier reads both" Base.BitVector struct NirHandlers
     handler_at::Vector{Int}
     exception_at::Vector{Int}
     nothrow::BitVector
@@ -309,7 +309,7 @@ in Julia's order; `types`, the type Julia inferred for each statement; `cfg`, Ju
 statements (compute_basic_blocks), and `handlers`, its try regions (NirHandlers), which the
 stackifier reads beside them (src/julia/machine.jl).
 """
-@quarantine "a function of the closed world is a CodeInstance and its optimized CodeInfo, Julia's own" Core.CodeInstance struct NirBody
+@quarantine unpinned "a function of the closed world is a CodeInstance and its optimized CodeInfo, Julia's own" Core.CodeInstance struct NirBody
     ci::Core.CodeInstance
     stmts::Vector{NirStmt}
     types::Vector{Type}
@@ -524,7 +524,7 @@ mirror_samples!(_nir_stmt_sample, :NirStmt,
 
 # each statement's type, Julia's: its ssavaluetypes entry; a body Julia stored without them (a constant
 # return, ssavaluetypes a count) has the one statement, typed by its CodeInstance's rettype
-@quarantine "Julia's inferred statement types, CodeInfo.ssavaluetypes, or the CodeInstance's rettype where Julia stored none" Core.CodeInfo function _nir_types(ci::Core.CodeInstance, src::Core.CodeInfo, at::String)::Vector{Type}
+@quarantine unpinned "Julia's inferred statement types, CodeInfo.ssavaluetypes, or the CodeInstance's rettype where Julia stored none" Core.CodeInfo function _nir_types(ci::Core.CodeInstance, src::Core.CodeInfo, at::String)::Vector{Type}
     local ts = src.ssavaluetypes
     if ts isa Vector
         length(ts) == length(src.code) || reject!(Internal("src/julia/nir.jl: $(length(ts)) statement types for $(length(src.code)) statements"), at)
@@ -537,7 +537,7 @@ end
 
 # The token only this file holds: NirWorld's sole constructor takes it, so no code outside this file
 # makes a NirWorld (construction_check(::Val{:ClosedWorld}), src/julia/subset.jl).
-@quarantine "Julia has no private constructors; an unexported token held by this file alone stands in for one" Core.DataType struct _NirToken
+@quarantine unpinned "Julia has no private constructors; an unexported token held by this file alone stands in for one" Core.DataType struct _NirToken
     _NirToken() = new()
 end
 
@@ -572,10 +572,10 @@ same typestate (construction_check(::Val{:ClosedWorld}), src/julia/subset.jl; L2
 end
 
 # the bodies read as a list: iterated, indexed and counted in Julia's order
-@quarantine "Julia's iteration protocol reads a NirWorld's bodies as a list" Base.iterate Base.iterate(w::NirWorld, i::Int = 1) = iterate(w.bodies, i)
-@quarantine "Julia's collection protocol counts a NirWorld's bodies" Base.length Base.length(w::NirWorld)::Int = length(w.bodies)
-@quarantine "Julia's collection protocol names a NirWorld's element type" Base.eltype Base.eltype(::Type{NirWorld}) = NirBody
-@quarantine "Julia's indexing reads a NirWorld's bodies by position" Base.getindex Base.getindex(w::NirWorld, i::Int)::NirBody = w.bodies[i]
+@quarantine unpinned "Julia's iteration protocol reads a NirWorld's bodies as a list" Base.iterate Base.iterate(w::NirWorld, i::Int = 1) = iterate(w.bodies, i)
+@quarantine unpinned "Julia's collection protocol counts a NirWorld's bodies" Base.length Base.length(w::NirWorld)::Int = length(w.bodies)
+@quarantine unpinned "Julia's collection protocol names a NirWorld's element type" Base.eltype Base.eltype(::Type{NirWorld}) = NirBody
+@quarantine unpinned "Julia's indexing reads a NirWorld's bodies by position" Base.getindex Base.getindex(w::NirWorld, i::Int)::NirBody = w.bodies[i]
 
 """
     nir_intrinsified(mi) -> Bool
@@ -592,7 +592,7 @@ precedent(dart: an external member, which TFA records at its call and compiles n
 intrinsic declaration, a call with no definition). Julia's differs: every callee Julia infers has a
 body, so the one the intrinsifier lowers is left out here.
 """
-@quarantine "an intrinsified member has no body of its own, as dart's external member: its call is recorded, its body never collected" Core.MethodInstance nir_intrinsified(mi::Core.MethodInstance)::Bool =
+@quarantine unpinned "an intrinsified member has no body of its own, as dart's external member: its call is recorded, its body never collected" Core.MethodInstance nir_intrinsified(mi::Core.MethodInstance)::Bool =
     Dart2Wasm.generate_static_intrinsic(Val(:string_data_op), mi) !== nothing ||
     Dart2Wasm.generate_static_intrinsic(Val(:wasm_array_op), mi) !== nothing ||
     Dart2Wasm.generate_static_intrinsic(Val(:memory_data_op), mi) !== nothing
@@ -640,8 +640,8 @@ formal(dev/formal/FirstListing.tla): a body per CodeInstance from its first list
 end
 
 # the two closed sums' assertions, run when the package loads
-@quarantine "the operand sum's assertion, run when the package loads" Base.Val construction_check(::Val{:NirValue})::Int = check_sum_matched(@__MODULE__, :NirValue)
-@quarantine "the statement sum's assertion, run when the package loads" Base.Val construction_check(::Val{:NirStmt})::Int = check_sum_matched(@__MODULE__, :NirStmt)
+@quarantine unpinned "the operand sum's assertion, run when the package loads" Base.Val construction_check(::Val{:NirValue})::Int = check_sum_matched(@__MODULE__, :NirValue)
+@quarantine unpinned "the statement sum's assertion, run when the package loads" Base.Val construction_check(::Val{:NirStmt})::Int = check_sum_matched(@__MODULE__, :NirStmt)
 
 # ---- what the code generator reads from a body (code_generator.jl), Julia's answers ----------------
 """
@@ -651,7 +651,7 @@ A NIR statement's file offset: dart's Kernel `TreeNode.noOffset` (-1), the offse
 position, which stops the source mapping; NIR carries no statement position until it reads Julia's
 debuginfo.
 """
-@quarantine "dart's Kernel TreeNode.noOffset; a NIR statement has no position until NIR reads Julia's debuginfo" Core.Int const TreeNode_no_offset = Int(-1)
+@quarantine unpinned "dart's Kernel TreeNode.noOffset; a NIR statement has no position until NIR reads Julia's debuginfo" Core.Int const TreeNode_no_offset = Int(-1)
 
 """
     nir_used_statements(stmts) -> BitSet
@@ -702,7 +702,7 @@ precedent(julia: codegen.cpp's specsig, which passes a count-specialized varargs
 by one and builds the vararg tuple in the callee, and its jlcall ABI for an open count). dart has no
 varargs.
 """
-@quarantine "Julia passes a varargs method's trailing arguments as one tuple its body reads, packed at entry by a specialized signature or from the call's arguments otherwise (julia/src/codegen.cpp:2792 uses_specsig)" Core.Type struct NirVarargPacking
+@quarantine pin"julia/src/codegen.cpp:2792 uses_specsig" "Julia passes a varargs method's trailing arguments as one tuple its body reads, packed at entry by a specialized signature or from the call's arguments otherwise (julia/src/codegen.cpp:2792 uses_specsig)" Core.Type struct NirVarargPacking
     first::Int
     packed::Type
     at_entry::Bool
@@ -713,7 +713,7 @@ end
 
 The packing of `mi`'s trailing arguments (NirVarargPacking), or nothing for a method with no varargs.
 """
-@quarantine "Julia's inference packs a varargs method's trailing argument types into one tuple type, va_process_argtypes, and its codegen packs at entry where the count is bound (julia/src/codegen.cpp:2792 uses_specsig)" Core.Compiler.va_process_argtypes function nir_vararg_packing(mi::Core.MethodInstance)::Union{NirVarargPacking,Nothing}
+@quarantine pin"julia/src/codegen.cpp:2792 uses_specsig" "Julia's inference packs a varargs method's trailing argument types into one tuple type, va_process_argtypes, and its codegen packs at entry where the count is bound (julia/src/codegen.cpp:2792 uses_specsig)" Core.Compiler.va_process_argtypes function nir_vararg_packing(mi::Core.MethodInstance)::Union{NirVarargPacking,Nothing}
     local m = mi.def
     m isa Method && m.isva || return nothing
     local argtypes = Core.Compiler.va_process_argtypes(Core.Compiler.fallback_lattice,
@@ -731,7 +731,7 @@ The tuple an invoke of a varargs specialization of an open count packs from its 
 those values (julia/src/codegen.cpp:2792 uses_specsig sends such a call through the argument array
 it packs from); nothing for any other invoke.
 """
-@quarantine "Julia packs an open count's trailing arguments into the tuple of their values' types, jl_f_tuple over the call's arguments (julia/src/codegen.cpp:2792 uses_specsig)" Core.Tuple function nir_vararg_call_tuple(body::NirBody, node::NirInvoke)::Union{Type,Nothing}
+@quarantine pin"julia/src/codegen.cpp:2792 uses_specsig" "Julia packs an open count's trailing arguments into the tuple of their values' types, jl_f_tuple over the call's arguments (julia/src/codegen.cpp:2792 uses_specsig)" Core.Tuple function nir_vararg_call_tuple(body::NirBody, node::NirInvoke)::Union{Type,Nothing}
     local va = nir_vararg_packing(nir_invoke_target(node))
     (va === nothing || va.at_entry) && return nothing
     return Tuple{(nir_value_type(body, a) for a in node.args[va.first:end])...}
@@ -745,7 +745,7 @@ types, each its own parameter (a varargs specialization of a fixed count among t
 entry), but for a varargs specialization of an open count, whose trailing arguments are one parameter,
 the packed tuple (NirVarargPacking).
 """
-@quarantine "a function's parameters are its specialization's argument types, a varargs tail of open count one packed tuple, as Julia's codegen passes each argument of a specialized signature (julia/src/codegen.cpp:2792 uses_specsig)" Core.MethodInstance function nir_parameter_types(mi::Core.MethodInstance)::Vector{Type}
+@quarantine pin"julia/src/codegen.cpp:2792 uses_specsig" "a function's parameters are its specialization's argument types, a varargs tail of open count one packed tuple, as Julia's codegen passes each argument of a specialized signature (julia/src/codegen.cpp:2792 uses_specsig)" Core.MethodInstance function nir_parameter_types(mi::Core.MethodInstance)::Vector{Type}
     local ps = Type[p for p in Base.unwrap_unionall(mi.specTypes).parameters if !(p isa Core.TypeofVararg)]
     local va = nir_vararg_packing(mi)
     (va === nothing || va.at_entry) && return ps
@@ -759,7 +759,7 @@ The type of argument `a` of `mi`'s body: its MethodInstance's signature, the typ
 for (`Argument(1)` the callee itself), a varargs method's last argument the packed tuple
 (NirVarargPacking).
 """
-@quarantine "a Julia argument's type is its MethodInstance's specialization, specTypes" Core.MethodInstance function nir_argument_type(mi::Core.MethodInstance, a::NirArgument)::Type
+@quarantine unpinned "a Julia argument's type is its MethodInstance's specialization, specTypes" Core.MethodInstance function nir_argument_type(mi::Core.MethodInstance, a::NirArgument)::Type
     local va = nir_vararg_packing(mi)
     va === nothing || a.n != va.first || return va.packed
     local ps = Base.unwrap_unionall(mi.specTypes).parameters
@@ -776,7 +776,7 @@ Julia's codegen passes no value for a singleton type (a function's type, `isdefi
 `Type{X}` with `X` free of type variables, the type of one type object (a constructor's callee), which it
 treats as a constant (`Core.Compiler.isconstType`). The one source every receiver test reads.
 """
-@quarantine "Julia's codegen passes no value for a singleton type or a constant Type{X}, isconstType" Core.Compiler.isconstType nir_carries_data(@nospecialize(T))::Bool =
+@quarantine unpinned "Julia's codegen passes no value for a singleton type or a constant Type{X}, isconstType" Core.Compiler.isconstType nir_carries_data(@nospecialize(T))::Bool =
     !(Base.issingletontype(T) || Core.Compiler.isconstType(T))
 
 # a binding's facts at `world`, Julia's answers there by its builtins, jl_is_const and jl_is_binding_deprecated alone
@@ -832,7 +832,7 @@ Whether the module `m` is the runtime's: its parentmodule chain reaches Core or 
 `__init__` set up the host process (stdio, the depot and load paths, the logger; base/Base.jl:368 at
 Julia v1.12.7), the setup dart's embedder does outside the compiled program (dev/MODULE_INIT.md).
 """
-@quarantine "Core's and Base's __init__ are the host's setup, as dart's runtime is set up by its embedder" Base.parentmodule function runtime_module(m::Module)::Bool
+@quarantine unpinned "Core's and Base's __init__ are the host's setup, as dart's runtime is set up by its embedder" Base.parentmodule function runtime_module(m::Module)::Bool
     while !(m === Core || m === Base)
         local p = parentmodule(m)
         p === m && return false
@@ -857,7 +857,7 @@ rejection naming that `__init__`. A const free of mutation (a type, Sys.WORD_SIZ
 Every other binding, a const table such as base36digits among them, starts at its session value, as a
 juliac image holds it.
 """
-@quarantine "a binding starts at its session value, past every __init__, which julia/src/init.c:563 _finish_jl_init_ runs at a juliac executable's startup; a value an __init__ derived from the host (a dlopen handle, a time, Random's seed) is baked at compile time, where juliac computes it at startup (dev/MODULE_INIT.md)" Base.ismutationfree function nir_binding_value(binding::NirBinding, at::String)::NirConst
+@quarantine pin"julia/src/init.c:563 _finish_jl_init_" "a binding starts at its session value, past every __init__, which julia/src/init.c:563 _finish_jl_init_ runs at a juliac executable's startup; a value an __init__ derived from the host (a dlopen handle, a time, Random's seed) is baked at compile time, where juliac computes it at startup (dev/MODULE_INIT.md)" Base.ismutationfree function nir_binding_value(binding::NirBinding, at::String)::NirConst
     local ref = binding.ref
     binding.defined ||
         reject!(Unquarantined("src/julia/nir.jl nir_binding_value: the binding $ref has no value, whose read Julia answers with an UndefVarError"), at)
@@ -959,7 +959,7 @@ program's world), and reused at a later world while Julia says it holds there (_
 it rests on serves that world, every binding it read has the same partition), so a process recomputes it only after a
 method or a binding invalidated it; measured 5.5 G of instructions cold, about 3 G recomputed in a warm process.
 """
-@quarantine "julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel infers each runtime initializer's closed world, as juliac's trim infers the init list's entrypoints (julia/src/precompile.c:98 jl_write_compiler_output); julia/Compiler/src/effects.jl:119 Effects judges each call; once per world" Core.GlobalRef function runtime_init_bindings(world::UInt)::@NamedTuple{touched::IdDict{GlobalRef,Function}, mutated::IdDict{GlobalRef,Function}, dynamic::Vector{Pair{Function,Int}}}
+@quarantine pin"julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel" "julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel infers each runtime initializer's closed world, as juliac's trim infers the init list's entrypoints (julia/src/precompile.c:98 jl_write_compiler_output); julia/Compiler/src/effects.jl:119 Effects judges each call; once per world" Core.GlobalRef function runtime_init_bindings(world::UInt)::@NamedTuple{touched::IdDict{GlobalRef,Function}, mutated::IdDict{GlobalRef,Function}, dynamic::Vector{Pair{Function,Int}}}
     # a world asked before: its analysis, with no walk and no search (_RUNTIME_INIT_AT)
     local seen = get(_RUNTIME_INIT_AT, world, nothing)
     seen === nothing || return seen.result
@@ -977,7 +977,7 @@ end
 # runtime_init_bindings' analysis over the closed worlds of `inits`, each a function of no argument, with what it rests
 # on: the CodeInstances typeinf_ext_toplevel inferred them from (its result holds each beside its source,
 # typeinfer.jl:1520) and each binding it read with its partition at `world`
-@quarantine "julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel infers each initializer's closed world; julia/Compiler/src/effects.jl:119 Effects judges each call it holds" Core.Compiler.typeinf_ext_toplevel function init_world_bindings(inits::Vector{Function}, world::UInt)::RuntimeInitAnalysis
+@quarantine pin"julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel" "julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel infers each initializer's closed world; julia/Compiler/src/effects.jl:119 Effects judges each call it holds" Core.Compiler.typeinf_ext_toplevel function init_world_bindings(inits::Vector{Function}, world::UInt)::RuntimeInitAnalysis
     local touched = IdDict{GlobalRef,Function}()
     local mutated = IdDict{GlobalRef,Function}()
     local dynamic = Pair{Function,Int}[]
@@ -1087,7 +1087,7 @@ rejects the read itself at (globals.dart's getConstantInitializer decides that r
 expression (dartTypeOf) and the closed world's classes (closed_world_classes) both read it.
 """
 # a literal's type is its value's own, read with no body (a static field's initializer, a constant)
-@quarantine "a Julia literal's type is its value's type, Core.Typeof" Core.Typeof nir_const_type(c::NirConst)::Type = Core.Typeof(c.c.val)
+@quarantine unpinned "a Julia literal's type is its value's type, Core.Typeof" Core.Typeof nir_const_type(c::NirConst)::Type = Core.Typeof(c.c.val)
 
 @quarantine pin"precedent(julia: Compiler/src/abstractinterpretation.jl:3736 abstract_eval_globalref)" "a Julia operand's type is its statement's inferred type, its argument's specialization or its value's type, a constant binding's its value's at the program's world (NirBinding)" Core.Typeof function nir_value_type(body::NirBody, v::NirValue)::Type
     @exhaustive v::NirValue begin
@@ -1110,7 +1110,7 @@ widens `tuple(x, y)` to `Tuple{Any, Any}` where the result flows to a wider plac
 object's class is always its operands' runtime types: the one source of that class, read by the
 closed world's classes and by the code generator's record literal.
 """
-@quarantine "a tuple's class is Julia's tuple inference of its operands' types, which a statement's widened type may hide" Core.Compiler.tuple_tfunc function nir_tuple_type(body::NirBody, st::NirCall)::Type
+@quarantine unpinned "a tuple's class is Julia's tuple inference of its operands' types, which a statement's widened type may hide" Core.Compiler.tuple_tfunc function nir_tuple_type(body::NirBody, st::NirCall)::Type
     return Core.Compiler.widenconst(Core.Compiler.tuple_tfunc(Core.Compiler.fallback_lattice, Any[nir_value_type(body, a) for a in st.args[2:end]]))
 end
 
@@ -1120,7 +1120,7 @@ end
 How many arguments `mi`'s method's body takes, the callee `Argument(1)` among them, a varargs
 method's trailing ones its one packed tuple (NirVarargPacking).
 """
-@quarantine "a Julia method's arity is its Method's nargs, with isva for a varargs tail, the fields of julia/src/julia.h:396 jl_method_t" Core.Method function nir_method_nargs(mi::Core.MethodInstance)::Int
+@quarantine pin"julia/src/julia.h:396 jl_method_t" "a Julia method's arity is its Method's nargs, with isva for a varargs tail, the fields of julia/src/julia.h:396 jl_method_t" Core.Method function nir_method_nargs(mi::Core.MethodInstance)::Int
     local m = mi.def
     m isa Method || reject!(Unquarantined("src/julia/nir.jl: $(rejection_text(mi)) instantiates no method"), rejection_text(mi))
     return Int(m.nargs)
@@ -1132,7 +1132,7 @@ end
 The body in `world` (the closed world's NIR) Julia inferred for `mi`: dart's member's
 `function.body`; a method the closed world lacks rejects, located.
 """
-@quarantine "a MethodInstance's body is the CodeInstance Julia inferred for it in the closed world" Core.MethodInstance function nir_body_of(world::NirWorld, mi::Core.MethodInstance)::NirBody
+@quarantine unpinned "a MethodInstance's body is the CodeInstance Julia inferred for it in the closed world" Core.MethodInstance function nir_body_of(world::NirWorld, mi::Core.MethodInstance)::NirBody
     for nb in world
         nb.ci.def === mi && return nb
     end
@@ -1164,7 +1164,7 @@ end
 
 The MethodInstance an invoke calls: its target, or the MethodInstance its CodeInstance instantiates.
 """
-@quarantine "Julia's invoke names its target by MethodInstance or by a CodeInstance of one" Core.MethodInstance function nir_invoke_target(node::NirInvoke)::Core.MethodInstance
+@quarantine unpinned "Julia's invoke names its target by MethodInstance or by a CodeInstance of one" Core.MethodInstance function nir_invoke_target(node::NirInvoke)::Core.MethodInstance
     local t = node.target
     t isa Core.MethodInstance && return t
     local d = t.def
@@ -1241,7 +1241,7 @@ assigned), a pi's value, a try region's scope, an upsilon's value; a jump, an un
 statement and a binding read (whose GlobalRef is no operand) read none. One @exhaustive match, the
 one place a pass over every operand of the NIR reads them.
 """
-@quarantine "Julia's optimized IR holds each form's operands in its own place; one match reads them all" Base.isnothing function nir_operands(st::NirStmt)::Vector{NirValue}
+@quarantine unpinned "Julia's optimized IR holds each form's operands in its own place; one match reads them all" Base.isnothing function nir_operands(st::NirStmt)::Vector{NirValue}
     local some(xs) = NirValue[x for x in xs if !isnothing(x)]   # the assigned ones
     @exhaustive st::NirStmt begin
         (x::NirCall) => x.args
@@ -1286,7 +1286,7 @@ builtins' arities at its add_tfunc calls, `getglobal(module, name, order)`, and
 `get_binding_type(module, name)`). Every other builtin takes data alone, and a call of a generic
 function (Base's getproperty among them, left unresolved) passes each argument as a value.
 """
-@quarantine "Julia's builtins take a field's, a binding's or an ordering's name as an operand, each at its tfunc's parameter" Core.getfield function _builtin_name_operands(@nospecialize(f))::Tuple{Vararg{Int}}
+@quarantine unpinned "Julia's builtins take a field's, a binding's or an ordering's name as an operand, each at its tfunc's parameter" Core.getfield function _builtin_name_operands(@nospecialize(f))::Tuple{Vararg{Int}}
     f === Core.getfield && return (2, 3)
     f === Core.setfield! && return (2, 4)
     f === Core.isdefined && return (2, 3)

@@ -7,30 +7,30 @@
 # answer. precedent(dart: the wasm target's @patch libraries, sdk/lib/_internal/wasm; gpucompiler: a
 # device's overlays of Base in its method table).
 
-@quarantine "Base's ncodeunits is Core.sizeof of the String's memory; WasmGC has no raw memory, so it is the data array's length" Base.ncodeunits @consistent_overlay METHOD_TABLE Base.ncodeunits(s::String) = wasm_string_length(s)
+@quarantine unpinned "Base's ncodeunits is Core.sizeof of the String's memory; WasmGC has no raw memory, so it is the data array's length" Base.ncodeunits @consistent_overlay METHOD_TABLE Base.ncodeunits(s::String) = wasm_string_length(s)
 
-@quarantine "Base's sizeof of a String is Core.sizeof of its memory; WasmGC has no raw memory, so it is the data array's length" Base.sizeof @consistent_overlay METHOD_TABLE Base.sizeof(s::String) = wasm_string_length(s)
+@quarantine unpinned "Base's sizeof of a String is Core.sizeof of its memory; WasmGC has no raw memory, so it is the data array's length" Base.sizeof @consistent_overlay METHOD_TABLE Base.sizeof(s::String) = wasm_string_length(s)
 
-@quarantine "Base's codeunit loads through pointer(s, i); WasmGC has no pointer, so the byte is the data array's element" Base.codeunit @consistent_overlay METHOD_TABLE @inline function Base.codeunit(s::String, i::Int)
+@quarantine unpinned "Base's codeunit loads through pointer(s, i); WasmGC has no pointer, so the byte is the data array's element" Base.codeunit @consistent_overlay METHOD_TABLE @inline function Base.codeunit(s::String, i::Int)
     @boundscheck checkbounds(s, i)
     return wasm_string_codeunit(s, i - 1)
 end
 
-@quarantine "Base's _string_n is a jl_alloc_string foreigncall; WasmGC allocates the String's struct and a new data array" Base._string_n @consistent_overlay METHOD_TABLE Base._string_n(n::Integer) = wasm_string_alloc(Int(n))
+@quarantine unpinned "Base's _string_n is a jl_alloc_string foreigncall; WasmGC allocates the String's struct and a new data array" Base._string_n @consistent_overlay METHOD_TABLE Base._string_n(n::Integer) = wasm_string_alloc(Int(n))
 
-@quarantine "julia/base/strings/string.jl:118 String of a Symbol copies the bytes at its jl_symbol_name pointer; WasmGC reads the Symbol's name, dart's Symbol.getName; Base's @assume_effects :total is not carried over, so no call of it folds" Base.String @consistent_overlay METHOD_TABLE Base.String(s::Symbol) = wasm_symbol_name(s)
+@quarantine pin"julia/base/strings/string.jl:118 String" "julia/base/strings/string.jl:118 String of a Symbol copies the bytes at its jl_symbol_name pointer; WasmGC reads the Symbol's name, dart's Symbol.getName; Base's @assume_effects :total is not carried over, so no call of it folds" Base.String @consistent_overlay METHOD_TABLE Base.String(s::Symbol) = wasm_symbol_name(s)
 
 # Core's Symbol of a String (julia/base/boot.jl:687): _Symbol of the String's jl_string_ptr and its size,
 # jl_symbol_n's (julia/src/symbol.c:113); WasmGC has no pointer, so the port of jl_symbol_n takes the String
 # whose data array holds the bytes (src/julia/runtime/rtutils.jl jl_symbol_n), interning it in the module's
 # symbol table, which every symbol constant is interned in too, so the Symbol is the constant of its name.
 # Base's @_foldable_meta is not carried over: no claim, so no call of it folds on one
-@quarantine "julia/base/boot.jl:687 Symbol of a String is jl_symbol_n of its jl_string_ptr and size; WasmGC has no pointer, so the port of jl_symbol_n reads the String's data array" Core.Symbol @consistent_overlay METHOD_TABLE Core.Symbol(s::String) = jl_symbol_n(s)
+@quarantine pin"julia/base/boot.jl:687 Symbol" "julia/base/boot.jl:687 Symbol of a String is jl_symbol_n of its jl_string_ptr and size; WasmGC has no pointer, so the port of jl_symbol_n reads the String's data array" Core.Symbol @consistent_overlay METHOD_TABLE Core.Symbol(s::String) = jl_symbol_n(s)
 
-@quarantine "julia/base/strings/string.jl:120 unsafe_wrap of a String as a byte Memory is a jl_string_to_genericmemory foreigncall; WasmGC shares the String's data array" Base.unsafe_wrap @consistent_overlay METHOD_TABLE Base.unsafe_wrap(::Type{Memory{UInt8}}, s::String) = wasm_string_memory(s)
+@quarantine pin"julia/base/strings/string.jl:120 unsafe_wrap" "julia/base/strings/string.jl:120 unsafe_wrap of a String as a byte Memory is a jl_string_to_genericmemory foreigncall; WasmGC shares the String's data array" Base.unsafe_wrap @consistent_overlay METHOD_TABLE Base.unsafe_wrap(::Type{Memory{UInt8}}, s::String) = wasm_string_memory(s)
 
 # Base's own body, its foreigncall the runtime's operation: an empty Memory is the empty String
-@quarantine "julia/base/strings/string.jl:83 unsafe_takestring of a byte Memory is a jl_genericmemory_to_string foreigncall; WasmGC wraps or copies the Memory's data array" Base.unsafe_takestring @consistent_overlay METHOD_TABLE Base.unsafe_takestring(m::Memory{UInt8}) =
+@quarantine pin"julia/base/strings/string.jl:83 unsafe_takestring" "julia/base/strings/string.jl:83 unsafe_takestring of a byte Memory is a jl_genericmemory_to_string foreigncall; WasmGC wraps or copies the Memory's data array" Base.unsafe_takestring @consistent_overlay METHOD_TABLE Base.unsafe_takestring(m::Memory{UInt8}) =
     isempty(m) ? "" : wasm_memory_string(m, length(m))
 
 # Base's own body (julia/base/strings/string.jl:65): a reference at its memory's start (Base compares
@@ -41,7 +41,7 @@ end
 # (jl_memoryrefoffset), and the copy is _string_n's String, its data shared as a Memory
 # (unsafe_wrap) and filled by unsafe_copyto! from the reference, each an overlay above or in
 # src/patch/genericmemory.jl
-@quarantine "julia/base/strings/string.jl:65 String of a byte Vector compares its reference's address with its memory's, then jl_genericmemory_to_string or jl_pchar_to_string's copy from the address; WasmGC's reference holds the element's index" Base.String @consistent_overlay METHOD_TABLE function Base.String(v::Vector{UInt8})
+@quarantine pin"julia/base/strings/string.jl:65 String" "julia/base/strings/string.jl:65 String of a byte Vector compares its reference's address with its memory's, then jl_genericmemory_to_string or jl_pchar_to_string's copy from the address; WasmGC's reference holds the element's index" Base.String @consistent_overlay METHOD_TABLE function Base.String(v::Vector{UInt8})
     local len = length(v)
     len == 0 && return ""
     local ref = v.ref
@@ -59,7 +59,7 @@ end
 
 # Base's takes any `out` it can take a pointer to; the String its callers allocate is the one a data
 # array holds, so any other `out` stays Base's, a located rejection where it is reached
-@quarantine "Base's __unsafe_string! copies a String's bytes through pointers; WasmGC copies the data arrays (array.copy)" Base.__unsafe_string! @consistent_overlay METHOD_TABLE @inline function Base.__unsafe_string!(out::String, s::String, offs::Integer)
+@quarantine unpinned "Base's __unsafe_string! copies a String's bytes through pointers; WasmGC copies the data arrays (array.copy)" Base.__unsafe_string! @consistent_overlay METHOD_TABLE @inline function Base.__unsafe_string!(out::String, s::String, offs::Integer)
     local n = wasm_string_length(s)
     wasm_string_copy!(out, Int(offs) - 1, s, 0, n)
     return n
@@ -69,7 +69,7 @@ end
 # through pointer(ss) and pointer(s, i) the data arrays' array.copy from byte i - 1 (wasm_string_copy!), as
 # dart's substring copies its code units into a new string (the VM's StringBase_substringUnchecked;
 # dart2wasm's EmbedderStringImpl.substring delegates to its embedder, so the VM's is the nearest)
-@quarantine "julia/base/strings/string.jl:497 getindex of a String at a UnitRange{Int} copies the range's bytes into a fresh String by unsafe_copyto! through pointer(s, i); WasmGC copies the data arrays' bytes (array.copy), as dart's substring copies its code units (sdk/lib/_internal/vm/lib/string_patch.dart:441 _StringBase._substringUnchecked; dart2wasm's sdk/lib/_internal/wasm/standalone/embedder_string.dart:313 EmbedderStringImpl.substring delegates to its embedder)" Base.getindex @consistent_overlay METHOD_TABLE @inline function Base.getindex(s::String, r::UnitRange{Int})
+@quarantine pin"julia/base/strings/string.jl:497 getindex" "julia/base/strings/string.jl:497 getindex of a String at a UnitRange{Int} copies the range's bytes into a fresh String by unsafe_copyto! through pointer(s, i); WasmGC copies the data arrays' bytes (array.copy), as dart's substring copies its code units (sdk/lib/_internal/vm/lib/string_patch.dart:441 _StringBase._substringUnchecked; dart2wasm's sdk/lib/_internal/wasm/standalone/embedder_string.dart:313 EmbedderStringImpl.substring delegates to its embedder)" Base.getindex @consistent_overlay METHOD_TABLE @inline function Base.getindex(s::String, r::UnitRange{Int})
     isempty(r) && return ""
     local i, j = first(r), last(r)
     @boundscheck begin
@@ -89,9 +89,9 @@ end
 # string they wrap, julia/base/strings/basic.jl:810): WasmGC has no pointer, so a byte's place is the String
 # whose data array holds it and the offset of the first byte in that array, as dart's _StringBase reads its
 # code units by index (sdk/lib/_internal/vm/lib/string_patch.dart:362 codeUnitAt(i + start))
-@quarantine "julia/base/strings/string.jl:131 pointer of a String is its bytes' address; WasmGC has no pointer, so it is the String whose data array holds them, from offset 0" Core.String wasm_string_place(a::String) = (a, 0)
-@quarantine "julia/base/strings/substring.jl:135 pointer of a SubString{String} is pointer(x.string) + x.offset; WasmGC has no pointer, so it is its String and its offset" Base.SubString wasm_string_place(a::SubString{String}) = (a.string, a.offset)
-@quarantine "julia/base/strings/basic.jl:810 cconvert of CodeUnits to a pointer is cconvert of the String or SubString{String} it wraps (cconvert(Ptr{T}, s.s)), so its pointer is that string's; WasmGC has no pointer, so it is that string's place" Base.CodeUnits wasm_string_place(a::Base.CodeUnits{UInt8,<:Union{String,SubString{String}}}) = wasm_string_place(a.s)
+@quarantine pin"julia/base/strings/string.jl:131 pointer" "julia/base/strings/string.jl:131 pointer of a String is its bytes' address; WasmGC has no pointer, so it is the String whose data array holds them, from offset 0" Core.String wasm_string_place(a::String) = (a, 0)
+@quarantine pin"julia/base/strings/substring.jl:135 pointer" "julia/base/strings/substring.jl:135 pointer of a SubString{String} is pointer(x.string) + x.offset; WasmGC has no pointer, so it is its String and its offset" Base.SubString wasm_string_place(a::SubString{String}) = (a.string, a.offset)
+@quarantine pin"julia/base/strings/basic.jl:810 cconvert" "julia/base/strings/basic.jl:810 cconvert of CodeUnits to a pointer is cconvert of the String or SubString{String} it wraps (cconvert(Ptr{T}, s.s)), so its pointer is that string's; WasmGC has no pointer, so it is that string's place" Base.CodeUnits wasm_string_place(a::Base.CodeUnits{UInt8,<:Union{String,SubString{String}}}) = wasm_string_place(a.s)
 
 # memcmp of `len` bytes from two places (wasm_string_place): the first differing bytes' difference, else 0,
 # memcmp's value on this host (native Base._memcmp("abc", "axc", 3) is -22), so an overlay calling it is
@@ -100,7 +100,7 @@ end
 # (embedder_string.dart:508), and its endsWith (embedder_string.dart:193) compares a new substring of the
 # string's end with the other string; the walk follows Base's body instead (its _memcmp in place, no new
 # String), the dart walk it matches the VM's _substringMatches (vm/lib/string_patch.dart:355).
-@quarantine "julia/base/strings/string.jl:149 _memcmp compares len bytes by memcmp through pointers; WasmGC compares the data arrays' bytes in order, answering the first differing bytes' difference as memcmp does, as dart's VM compareTo walks its code units (sdk/lib/_internal/vm/lib/string_patch.dart:334 _StringBase.compareTo; dart2wasm's sdk/lib/_internal/wasm/standalone/embedder_string.dart:508 EmbedderStringImpl.compareTo delegates to its embedder)" Base.Int function wasm_string_memcmp(sa::String, oa::Int, sb::String, ob::Int, len::Int)
+@quarantine pin"julia/base/strings/string.jl:149 _memcmp" "julia/base/strings/string.jl:149 _memcmp compares len bytes by memcmp through pointers; WasmGC compares the data arrays' bytes in order, answering the first differing bytes' difference as memcmp does, as dart's VM compareTo walks its code units (sdk/lib/_internal/vm/lib/string_patch.dart:334 _StringBase.compareTo; dart2wasm's sdk/lib/_internal/wasm/standalone/embedder_string.dart:508 EmbedderStringImpl.compareTo delegates to its embedder)" Base.Int function wasm_string_memcmp(sa::String, oa::Int, sb::String, ob::Int, len::Int)
     for i in 0:len-1
         local ca = wasm_string_codeunit(sa, oa + i)
         local cb = wasm_string_codeunit(sb, ob + i)
@@ -110,7 +110,7 @@ end
 end
 
 # Base's _memcmp of two Strings or SubStrings of them: the walk of their data arrays from their places
-@quarantine "julia/base/strings/string.jl:149 _memcmp of a String or SubString{String} compares len bytes by memcmp through pointers; WasmGC compares the data arrays' bytes in order (wasm_string_memcmp), as dart's VM compareTo walks its code units (sdk/lib/_internal/vm/lib/string_patch.dart:334 _StringBase.compareTo; dart2wasm's sdk/lib/_internal/wasm/standalone/embedder_string.dart:508 EmbedderStringImpl.compareTo delegates to its embedder)" Base._memcmp @consistent_overlay METHOD_TABLE function Base._memcmp(a::Union{String,SubString{String}}, b::Union{String,SubString{String}}, len::Int)
+@quarantine pin"julia/base/strings/string.jl:149 _memcmp" "julia/base/strings/string.jl:149 _memcmp of a String or SubString{String} compares len bytes by memcmp through pointers; WasmGC compares the data arrays' bytes in order (wasm_string_memcmp), as dart's VM compareTo walks its code units (sdk/lib/_internal/vm/lib/string_patch.dart:334 _StringBase.compareTo; dart2wasm's sdk/lib/_internal/wasm/standalone/embedder_string.dart:508 EmbedderStringImpl.compareTo delegates to its embedder)" Base._memcmp @consistent_overlay METHOD_TABLE function Base._memcmp(a::Union{String,SubString{String}}, b::Union{String,SubString{String}}, len::Int)
     local sa, oa = wasm_string_place(a)
     local sb, ob = wasm_string_place(b)
     return wasm_string_memcmp(sa, oa, sb, ob, len)
@@ -119,7 +119,7 @@ end
 # Base's own body (julia/base/strings/util.jl:101), its _memcmp from pointer(a, astart) the walk of a's data
 # array from the byte at astart (wasm_string_memcmp), as dart's VM endsWith compares the code units at the
 # string's end with the other's (_substringMatches)
-@quarantine "julia/base/strings/util.jl:101 endswith of a String or SubString{String} is _memcmp from pointer(a, astart), a pointer into a's bytes; WasmGC compares a's data array from the byte at astart (wasm_string_memcmp), as dart's VM endsWith walks the code units of its end (sdk/lib/_internal/vm/lib/string_patch.dart:369 _StringBase.endsWith, :355 _substringMatches; dart2wasm's sdk/lib/_internal/wasm/standalone/embedder_string.dart:193 EmbedderStringImpl.endsWith compares a substring)" Base.endswith @consistent_overlay METHOD_TABLE function Base.endswith(a::Union{String,SubString{String}}, b::Union{String,SubString{String}})
+@quarantine pin"julia/base/strings/util.jl:101 endswith" "julia/base/strings/util.jl:101 endswith of a String or SubString{String} is _memcmp from pointer(a, astart), a pointer into a's bytes; WasmGC compares a's data array from the byte at astart (wasm_string_memcmp), as dart's VM endsWith walks the code units of its end (sdk/lib/_internal/vm/lib/string_patch.dart:369 _StringBase.endsWith, :355 _substringMatches; dart2wasm's sdk/lib/_internal/wasm/standalone/embedder_string.dart:193 EmbedderStringImpl.endsWith compares a substring)" Base.endswith @consistent_overlay METHOD_TABLE function Base.endswith(a::Union{String,SubString{String}}, b::Union{String,SubString{String}})
     local astart = ncodeunits(a) - ncodeunits(b) + 1
     astart < 1 && return false
     local sa, oa = wasm_string_place(a)
@@ -136,7 +136,7 @@ end
 # (q - p + fst). A String, a SubString of one or their CodeUnits (which _searchindex of two Strings searches,
 # julia/base/strings/search.jl:294) is walked; any other byte array (a Vector{UInt8}) stays Base's, a located
 # rejection where it is reached.
-@quarantine "julia/base/strings/search.jl:81 _search of a byte in a String, a SubString{String} or their CodeUnits is a memchr foreigncall through pointer(a); WasmGC walks the data array's bytes from the place of a (wasm_string_place), as dart's one-byte indexOf walks its code units (sdk/lib/_internal/vm/lib/string_patch.dart:1087 _OneByteString.indexOf; dart2wasm's sdk/lib/_internal/wasm/standalone/embedder_string.dart:414 EmbedderStringImpl.indexOf delegates to its embedder)" Base._search @consistent_overlay METHOD_TABLE function Base._search(a::Union{String,SubString{String},Base.CodeUnits{UInt8,<:Union{String,SubString{String}}}}, b::Union{Int8,UInt8}, i::Integer = firstindex(a))
+@quarantine pin"julia/base/strings/search.jl:81 _search" "julia/base/strings/search.jl:81 _search of a byte in a String, a SubString{String} or their CodeUnits is a memchr foreigncall through pointer(a); WasmGC walks the data array's bytes from the place of a (wasm_string_place), as dart's one-byte indexOf walks its code units (sdk/lib/_internal/vm/lib/string_patch.dart:1087 _OneByteString.indexOf; dart2wasm's sdk/lib/_internal/wasm/standalone/embedder_string.dart:414 EmbedderStringImpl.indexOf delegates to its embedder)" Base._search @consistent_overlay METHOD_TABLE function Base._search(a::Union{String,SubString{String},Base.CodeUnits{UInt8,<:Union{String,SubString{String}}}}, b::Union{Int8,UInt8}, i::Integer = firstindex(a))
     local fst = firstindex(a)
     local lst = Base.last_byteindex(a)
     if i < fst
@@ -159,7 +159,7 @@ end
 # (wasm_string_place, wasm_string_copy!), as dart's one-byte `*` sets each code unit of its allocated result
 # (dart2wasm's `*` delegates to its embedder's stringRepeat, so the VM's is the nearest). Base's checks stay:
 # a negative count throws Base's ArgumentError; String(s) of a count of 1 stays Base's.
-@quarantine "julia/base/strings/substring.jl:273 repeat of a String or SubString{String} fills a fresh String by memset or unsafe_copyto! through pointers; WasmGC stores the byte at each offset of the data array (wasm_string_write!) or copies s's data array from its place (wasm_string_copy!), as dart's one-byte operator * sets its result's code units (sdk/lib/_internal/vm/lib/string_patch.dart:1132 _OneByteString.*; dart2wasm's sdk/lib/_internal/wasm/standalone/embedder_string.dart:379 EmbedderStringImpl.* delegates to its embedder)" Base.repeat @consistent_overlay METHOD_TABLE function Base.repeat(s::Union{String,SubString{String}}, r::Integer)
+@quarantine pin"julia/base/strings/substring.jl:273 repeat" "julia/base/strings/substring.jl:273 repeat of a String or SubString{String} fills a fresh String by memset or unsafe_copyto! through pointers; WasmGC stores the byte at each offset of the data array (wasm_string_write!) or copies s's data array from its place (wasm_string_copy!), as dart's one-byte operator * sets its result's code units (sdk/lib/_internal/vm/lib/string_patch.dart:1132 _OneByteString.*; dart2wasm's sdk/lib/_internal/wasm/standalone/embedder_string.dart:379 EmbedderStringImpl.* delegates to its embedder)" Base.repeat @consistent_overlay METHOD_TABLE function Base.repeat(s::Union{String,SubString{String}}, r::Integer)
     r < 0 && throw(ArgumentError("can't repeat a string $r times"))
     r = UInt(r)::UInt
     r == 0 && return ""
@@ -186,7 +186,7 @@ end
 # byte Base's store writes, as dart's one-byte `*` sets each code unit of its result. Base's checks stay.
 # It is overlaid for a Char, the type Base's body converts every character to: an overlay of AbstractChar
 # would cover Base's more specific repeat of an AnnotatedChar (an AnnotatedString), which stays Base's.
-@quarantine "julia/base/strings/string.jl:573 repeat of a Char fills a fresh String by memset or unsafe_store! through pointer(s); WasmGC stores each copy's bytes at their offsets of the data array (wasm_string_write!), as dart's one-byte operator * sets its result's code units (sdk/lib/_internal/vm/lib/string_patch.dart:1132 _OneByteString.*; dart2wasm's sdk/lib/_internal/wasm/standalone/embedder_string.dart:379 EmbedderStringImpl.* delegates to its embedder)" Base.repeat @consistent_overlay METHOD_TABLE function Base.repeat(c::Char, r::Integer)
+@quarantine pin"julia/base/strings/string.jl:573 repeat" "julia/base/strings/string.jl:573 repeat of a Char fills a fresh String by memset or unsafe_store! through pointer(s); WasmGC stores each copy's bytes at their offsets of the data array (wasm_string_write!), as dart's one-byte operator * sets its result's code units (sdk/lib/_internal/vm/lib/string_patch.dart:1132 _OneByteString.*; dart2wasm's sdk/lib/_internal/wasm/standalone/embedder_string.dart:379 EmbedderStringImpl.* delegates to its embedder)" Base.repeat @consistent_overlay METHOD_TABLE function Base.repeat(c::Char, r::Integer)
     r < 0 && throw(ArgumentError("can't repeat a character $r times"))
     r = UInt(r)::UInt
     c = Char(c)::Char
@@ -207,7 +207,7 @@ end
 # preserved substring(startIndex, match.start) into its StringBuffer. It is overlaid for a String, the str
 # every replace passes (julia/base/strings/util.jl:1093, _replace_(io, String(s), ...)); any other IO stays
 # Base's write, a located rejection where it is reached.
-@quarantine "julia/base/strings/util.jl:977 _replace_finish writes each preserved portion of str by unsafe_write from pointer(str, i); WasmGC writes those bytes as the SubString of str holding them, as dart2wasm's replaceAll writes each preserved substring into its StringBuffer (sdk/lib/_internal/wasm/standalone/embedder_string.dart:201 EmbedderStringImpl.replaceAll; the VM's sdk/lib/_internal/vm/lib/string_patch.dart:706 _StringBase._joinReplaceAllOneByteResult copies the slice's code units)" Base._replace_finish @consistent_overlay METHOD_TABLE function Base._replace_finish(io::IO, str::String, count::Int,
+@quarantine pin"julia/base/strings/util.jl:977 _replace_finish" "julia/base/strings/util.jl:977 _replace_finish writes each preserved portion of str by unsafe_write from pointer(str, i); WasmGC writes those bytes as the SubString of str holding them, as dart2wasm's replaceAll writes each preserved substring into its StringBuffer (sdk/lib/_internal/wasm/standalone/embedder_string.dart:201 EmbedderStringImpl.replaceAll; the VM's sdk/lib/_internal/vm/lib/string_patch.dart:706 _StringBase._joinReplaceAllOneByteResult copies the slice's code units)" Base._replace_finish @consistent_overlay METHOD_TABLE function Base._replace_finish(io::IO, str::String, count::Int,
                                                                                                                                      e1::Int, patterns::Tuple, replaces::Tuple, rs::Tuple)
     n = 1
     i = a = firstindex(str)

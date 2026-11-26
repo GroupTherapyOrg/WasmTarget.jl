@@ -15,7 +15,7 @@ The Julia type of a Kernel type Julia has no counterpart for (KERNEL_TYPES): a s
 type `Union{}`, the type of no value, so no value of it exists and a method taking one can never be
 called. Julia refuses `Union{}` itself as a parameter's type, so this type stands where it would.
 """
-@quarantine "Julia refuses Union{} as a parameter's type; an uninhabited struct is the type of no value there" Core.Union struct NoCounterpart
+@quarantine unpinned "Julia refuses Union{} as a parameter's type; an uninhabited struct is the type of no value there" Core.Union struct NoCounterpart
     _never::Union{}
     NoCounterpart(args...) = reject!(Internal("src/julia/kernel.jl: NoCounterpart has no value: the Kernel type it stands for has no Julia counterpart"), "NoCounterpart")
 end
@@ -27,7 +27,7 @@ Which reference of a field a `FieldReference` names, kernel/lib/ast.dart's Field
 getter (`getterReference`), its implicit setter (`setterReference`), or a static field's initializer
 (`staticFieldInitializer`).
 """
-@quarantine "Kernel names a field's getter, setter and initializer as three References of the field; an @enum closes the set of kinds" Base.var"@enum" @enum FieldReferenceKind FieldReferenceKind_getter FieldReferenceKind_setter FieldReferenceKind_initializer
+@quarantine unpinned "Kernel names a field's getter, setter and initializer as three References of the field; an @enum closes the set of kinds" Base.var"@enum" @enum FieldReferenceKind FieldReferenceKind_getter FieldReferenceKind_setter FieldReferenceKind_initializer
 
 """
     FieldReference(field, kind)
@@ -43,7 +43,7 @@ precedent(dart: kernel/lib/ast.dart's Field.getterReference, setterReference and
 staticFieldInitializer, each a Reference of its own). Julia's differs: a field has no Reference of
 its own, so this names one by the field and its kind, compared by value.
 """
-@quarantine "Kernel gives a field's getter, setter and initializer a Reference each; Julia's field has none, so the field and the kind name it" Core.GlobalRef struct FieldReference
+@quarantine unpinned "Kernel gives a field's getter, setter and initializer a Reference each; Julia's field has none, so the field and the kind name it" Core.GlobalRef struct FieldReference
     field::Union{ClassField,GlobalRef}
     kind::FieldReferenceKind
     # an instance field has no initializer reference (Kernel's staticFieldInitializer is a static
@@ -70,7 +70,7 @@ precedent(dart: pkg/kernel/lib/src/ast/expressions.dart:581 InstanceGet.interfac
 member of the static type). Julia's differs: the static type declares no member, so the reference
 names the site the member's selector id would be recorded for.
 """
-@quarantine "dart's instance access names its interface target (pkg/kernel/lib/src/ast/expressions.dart:581 InstanceGet.interfaceTargetReference); a Julia abstract type declares no member, so the call site and kind stand for it" WasmTarget.FieldAccessSite struct SelectorReference
+@quarantine pin"pkg/kernel/lib/src/ast/expressions.dart:581 InstanceGet.interfaceTargetReference" "dart's instance access names its interface target (pkg/kernel/lib/src/ast/expressions.dart:581 InstanceGet.interfaceTargetReference); a Julia abstract type declares no member, so the call site and kind stand for it" WasmTarget.FieldAccessSite struct SelectorReference
     site::FieldAccessSite
     kind::FieldReferenceKind
     # a selector is a getter's or a setter's; an initializer is a static field's, never called
@@ -82,13 +82,13 @@ names the site the member's selector id would be recorded for.
 end
 
 # the kinds of RecordMember, one per member record_class_generator.dart:246 _generateClass makes
-@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:314 _RecordClassGenerator._generateConstructor generates a record class's constructor" Core.DataType struct RecordConstructor end
-@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:343 _RecordClassGenerator._generateHashCode generates a record class's hashCode" Core.DataType struct RecordHashCode end
-@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:389 _RecordClassGenerator._generateToString generates a record class's toString" Core.DataType struct RecordToString end
-@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:464 _RecordClassGenerator._generateEquals generates a record class's ==" Core.DataType struct RecordEquals end
-@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:547 _RecordClassGenerator._generateCheckRecordType generates a record class's _checkRecordType" Core.DataType struct RecordCheckRecordType end
-@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:653 _RecordClassGenerator._generateRecordRuntimeType generates a record class's _recordRuntimeType" Core.DataType struct RecordRuntimeType end
-@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:663 _RecordClassGenerator._generateMasqueradedRecordRuntimeType generates a record class's _masqueradedRecordRuntimeType" Core.DataType struct RecordMasqueradedRuntimeType end
+@quarantine pin"pkg/dart2wasm/lib/record_class_generator.dart:314 _RecordClassGenerator._generateConstructor" "pkg/dart2wasm/lib/record_class_generator.dart:314 _RecordClassGenerator._generateConstructor generates a record class's constructor" Core.DataType struct RecordConstructor end
+@quarantine pin"pkg/dart2wasm/lib/record_class_generator.dart:343 _RecordClassGenerator._generateHashCode" "pkg/dart2wasm/lib/record_class_generator.dart:343 _RecordClassGenerator._generateHashCode generates a record class's hashCode" Core.DataType struct RecordHashCode end
+@quarantine pin"pkg/dart2wasm/lib/record_class_generator.dart:389 _RecordClassGenerator._generateToString" "pkg/dart2wasm/lib/record_class_generator.dart:389 _RecordClassGenerator._generateToString generates a record class's toString" Core.DataType struct RecordToString end
+@quarantine pin"pkg/dart2wasm/lib/record_class_generator.dart:464 _RecordClassGenerator._generateEquals" "pkg/dart2wasm/lib/record_class_generator.dart:464 _RecordClassGenerator._generateEquals generates a record class's ==" Core.DataType struct RecordEquals end
+@quarantine pin"pkg/dart2wasm/lib/record_class_generator.dart:547 _RecordClassGenerator._generateCheckRecordType" "pkg/dart2wasm/lib/record_class_generator.dart:547 _RecordClassGenerator._generateCheckRecordType generates a record class's _checkRecordType" Core.DataType struct RecordCheckRecordType end
+@quarantine pin"pkg/dart2wasm/lib/record_class_generator.dart:653 _RecordClassGenerator._generateRecordRuntimeType" "pkg/dart2wasm/lib/record_class_generator.dart:653 _RecordClassGenerator._generateRecordRuntimeType generates a record class's _recordRuntimeType" Core.DataType struct RecordRuntimeType end
+@quarantine pin"pkg/dart2wasm/lib/record_class_generator.dart:663 _RecordClassGenerator._generateMasqueradedRecordRuntimeType" "pkg/dart2wasm/lib/record_class_generator.dart:663 _RecordClassGenerator._generateMasqueradedRecordRuntimeType generates a record class's _masqueradedRecordRuntimeType" Core.DataType struct RecordMasqueradedRuntimeType end
 
 """
     RecordMember
@@ -103,7 +103,7 @@ precedent(rust: enum + exhaustive match; dart: sealed class + exhaustive switch)
 exhaustiveness checked when the package loads (`check_closed`), since Julia checks no match at compile
 time.
 """
-@quarantine "pkg/dart2wasm/lib/record_class_generator.dart:246 _RecordClassGenerator._generateClass gives a record class its members, a closed set; a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const RecordMember = Union{RecordConstructor, RecordHashCode, RecordToString, RecordEquals, RecordCheckRecordType, RecordRuntimeType, RecordMasqueradedRuntimeType}
+@quarantine pin"pkg/dart2wasm/lib/record_class_generator.dart:246 _RecordClassGenerator._generateClass" "pkg/dart2wasm/lib/record_class_generator.dart:246 _RecordClassGenerator._generateClass gives a record class its members, a closed set; a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const RecordMember = Union{RecordConstructor, RecordHashCode, RecordToString, RecordEquals, RecordCheckRecordType, RecordRuntimeType, RecordMasqueradedRuntimeType}
 
 """
     RecordMemberReference(cls, member)
@@ -122,7 +122,7 @@ member, compared by value, and the member code generator (src/code_generator.jl 
 matches its member @exhaustive: _recordRuntimeType's code is the record class generator's helper that builds its body
 (src/record_class_generator.jl _generateRecordRuntimeTypeHelper), every other member the generator's located rejection.
 """
-@quarantine "dart compiles each member record_class_generator.dart generates for a record class by its Reference (pkg/dart2wasm/lib/record_class_generator.dart:653 _RecordClassGenerator._generateRecordRuntimeType); Julia's record class has no Kernel member, so the class and the member name it" Core.DataType struct RecordMemberReference
+@quarantine pin"pkg/dart2wasm/lib/record_class_generator.dart:653 _RecordClassGenerator._generateRecordRuntimeType" "dart compiles each member record_class_generator.dart generates for a record class by its Reference (pkg/dart2wasm/lib/record_class_generator.dart:653 _RecordClassGenerator._generateRecordRuntimeType); Julia's record class has no Kernel member, so the class and the member name it" Core.DataType struct RecordMemberReference
     cls::DataType
     member::RecordMember
     # only a record class has generated members
@@ -148,7 +148,7 @@ generator generates, which has no MethodInstance.
 """
 # the sum's kinds are named in the module that declares it (@closed), Julia's MethodInstance among them
 import Core: MethodInstance
-@quarantine "Kernel's Reference (pkg/kernel/lib/canonical_name.dart:429 Reference) names a member or one of its accessors; a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const Reference = Union{MethodInstance, FieldReference, RecordMemberReference}
+@quarantine pin"pkg/kernel/lib/canonical_name.dart:429 Reference" "Kernel's Reference (pkg/kernel/lib/canonical_name.dart:429 Reference) names a member or one of its accessors; a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const Reference = Union{MethodInstance, FieldReference, RecordMemberReference}
 
 """
     KERNEL_TYPES
@@ -331,7 +331,7 @@ NoCounterpart: no NIR value reaches it (NoCounterpart is uninhabited), so reachi
 own defect, an Internal at the definition's `anchor`, naming the row and its reason, the one source of
 that text.
 """
-@quarantine "a definition only a node Julia has no counterpart for reaches names its Kernel row, the one source of why" Base.findfirst function no_counterpart_rejection(name::String, anchor::String, at::String)::Union{}
+@quarantine unpinned "a definition only a node Julia has no counterpart for reaches names its Kernel row, the one source of why" Base.findfirst function no_counterpart_rejection(name::String, anchor::String, at::String)::Union{}
     local i = findfirst(p -> p.first[1] == "kernel/lib/ast.dart" && p.first[2] == name, KERNEL_TYPES)
     i === nothing && reject!(Internal("src/julia/kernel.jl no_counterpart_rejection: no Kernel row for $name"), at)
     local (counterpart, why) = KERNEL_TYPES[i].second
@@ -343,4 +343,4 @@ end
 # file, so the table is the one place it is named.
 
 """Kernel's `InstanceConstant`: a `NirConst` of an object that is no other kind's value (KERNEL_TYPES' row)."""
-@quarantine "Kernel's InstanceConstant is the NIR's literal of an object; the Kernel table's row, by its Kernel name" WasmTarget.NirConst const InstanceConstant = NirConst
+@quarantine unpinned "Kernel's InstanceConstant is the NIR's literal of an object; the Kernel table's row, by its Kernel name" WasmTarget.NirConst const InstanceConstant = NirConst

@@ -42,27 +42,27 @@ place of the block's Julia statements, which LLVM holds as the block's other ins
 """    BLOCK_TYPE_VOID
 
 A BLOCK's or LOOP's type with no params or results (WebAssembly::BlockType::Void)."""
-@quarantine "LLVM's WebAssembly::BlockType::Void, the binary format's empty block type" Core.Int const BLOCK_TYPE_VOID::Int = 0x40
+@quarantine unpinned "LLVM's WebAssembly::BlockType::Void, the binary format's empty block type" Core.Int const BLOCK_TYPE_VOID::Int = 0x40
 """    BLOCK_TYPE_CATCH
 
 A BLOCK's type that is its catch clause's payload, the exception tag's parameters (LLVM's pointer
 type for CATCH), filled where the instructions are lowered."""
-@quarantine "LLVM's catch destination BLOCK takes the caught value's type; WasmTarget's tag holds the exception" Core.Int const BLOCK_TYPE_CATCH::Int = -2
+@quarantine unpinned "LLVM's catch destination BLOCK takes the caught value's type; WasmTarget's tag holds the exception" Core.Int const BLOCK_TYPE_CATCH::Int = -2
 
 """    BLOCK_TYPE_EXNREF
 
 A BLOCK's type whose result is an exnref, a trampoline's, which a catch_all_ref branches to
 (WebAssembly::BlockType::Exnref, wasm::ValType::EXNREF)."""
-@quarantine "LLVM's WebAssembly::BlockType::Exnref, the binary format's exnref value type" Core.Int const BLOCK_TYPE_EXNREF::Int = 0x69
+@quarantine unpinned "LLVM's WebAssembly::BlockType::Exnref, the binary format's exnref value type" Core.Int const BLOCK_TYPE_EXNREF::Int = 0x69
 
 """    WASM_OPCODE_CATCH
 
 A TRY_TABLE's catch clause of a tag, its payload to the label (BinaryFormat/Wasm.h)."""
-@quarantine "LLVM's wasm::WASM_OPCODE_CATCH, the binary format's catch clause kind" Core.Int const WASM_OPCODE_CATCH::Int = 0x00
+@quarantine unpinned "LLVM's wasm::WASM_OPCODE_CATCH, the binary format's catch clause kind" Core.Int const WASM_OPCODE_CATCH::Int = 0x00
 """    WASM_OPCODE_CATCH_ALL_REF
 
 A TRY_TABLE's catch clause of every exception, its exnref to the label (BinaryFormat/Wasm.h)."""
-@quarantine "LLVM's wasm::WASM_OPCODE_CATCH_ALL_REF, the binary format's catch clause kind" Core.Int const WASM_OPCODE_CATCH_ALL_REF::Int = 0x03
+@quarantine unpinned "LLVM's wasm::WASM_OPCODE_CATCH_ALL_REF, the binary format's catch clause kind" Core.Int const WASM_OPCODE_CATCH_ALL_REF::Int = 0x03
 
 """    REGISTER_VALUE
 
@@ -84,14 +84,14 @@ made (create_label_register!)."""
 
 A BLOCK's or LOOP's type that is the function's results, filled where the instructions are lowered
 (WebAssembly::BlockType::Multivalue, which MCInstLower fills from the function's signature)."""
-@quarantine "LLVM's WebAssembly::BlockType::Multivalue, the function's results filled at lowering" Core.Int const BLOCK_TYPE_RESULTS::Int = 0xffff
+@quarantine unpinned "LLVM's WebAssembly::BlockType::Multivalue, the function's results filled at lowering" Core.Int const BLOCK_TYPE_RESULTS::Int = 0xffff
 
 """A block operand: the block's number in the machine CFG (LLVM's MachineOperand::isMBB)."""
-@quarantine "LLVM's MachineOperand of kind MO_MachineBasicBlock; a block is its number, Julia's BBNumber" Core.Int struct MOBlock
+@quarantine unpinned "LLVM's MachineOperand of kind MO_MachineBasicBlock; a block is its number, Julia's BBNumber" Core.Int struct MOBlock
     mbb::Int
 end
 """An immediate operand (LLVM's MachineOperand::isImm): a block type, a depth, a statement index."""
-@quarantine "LLVM's MachineOperand of kind MO_Immediate" Core.Int struct MOImm
+@quarantine unpinned "LLVM's MachineOperand of kind MO_Immediate" Core.Int struct MOImm
     imm::Int
 end
 
@@ -104,7 +104,7 @@ A closed sum by construction: a `@closed` `Union` of two concrete structs.
 precedent(llvm: MachineOperand's MachineOperandType tag; rust: an enum). Julia's differs: a `Union`
 of concrete types, its matches checked `@exhaustive` when the package loads.
 """
-@quarantine "LLVM's MachineOperand is a tagged union; Julia's is a closed Union" Core.Union @closed const MachineOperand = Union{MOBlock, MOImm}
+@quarantine unpinned "LLVM's MachineOperand is a tagged union; Julia's is a closed Union" Core.Union @closed const MachineOperand = Union{MOBlock, MOImm}
 
 """
     MachineInstr(opcode, operands, parent)
@@ -118,7 +118,7 @@ index of a PhiNode and the index of its edge whose value goes into the PHI's inc
 IMPLICIT_DEF the register it defines, its kind (REGISTER_VALUE, REGISTER_INCOMING, REGISTER_LABEL)
 then its index in that kind.
 """
-@quarantine "LLVM's MachineInstr: an opcode with operands, its parent block a number in Julia's CFG" Base.Vector mutable struct MachineInstr
+@quarantine unpinned "LLVM's MachineInstr: an opcode with operands, its parent block a number in Julia's CFG" Base.Vector mutable struct MachineInstr
     opcode::Opcode
     operands::Vector{MachineOperand}
     parent::Int
@@ -131,7 +131,7 @@ A block's state: `number`, its place in the layout (LLVM's getNumber, renumbered
 RenumberBlocks), Julia's predecessors and successors by number, the instructions in order, and
 whether it is an EH pad.
 """
-@quarantine "LLVM's MachineBasicBlock, its edges Julia's CFG's and its instructions the passes'" Base.Vector mutable struct MachineBasicBlock
+@quarantine unpinned "LLVM's MachineBasicBlock, its edges Julia's CFG's and its instructions the passes'" Base.Vector mutable struct MachineBasicBlock
     number::Int
     preds::Vector{Int}
     succs::Vector{Int}
@@ -251,7 +251,7 @@ end
 """    renumber_blocks!(mf) -> Nothing
 
 Numbers each block by its place in the layout (LLVM's MachineFunction::RenumberBlocks)."""
-@quarantine "LLVM's MachineFunction::RenumberBlocks (MachineFunction.cpp), a block's number its place in the layout" Base.enumerate function renumber_blocks!(mf::MachineFunction)::Nothing
+@quarantine unpinned "LLVM's MachineFunction::RenumberBlocks (MachineFunction.cpp), a block's number its place in the layout" Base.enumerate function renumber_blocks!(mf::MachineFunction)::Nothing
     for (i, b) in enumerate(mf.layout)
         mf.blocks[b].number = i
     end
@@ -262,7 +262,7 @@ end
 
 A new block with no edges or instructions, outside the layout (LLVM's
 MachineFunction::CreateMachineBasicBlock); a pass places it."""
-@quarantine "LLVM's MachineFunction::CreateMachineBasicBlock: a block Julia's CFG lacks, numbered after its blocks" Base.push! function create_machine_basic_block!(mf::MachineFunction)::Int
+@quarantine unpinned "LLVM's MachineFunction::CreateMachineBasicBlock: a block Julia's CFG lacks, numbered after its blocks" Base.push! function create_machine_basic_block!(mf::MachineFunction)::Int
     push!(mf.blocks, MachineBasicBlock(0, Int[], Int[], MachineInstr[], false))
     return length(mf.blocks)
 end
@@ -270,7 +270,7 @@ end
 """    get_prev_node(mf, b) -> Union{Int,Nothing}
 
 The block before `b` in the layout, nothing for the first (LLVM's ilist getPrevNode)."""
-@quarantine "LLVM's ilist_node getPrevNode over the layout" Base.findfirst function get_prev_node(mf::MachineFunction, b::Int)::Union{Int,Nothing}
+@quarantine unpinned "LLVM's ilist_node getPrevNode over the layout" Base.findfirst function get_prev_node(mf::MachineFunction, b::Int)::Union{Int,Nothing}
     local i = findfirst(==(b), mf.layout)
     i === nothing && reject!(Internal("src/julia/machine.jl get_prev_node: block $b is not in the layout"), "get_prev_node")
     return i == 1 ? nothing : mf.layout[i - 1]
@@ -280,18 +280,18 @@ end
 
 Whether an instruction ends its block's straight-line code (LLVM's MachineInstr::isTerminator, the
 isTerminator flag WebAssemblyInstrControl.td sets on BR, BR_IF, BR_UNLESS, BR_TABLE and UNREACHABLE)."""
-@quarantine "LLVM's MCInstrDesc isTerminator flag, TableGen's, for the branches and unreachable" Base.in is_terminator(mi::MachineInstr)::Bool = mi.opcode in (BR, BR_IF, BR_UNLESS, BR_TABLE, UNREACHABLE, THROW_REF)
+@quarantine unpinned "LLVM's MCInstrDesc isTerminator flag, TableGen's, for the branches and unreachable" Base.in is_terminator(mi::MachineInstr)::Bool = mi.opcode in (BR, BR_IF, BR_UNLESS, BR_TABLE, UNREACHABLE, THROW_REF)
 
 """    is_barrier(mi) -> Bool
 
 Whether control never falls through an instruction (LLVM's MachineInstr::isBarrier, the isBarrier
 flag WebAssemblyInstrControl.td sets on BR and BR_TABLE)."""
-@quarantine "LLVM's MCInstrDesc isBarrier flag, TableGen's" Base.in is_barrier(mi::MachineInstr)::Bool = mi.opcode in (BR, BR_TABLE, UNREACHABLE, THROW_REF)
+@quarantine unpinned "LLVM's MCInstrDesc isBarrier flag, TableGen's" Base.in is_barrier(mi::MachineInstr)::Bool = mi.opcode in (BR, BR_TABLE, UNREACHABLE, THROW_REF)
 
 """    create_label_register!(mf) -> Int
 
 A new i32 register (LLVM's MachineRegisterInfo::createVirtualRegister of I32RegClass)."""
-@quarantine "LLVM's MachineRegisterInfo::createVirtualRegister, an i32 label register its code generator gives a local" Core.Int function create_label_register!(mf::MachineFunction)::Int
+@quarantine unpinned "LLVM's MachineRegisterInfo::createVirtualRegister, an i32 label register its code generator gives a local" Core.Int function create_label_register!(mf::MachineFunction)::Int
     mf.label_registers += 1
     return mf.label_registers
 end
@@ -299,7 +299,7 @@ end
 """    recompute_domtree!(mf) -> Nothing
 
 Julia's dominator tree of the CFG as the passes have changed it (construct_domtree)."""
-@quarantine "Julia's construct_domtree over the machine CFG a pass changed" Core.Compiler.construct_domtree function recompute_domtree!(mf::MachineFunction)::Nothing
+@quarantine unpinned "Julia's construct_domtree over the machine CFG a pass changed" Core.Compiler.construct_domtree function recompute_domtree!(mf::MachineFunction)::Nothing
     mf.domtree = Core.Compiler.construct_domtree(Core.Compiler.BasicBlock[
         Core.Compiler.BasicBlock(Core.Compiler.StmtRange(0, -1), copy(b.preds), copy(b.succs)) for b in mf.blocks])
     return nothing
@@ -309,7 +309,7 @@ end
 
 The block's instructions from its first terminator to its end (LLVM's
 MachineBasicBlock::terminators)."""
-@quarantine "LLVM's MachineBasicBlock::terminators, the instructions from the first terminator on" Base.findfirst function terminators(mf::MachineFunction, b::Int)::Vector{MachineInstr}
+@quarantine unpinned "LLVM's MachineBasicBlock::terminators, the instructions from the first terminator on" Base.findfirst function terminators(mf::MachineFunction, b::Int)::Vector{MachineInstr}
     local instrs = mf.blocks[b].instrs
     local i = findfirst(is_terminator, instrs)
     return i === nothing ? MachineInstr[] : instrs[i:end]
@@ -319,7 +319,7 @@ end
 
 The blocks reachable from `entry` in a depth-first postorder over successors (LLVM's po_iterator,
 llvm/ADT/PostOrderIterator.h)."""
-@quarantine "LLVM's po_iterator (ADT/PostOrderIterator.h); Julia's Base has no graph traversal" Base.push! function post_order(mf::MachineFunction, entry::Int)::Vector{Int}
+@quarantine unpinned "LLVM's po_iterator (ADT/PostOrderIterator.h); Julia's Base has no graph traversal" Base.push! function post_order(mf::MachineFunction, entry::Int)::Vector{Int}
     local out = Int[]
     local seen = Set{Int}([entry])
     local stack = Tuple{Int,Int}[(entry, 1)]
@@ -344,13 +344,13 @@ end
 Blocks by priority (LLVM's PriorityQueue, llvm/ADT/PriorityQueue.h, a std::priority_queue): `pq_top`
 is the block no other block outranks under the queue's comparator `less`, as a max-heap's top.
 """
-@quarantine "LLVM's PriorityQueue over std::priority_queue; Julia's Base has no heap" Base.Vector struct PriorityQueue
+@quarantine unpinned "LLVM's PriorityQueue over std::priority_queue; Julia's Base has no heap" Base.Vector struct PriorityQueue
     items::Vector{Int}
     PriorityQueue() = new(Int[])
 end
 
 """    pq_push!(q, b) -> Nothing"""
-@quarantine "std::priority_queue::push" Base.push! function pq_push!(q::PriorityQueue, b::Int)::Nothing
+@quarantine unpinned "std::priority_queue::push" Base.push! function pq_push!(q::PriorityQueue, b::Int)::Nothing
     push!(q.items, b)
     return nothing
 end
@@ -359,7 +359,7 @@ end
 
 Removes and returns the top: the block `b` with `less(b, c)` for no other `c` (std::priority_queue's
 top then pop, its comparator a strict weak order)."""
-@quarantine "std::priority_queue::top and pop, the greatest under the comparator" Base.deleteat! function pq_pop!(q::PriorityQueue, less::Function)::Int
+@quarantine unpinned "std::priority_queue::top and pop, the greatest under the comparator" Base.deleteat! function pq_pop!(q::PriorityQueue, less::Function)::Int
     isempty(q.items) && reject!(Internal("src/julia/machine.jl pq_pop!: top of an empty queue"), "PriorityQueue.top")
     local t = 1
     for i in 2:length(q.items)
@@ -371,12 +371,12 @@ top then pop, its comparator a strict weak order)."""
 end
 
 """    pq_empty(q) -> Bool"""
-@quarantine "std::priority_queue::empty" Base.isempty pq_empty(q::PriorityQueue)::Bool = isempty(q.items)
+@quarantine unpinned "std::priority_queue::empty" Base.isempty pq_empty(q::PriorityQueue)::Bool = isempty(q.items)
 
 """    get_block_numbered(mf, n) -> Union{Int,Nothing}
 
 The block numbered `n`, nothing past the last (LLVM's MachineFunction::getBlockNumbered)."""
-@quarantine "LLVM's MachineFunction::getBlockNumbered over the layout's numbers" Base.findfirst function get_block_numbered(mf::MachineFunction, n::Int)::Union{Int,Nothing}
+@quarantine unpinned "LLVM's MachineFunction::getBlockNumbered over the layout's numbers" Base.findfirst function get_block_numbered(mf::MachineFunction, n::Int)::Union{Int,Nothing}
     local i = findfirst(b -> mf.blocks[b].number == n, mf.layout)
     return i === nothing ? nothing : mf.layout[i]
 end
@@ -386,7 +386,7 @@ end
 Pushes `v`, an SDValue of the type legalizer's expansions: a constant node, an `Int64` (a half
 ExpandIntRes_Constant splits off a literal), by `i64.const`, any other value by `local.get` of the
 local holding it."""
-@quarantine "llvm/include/llvm/CodeGen/SelectionDAGNodes.h:147 SDValue is a node of the DAG, a constant or a value; Julia's IR builds no DAG, so an expansion holds a constant half as an Int64 and every other value in a local of the function being written" Core.Int64 function sd_get(b::AbstractInstructionsBuilder, v)::Nothing
+@quarantine pin"llvm/include/llvm/CodeGen/SelectionDAGNodes.h:147 SDValue" "llvm/include/llvm/CodeGen/SelectionDAGNodes.h:147 SDValue is a node of the DAG, a constant or a value; Julia's IR builds no DAG, so an expansion holds a constant half as an Int64 and every other value in a local of the function being written" Core.Int64 function sd_get(b::AbstractInstructionsBuilder, v)::Nothing
     v isa Int64 ? WasmBuilder.i64_const(b, v) : WasmBuilder.local_get(b, v)
     return nothing
 end

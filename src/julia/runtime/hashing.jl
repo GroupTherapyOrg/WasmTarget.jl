@@ -5,7 +5,7 @@
 # native Julia's, bit for bit. Called by the overlay of hash(::String, ::UInt) (src/patch/hashing.jl).
 
 # MurmurHash3's finalization mix of a 64-bit lane
-@quarantine "julia/src/support/MurmurHash3.c:47 fmix64, its shifts and multiplies of a 64-bit lane" Base.xor function murmur3_fmix64(k::UInt64)::UInt64
+@quarantine pin"julia/src/support/MurmurHash3.c:47 fmix64" "julia/src/support/MurmurHash3.c:47 fmix64, its shifts and multiplies of a 64-bit lane" Base.xor function murmur3_fmix64(k::UInt64)::UInt64
     k = xor(k, k >> 33)
     k *= 0xff51afd7ed558ccd
     k = xor(k, k >> 33)
@@ -16,13 +16,13 @@ end
 
 # the bytes MurmurHash3 reads (julia/src/support/hashing.c:68 memhash_seed's `buf` and `n`): a String's,
 # its wasm data array's elements, and the bytes of a bits value stored into a byte Memory (bits_hash)
-@quarantine "julia/src/support/hashing.c:68 memhash_seed reads `n` bytes at `buf`; a String's are its data array's" Core.String murmur3_length(s::String)::Int = wasm_string_length(s)
-@quarantine "julia/src/support/hashing.c:68 memhash_seed reads `n` bytes at `buf`; a bits value's are a byte Memory's elements" Base.length murmur3_length(m::Memory{UInt8})::Int = length(m)
-@quarantine "julia/src/support/MurmurHash3.c:220 MurmurHash3_x64_128 reads the byte at `data + i`; a String's is its data array's element" Core.String murmur3_byte(s::String, i::Int)::UInt8 = wasm_string_codeunit(s, i)
-@quarantine "julia/src/support/MurmurHash3.c:220 MurmurHash3_x64_128 reads the byte at `data + i`; a bits value's is a byte Memory's element" Core.Memory murmur3_byte(m::Memory{UInt8}, i::Int)::UInt8 = @inbounds m[i + 1]
+@quarantine pin"julia/src/support/hashing.c:68 memhash_seed" "julia/src/support/hashing.c:68 memhash_seed reads `n` bytes at `buf`; a String's are its data array's" Core.String murmur3_length(s::String)::Int = wasm_string_length(s)
+@quarantine pin"julia/src/support/hashing.c:68 memhash_seed" "julia/src/support/hashing.c:68 memhash_seed reads `n` bytes at `buf`; a bits value's are a byte Memory's elements" Base.length murmur3_length(m::Memory{UInt8})::Int = length(m)
+@quarantine pin"julia/src/support/MurmurHash3.c:220 MurmurHash3_x64_128" "julia/src/support/MurmurHash3.c:220 MurmurHash3_x64_128 reads the byte at `data + i`; a String's is its data array's element" Core.String murmur3_byte(s::String, i::Int)::UInt8 = wasm_string_codeunit(s, i)
+@quarantine pin"julia/src/support/MurmurHash3.c:220 MurmurHash3_x64_128" "julia/src/support/MurmurHash3.c:220 MurmurHash3_x64_128 reads the byte at `data + i`; a bits value's is a byte Memory's element" Core.Memory murmur3_byte(m::Memory{UInt8}, i::Int)::UInt8 = @inbounds m[i + 1]
 
 # the little-endian 64-bit word of `s`'s bytes from `offset` (from 0), jl_load_unaligned_i64's read
-@quarantine "julia/src/support/MurmurHash3.c:220 MurmurHash3_x64_128 reads each block as a little-endian 64-bit word (jl_load_unaligned_i64)" Base.:<< function murmur3_block(s::Union{String,Memory{UInt8}}, offset::Int)::UInt64
+@quarantine pin"julia/src/support/MurmurHash3.c:220 MurmurHash3_x64_128" "julia/src/support/MurmurHash3.c:220 MurmurHash3_x64_128 reads each block as a little-endian 64-bit word (jl_load_unaligned_i64)" Base.:<< function murmur3_block(s::Union{String,Memory{UInt8}}, offset::Int)::UInt64
     local k = UInt64(0)
     for j in 0:7
         k |= UInt64(murmur3_byte(s, offset + j)) << (8j)
@@ -37,7 +37,7 @@ Julia's runtime hash of the bytes of `s`, a String or a byte Memory, under `seed
 64-bit half (hashing.c memhash_seed's `out[1]`), the 16-byte blocks, the tail of up to 15 bytes falling
 through as the C switch does, the length mixed in and each half finalized.
 """
-@quarantine "julia/src/support/hashing.c:68 memhash_seed answers MurmurHash3_x64_128's second half (julia/src/support/MurmurHash3.c:220)" Base.bitrotate function memhash_seed(s::Union{String,Memory{UInt8}}, seed::UInt32)::UInt64
+@quarantine pin"julia/src/support/hashing.c:68 memhash_seed" "julia/src/support/hashing.c:68 memhash_seed answers MurmurHash3_x64_128's second half (julia/src/support/MurmurHash3.c:220)" Base.bitrotate function memhash_seed(s::Union{String,Memory{UInt8}}, seed::UInt32)::UInt64
     local len = murmur3_length(s)
     local nblocks = len ÷ 16
     local h1 = UInt64(seed)
@@ -96,7 +96,7 @@ end
 # rejection where it is reached.
 
 # the integer hashes of julia/src/support/hashing.c, Thomas Wang's
-@quarantine "julia/src/support/hashing.c:17 int32hash, its adds, shifts and xors of a 32-bit word" Base.xor function int32hash(a::UInt32)::UInt32
+@quarantine pin"julia/src/support/hashing.c:17 int32hash" "julia/src/support/hashing.c:17 int32hash, its adds, shifts and xors of a 32-bit word" Base.xor function int32hash(a::UInt32)::UInt32
     a = (a + 0x7ed55d16) + (a << 12)
     a = xor(xor(a, 0xc761c23c), a >> 19)
     a = (a + 0x165667b1) + (a << 5)
@@ -106,7 +106,7 @@ end
     return a
 end
 
-@quarantine "julia/src/support/hashing.c:28 int64hash, its adds, shifts and xors of a 64-bit word" Base.xor function int64hash(key::UInt64)::UInt64
+@quarantine pin"julia/src/support/hashing.c:28 int64hash" "julia/src/support/hashing.c:28 int64hash, its adds, shifts and xors of a 64-bit word" Base.xor function int64hash(key::UInt64)::UInt64
     key = ~key + (key << 21)
     key = xor(key, key >> 24)
     key = (key + (key << 3)) + (key << 8)
@@ -118,10 +118,10 @@ end
 end
 
 # two words mixed, the second byte-swapped (julia/src/support/hashing.h:29, _P64's)
-@quarantine "julia/src/support/hashing.h:29 bitmix hashes the first word xored with the second byte-swapped" Base.bswap bitmix(a::UInt64, b::UInt64)::UInt64 = int64hash(xor(a, bswap(b)))
+@quarantine pin"julia/src/support/hashing.h:29 bitmix" "julia/src/support/hashing.h:29 bitmix hashes the first word xored with the second byte-swapped" Base.bswap bitmix(a::UInt64, b::UInt64)::UInt64 = int64hash(xor(a, bswap(b)))
 
 # a Symbol's hash, which mk_symbol stores in it when it interns the name (julia/src/symbol.c:45)
-@quarantine "julia/src/symbol.c:23 hash_symbol hashes the name's bytes (memhash) and inthash's the negated id" Base.String function hash_symbol(name::String)::UInt64
+@quarantine pin"julia/src/symbol.c:23 hash_symbol" "julia/src/symbol.c:23 hash_symbol hashes the name's bytes (memhash) and inthash's the negated id" Base.String function hash_symbol(name::String)::UInt64
     local oid = xor(memhash_seed(name, 0xcafe8881), ~UInt64(0) ÷ 3 * 2)
     return int64hash(-oid)
 end
@@ -139,12 +139,12 @@ end
 # time (a corpus unit's U_<slug>, a test's own module). For a type of such a module the id of its values
 # answers as native Julia only against the compiling process; a comparison of ids answers as native
 # Julia in any process, an id itself does not
-@quarantine "julia/src/julia.h:626 jl_datatype_t holds its hash, a uint32_t, read as a uintptr_t" Core.DataType datatype_hash(T::DataType)::UInt64 = UInt64(reinterpret(UInt32, getfield(T, :hash)))
+@quarantine pin"julia/src/julia.h:626 jl_datatype_t" "julia/src/julia.h:626 jl_datatype_t holds its hash, a uint32_t, read as a uintptr_t" Core.DataType datatype_hash(T::DataType)::UInt64 = UInt64(reinterpret(UInt32, getfield(T, :hash)))
 
 # whether field `i` of `T` is stored as a reference: the isptr bit compute_field_offsets clears where the
 # field's type is laid out inline (jl_islayout_inline, Base's allocatedinline) and the field is not atomic
 # or its type a DataType (julia/src/datatype.c:729), which jl_field_isptr reads (julia/src/julia.h:1595)
-@quarantine "julia/src/datatype.c:629 jl_compute_field_offsets stores a field inline where its type's layout is inline and it is not atomic or its type is a DataType, which jl_field_isptr reads" Base.allocatedinline function jl_field_isptr(T::DataType, i::Int)::Bool
+@quarantine pin"julia/src/datatype.c:629 jl_compute_field_offsets" "julia/src/datatype.c:629 jl_compute_field_offsets stores a field inline where its type's layout is inline and it is not atomic or its type is a DataType, which jl_field_isptr reads" Base.allocatedinline function jl_field_isptr(T::DataType, i::Int)::Bool
     local ft = fieldtype(T, i)
     return !(Base.allocatedinline(ft) && (!Base.isfieldatomic(T, i) || ft isa DataType))
 end
@@ -154,7 +154,7 @@ end
 # Julia's hash never reads it), a leaf's least significant first (src/patch/reinterpretarray.jl
 # _packed_store!), any other primitive's as Base's reinterpret reads its bytes, and a struct's fields
 # each at its field offset (Julia's fieldoffset)
-@quarantine "julia/src/builtins.c:315 bits_hash reads a bits value's bytes at its address; WasmGC has none, so its leaves are stored into a byte Memory at their field offsets" Base.fieldoffset @inline function bits_store!(m::Memory{UInt8}, o::Int, x::T)::Nothing where {T}
+@quarantine pin"julia/src/builtins.c:315 bits_hash" "julia/src/builtins.c:315 bits_hash reads a bits value's bytes at its address; WasmGC has none, so its leaves are stored into a byte Memory at their field offsets" Base.fieldoffset @inline function bits_store!(m::Memory{UInt8}, o::Int, x::T)::Nothing where {T}
     if sizeof(T) == 0
         # no bytes: the block holds none of it (julia/src/builtins.c:424 bits_hash(v, sz) over the parent's)
     elseif x isa Union{Base.BitInteger, Base.IEEEFloat, Bool, Char}
@@ -171,7 +171,7 @@ end
 end
 
 # the little-endian word of the first `n` bytes of `m` (bits_hash's jl_load_unaligned_i16, _i32, _i64)
-@quarantine "julia/src/builtins.c:315 bits_hash loads a 2-, 4- or 8-byte value unaligned, little-endian (jl_load_unaligned_i64)" Base.:<< function bits_word(m::Memory{UInt8}, n::Int)::UInt64
+@quarantine pin"julia/src/builtins.c:315 bits_hash" "julia/src/builtins.c:315 bits_hash loads a 2-, 4- or 8-byte value unaligned, little-endian (jl_load_unaligned_i64)" Base.:<< function bits_word(m::Memory{UInt8}, n::Int)::UInt64
     local w = UInt64(0)
     for k in 0:n-1
         w |= UInt64(@inbounds m[k + 1]) << (8k)
@@ -187,7 +187,7 @@ The hash of a bits value's bytes (julia/src/builtins.c:315 bits_hash): a 1-byte 
 jl_load_unaligned_i16's uint16_t, :316 _i32's uint32_t), by int32hash, an 8-byte one's by int64hash, any other size's by memhash
 over its bytes. The bytes are the value's stored into a byte Memory in its layout (bits_store!).
 """
-@quarantine "julia/src/builtins.c:315 bits_hash hashes a bits value's bytes by its size: int32hash, int64hash or memhash" Base.sizeof function bits_hash(x::T)::UInt64 where {T}
+@quarantine pin"julia/src/builtins.c:315 bits_hash" "julia/src/builtins.c:315 bits_hash hashes a bits value's bytes by its size: int32hash, int64hash or memhash" Base.sizeof function bits_hash(x::T)::UInt64 where {T}
     local sz = sizeof(T)
     local m = Memory{UInt8}(undef, sz)
     bits_store!(m, 0, x)
@@ -207,7 +207,7 @@ decide its egality, or it is a primitive; else `h` mixed with each field's id in
 reference field's jl_object_id, an inline field's (a union's selected member's) immut_id_ from 0, and 0
 for a field never set.
 """
-@quarantine "julia/src/builtins.c:412 immut_id_ hashes a value's bits block or mixes each field's id into the seed" Base.datatype_nfields function immut_id_(x::T, h::UInt64)::UInt64 where {T}
+@quarantine pin"julia/src/builtins.c:412 immut_id_" "julia/src/builtins.c:412 immut_id_ hashes a value's bits block or mixes each field's id into the seed" Base.datatype_nfields function immut_id_(x::T, h::UInt64)::UInt64 where {T}
     sizeof(T) == 0 && return ~h
     local nf = Int(Base.datatype_nfields(T))
     if nf == 0 || (!Base.datatype_haspadding(T) && Base.datatype_isbitsegal(T) && Base.datatype_pointerfree(T))
@@ -222,7 +222,7 @@ end
 
 # the id of field `i` of `x` (immut_id_'s loop body): 0 for a field never set, a reference field's
 # jl_object_id, an inline field's (a union's selected member's) immut_id_ from 0
-@quarantine "julia/src/builtins.c:412 immut_id_'s loop takes each field's id by whether it is stored as a reference" Base.isdefined @inline function immut_field_id(x::T, i::Int)::UInt64 where {T}
+@quarantine pin"julia/src/builtins.c:412 immut_id_" "julia/src/builtins.c:412 immut_id_'s loop takes each field's id by whether it is stored as a reference" Base.isdefined @inline function immut_field_id(x::T, i::Int)::UInt64 where {T}
     Base.@constprop :aggressive
     isdefined(x, i) || return UInt64(0)
     return jl_field_isptr(T, i) ? jl_object_id(getfield(x, i)) : immut_id_(getfield(x, i), UInt64(0))
@@ -450,7 +450,7 @@ Julia's in that process, and in every process for a type of a module saved in an
 of a module made at run time). A type value's id (its DataType's, TypeName's or kind's hash), a
 Module's and a SimpleVector's are Base's ccall, a located rejection where it is reached.
 """
-@quarantine "julia/src/builtins.c:489 jl_object_id_ answers by the value's type tag: a Symbol's hash, a String's memhash, an immutable's immut_id_" Core.Symbol function jl_object_id(x::T)::UInt64 where {T}
+@quarantine pin"julia/src/builtins.c:489 jl_object_id_" "julia/src/builtins.c:489 jl_object_id_ answers by the value's type tag: a Symbol's hash, a String's memhash, an immutable's immut_id_" Core.Symbol function jl_object_id(x::T)::UInt64 where {T}
     T === Symbol && return wasm_symbol_hash(x)
     T === String && return memhash_seed(x, 0xedc3b677)
     jl_object_id_identity_arm(T) && return jl_object_id_identity(x)

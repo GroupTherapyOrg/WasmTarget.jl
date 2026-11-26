@@ -163,8 +163,8 @@ precedent(dart: dart:_wasm's WasmArray and ImmutableWasmArray; rust: `[T]`, a ty
 reference). Julia's differs: its runtime has no wasm array, so the type names the representation and
 no Julia operation reads it.
 """
-@quarantine "dart:_wasm's WasmArray is a class of dart's runtime; Julia's runtime has no wasm array, so a value's type names it" Core.Any primitive type WasmArray{T} <: Any 64 end
-@quarantine "dart:_wasm's ImmutableWasmArray is a class of dart's runtime; Julia's runtime has no wasm array, so a field's type names it" Core.Union struct ImmutableWasmArray{T}
+@quarantine unpinned "dart:_wasm's WasmArray is a class of dart's runtime; Julia's runtime has no wasm array, so a value's type names it" Core.Any primitive type WasmArray{T} <: Any 64 end
+@quarantine unpinned "dart:_wasm's ImmutableWasmArray is a class of dart's runtime; Julia's runtime has no wasm array, so a field's type names it" Core.Union struct ImmutableWasmArray{T}
     _never::Union{}
     ImmutableWasmArray{T}(args...) where {T} = reject!(Internal("src/julia/wasm_array.jl: ImmutableWasmArray has no Julia value; a field of its type holds the wasm array itself"), "ImmutableWasmArray")
 end
@@ -182,7 +182,7 @@ precedent(dart: dart:_wasm's WasmI8, a storage type of packed arrays only; rust:
 Julia's differs: its UInt8 is a class of its own, boxed where it flows into `Any`, so the packed
 storage type is named apart from it.
 """
-@quarantine "dart:_wasm's WasmI8 is a storage type of dart's runtime; Julia's UInt8 is a boxable class, so a field's element type names the packed i8" Core.Union struct WasmI8
+@quarantine unpinned "dart:_wasm's WasmI8 is a storage type of dart's runtime; Julia's UInt8 is a boxable class, so a field's element type names the packed i8" Core.Union struct WasmI8
     _never::Union{}
     WasmI8(args...) = reject!(Internal("src/julia/wasm_array.jl: WasmI8 has no Julia value; it names a packed array's element type"), "WasmI8")
 end
@@ -199,7 +199,7 @@ precedent(dart: dart:_wasm's WasmI32, a storage type of wasm arrays; rust: a pri
 Julia's differs: its Int32 and UInt32 are classes of their own, boxed where they flow into `Any`, so the unboxed
 storage type is named apart from them.
 """
-@quarantine "dart:_wasm's WasmI32 is a storage type of dart's runtime; Julia's Int32 and UInt32 are boxable classes, so an array's element type names the unboxed i32" Core.Union struct WasmI32
+@quarantine unpinned "dart:_wasm's WasmI32 is a storage type of dart's runtime; Julia's Int32 and UInt32 are boxable classes, so an array's element type names the unboxed i32" Core.Union struct WasmI32
     _never::Union{}
     WasmI32(args...) = reject!(Internal("src/julia/wasm_array.jl: WasmI32 has no Julia value; it names an array's element type"), "WasmI32")
 end
@@ -216,7 +216,7 @@ precedent(dart: dart:_wasm's WasmI64, a storage type of wasm arrays; rust: a pri
 Julia's differs: its Int64 and UInt64 are classes of their own, boxed where they flow into `Any`, so the unboxed
 storage type is named apart from them.
 """
-@quarantine "dart:_wasm's WasmI64 is a storage type of dart's runtime; Julia's Int64 and UInt64 are boxable classes, so an array's element type names the unboxed i64" Core.Union struct WasmI64
+@quarantine unpinned "dart:_wasm's WasmI64 is a storage type of dart's runtime; Julia's Int64 and UInt64 are boxable classes, so an array's element type names the unboxed i64" Core.Union struct WasmI64
     _never::Union{}
     WasmI64(args...) = reject!(Internal("src/julia/wasm_array.jl: WasmI64 has no Julia value; it names an array's element type"), "WasmI64")
 end
@@ -233,7 +233,7 @@ precedent(dart: dart:_wasm's WasmF32, a storage type of wasm arrays; rust: a pri
 Julia's differs: its Float32 are classes of their own, boxed where they flow into `Any`, so the unboxed
 storage type is named apart from them.
 """
-@quarantine "dart:_wasm's WasmF32 is a storage type of dart's runtime; Julia's Float32 are boxable classes, so an array's element type names the unboxed f32" Core.Union struct WasmF32
+@quarantine unpinned "dart:_wasm's WasmF32 is a storage type of dart's runtime; Julia's Float32 are boxable classes, so an array's element type names the unboxed f32" Core.Union struct WasmF32
     _never::Union{}
     WasmF32(args...) = reject!(Internal("src/julia/wasm_array.jl: WasmF32 has no Julia value; it names an array's element type"), "WasmF32")
 end
@@ -250,7 +250,7 @@ precedent(dart: dart:_wasm's WasmF64, a storage type of wasm arrays; rust: a pri
 Julia's differs: its Float64 are classes of their own, boxed where they flow into `Any`, so the unboxed
 storage type is named apart from them.
 """
-@quarantine "dart:_wasm's WasmF64 is a storage type of dart's runtime; Julia's Float64 are boxable classes, so an array's element type names the unboxed f64" Core.Union struct WasmF64
+@quarantine unpinned "dart:_wasm's WasmF64 is a storage type of dart's runtime; Julia's Float64 are boxable classes, so an array's element type names the unboxed f64" Core.Union struct WasmF64
     _never::Union{}
     WasmF64(args...) = reject!(Internal("src/julia/wasm_array.jl: WasmF64 has no Julia value; it names an array's element type"), "WasmF64")
 end
@@ -268,20 +268,20 @@ precedent(dart: dart:_wasm's WasmI16, a storage type of packed arrays only; rust
 `[u16]`). Julia's differs: its UInt16 is a class of its own, boxed where it flows into `Any`, so the
 packed storage type is named apart from it.
 """
-@quarantine "dart:_wasm's WasmI16 (sdk/lib/_wasm/wasm_types.dart:151 WasmI16) is a storage type of dart's runtime; Julia's UInt16 is a boxable class, so an array's element type names the packed i16" Core.Union struct WasmI16
+@quarantine pin"sdk/lib/_wasm/wasm_types.dart:151 WasmI16" "dart:_wasm's WasmI16 (sdk/lib/_wasm/wasm_types.dart:151 WasmI16) is a storage type of dart's runtime; Julia's UInt16 is a boxable class, so an array's element type names the packed i16" Core.Union struct WasmI16
     _never::Union{}
     WasmI16(args...) = reject!(Internal("src/julia/wasm_array.jl: WasmI16 has no Julia value; it names a packed array's element type"), "WasmI16")
 end
 
 # dart:_wasm's storage classes this file defines, each never boxed (translateStorageType)
-@quarantine "dart:_wasm's storage classes are the wasm types translateStorageType never boxes" Core.Tuple const WASM_STORAGE_TYPES::Tuple{Vararg{DataType}} = (WasmI8, WasmI16, WasmI32, WasmI64, WasmF32, WasmF64)
+@quarantine unpinned "dart:_wasm's storage classes are the wasm types translateStorageType never boxes" Core.Tuple const WASM_STORAGE_TYPES::Tuple{Vararg{DataType}} = (WasmI8, WasmI16, WasmI32, WasmI64, WasmF32, WasmF64)
 
 # a dart:_wasm operation's native body: no wasm array exists natively, so the body raises, loud, and
 # its value is hidden from inference (compilerbarrier) so Julia never folds a wasm array's operation;
 # inlined, so it lies in the operation's body, which the closed world never collects. It has no dart
 # counterpart: dart declares such an operation `external`, with no body at all, which Julia cannot
 # write, so it rests on Julia's own barrier, Core.compilerbarrier, whose builtin it cites (A72S2)
-@quarantine "no dart counterpart (dart's external member has no body); a native body that raises, its value hidden from inference by Julia's compilerbarrier builtin (julia/src/builtins.c:2065 jl_f_compilerbarrier)" Base.compilerbarrier @inline function _wasm_only(::Type{R})::R where {R}
+@quarantine pin"julia/src/builtins.c:2065 jl_f_compilerbarrier" "no dart counterpart (dart's external member has no body); a native body that raises, its value hidden from inference by Julia's compilerbarrier builtin (julia/src/builtins.c:2065 jl_f_compilerbarrier)" Base.compilerbarrier @inline function _wasm_only(::Type{R})::R where {R}
     local r = Base.compilerbarrier(:type, nothing)
     r === nothing && error("src/julia/wasm_array.jl: an operation only a compiled module holds (a wasm array's, an object header's identity hash field, an image object's id), run natively")
     return r::R
@@ -294,7 +294,7 @@ A new mutable wasm array of `n` elements of `T`, each the default: dart's `WasmA
 constructor (sdk/lib/_wasm/wasm_types.dart), `array.new_default`. Never inlined, so the code
 generator meets the call and lowers it (src/intrinsics.jl).
 """
-@quarantine "dart:_wasm's WasmArray constructor (sdk/lib/_wasm/wasm_types.dart:737 WasmArray) is one wasm instruction; no wasm array exists natively" Core.Int @noinline wasm_array_new(::Type{WasmArray{T}}, n::Int) where {T} =
+@quarantine pin"sdk/lib/_wasm/wasm_types.dart:737 WasmArray" "dart:_wasm's WasmArray constructor (sdk/lib/_wasm/wasm_types.dart:737 WasmArray) is one wasm instruction; no wasm array exists natively" Core.Int @noinline wasm_array_new(::Type{WasmArray{T}}, n::Int) where {T} =
     _wasm_only(WasmArray{T})
 
 """
@@ -303,7 +303,7 @@ generator meets the call and lowers it (src/intrinsics.jl).
 Writes `v` at offset `i` (from 0) of `a`, unchecked: dart's `WasmArray<T>.write`, `array.set`, a packed
 element truncated as wasm's array.set truncates.
 """
-@quarantine "dart:_wasm's WasmArray write (sdk/lib/_wasm/wasm_types.dart:748 WasmArrayExt.[]=) is one wasm instruction; no wasm array exists natively" Core.Int @noinline wasm_array_write!(a::WasmArray{T}, i::Int, v::Union{UInt16,Int32,Int64,Float64}) where {T} =
+@quarantine pin"sdk/lib/_wasm/wasm_types.dart:748 WasmArrayExt.[]=" "dart:_wasm's WasmArray write (sdk/lib/_wasm/wasm_types.dart:748 WasmArrayExt.[]=) is one wasm instruction; no wasm array exists natively" Core.Int @noinline wasm_array_write!(a::WasmArray{T}, i::Int, v::Union{UInt16,Int32,Int64,Float64}) where {T} =
     (_wasm_only(Int); nothing)
 
 """
@@ -311,7 +311,7 @@ element truncated as wasm's array.set truncates.
 
 The number of elements of `a`: dart's `WasmArrayRef.length`, `array.len`.
 """
-@quarantine "dart:_wasm's WasmArray length (sdk/lib/_wasm/wasm_types.dart:142 WasmArrayRef.length) is one wasm instruction; no wasm array exists natively" Core.Int @noinline wasm_array_length(a::WasmArray) =
+@quarantine pin"sdk/lib/_wasm/wasm_types.dart:142 WasmArrayRef.length" "dart:_wasm's WasmArray length (sdk/lib/_wasm/wasm_types.dart:142 WasmArrayRef.length) is one wasm instruction; no wasm array exists natively" Core.Int @noinline wasm_array_length(a::WasmArray) =
     _wasm_only(Int)
 
 """
@@ -320,7 +320,7 @@ The number of elements of `a`: dart's `WasmArrayRef.length`, `array.len`.
 The element at offset `i` (from 0) of an i32 array, unchecked by Julia (wasm's bounds trap): dart's
 `WasmArrayExt<WasmI32>.[]`, `array.get`, a WasmI32, whose Julia value is an Int32.
 """
-@quarantine "dart:_wasm's WasmArray read (sdk/lib/_wasm/wasm_types.dart:746 WasmArrayExt.[]) is one wasm instruction; no wasm array exists natively" Core.Int32 @noinline wasm_array_read(a::WasmArray{WasmI32}, i::Int) =
+@quarantine pin"sdk/lib/_wasm/wasm_types.dart:746 WasmArrayExt.[]" "dart:_wasm's WasmArray read (sdk/lib/_wasm/wasm_types.dart:746 WasmArrayExt.[]) is one wasm instruction; no wasm array exists natively" Core.Int32 @noinline wasm_array_read(a::WasmArray{WasmI32}, i::Int) =
     _wasm_only(Core.Int32)
 
 """
@@ -329,7 +329,7 @@ The element at offset `i` (from 0) of an i32 array, unchecked by Julia (wasm's b
 The element at offset `i` (from 0) of a packed i16 array, zero-extended: dart's
 `I16ArrayExt.readUnsigned`, `array.get_u`, an int.
 """
-@quarantine "dart:_wasm's packed read (sdk/lib/_wasm/wasm_types.dart:775 I16ArrayExt.readUnsigned) is one wasm instruction; no wasm array exists natively" Core.Int @noinline wasm_array_read_unsigned(a::WasmArray{WasmI16}, i::Int) =
+@quarantine pin"sdk/lib/_wasm/wasm_types.dart:775 I16ArrayExt.readUnsigned" "dart:_wasm's packed read (sdk/lib/_wasm/wasm_types.dart:775 I16ArrayExt.readUnsigned) is one wasm instruction; no wasm array exists natively" Core.Int @noinline wasm_array_read_unsigned(a::WasmArray{WasmI16}, i::Int) =
     _wasm_only(Int)
 
 """
@@ -346,7 +346,7 @@ precedent(dart: dart:_wasm's WasmExternRef; rust: wasm-bindgen's `JsValue`, an i
 table). Julia's differs: its runtime has no host reference, so the type names the representation and
 no Julia operation reads it.
 """
-@quarantine "dart:_wasm's WasmExternRef (sdk/lib/_wasm/wasm_types.dart:59 WasmExternRef) is a class of dart's runtime; Julia's runtime has no host reference, so a value's type names it" Core.Any primitive type WasmExternRef <: Any 64 end
+@quarantine pin"sdk/lib/_wasm/wasm_types.dart:59 WasmExternRef" "dart:_wasm's WasmExternRef (sdk/lib/_wasm/wasm_types.dart:59 WasmExternRef) is a class of dart's runtime; Julia's runtime has no host reference, so a value's type names it" Core.Any primitive type WasmExternRef <: Any 64 end
 
 """
     WasmEqRef
@@ -358,7 +358,7 @@ data array it points into (src/julia/classes.jl _pointer_instance_fields), nulla
 `Union{Nothing,WasmEqRef}` where it may hold none. Julia's runtime has no such reference; no Julia
 operation reads it.
 """
-@quarantine "dart:_wasm's WasmEqRef (sdk/lib/_wasm/wasm_types.dart:118 WasmEqRef) is a class of dart's runtime, wasm's eqref; Julia's runtime has no reference compared by identity alone, so a field's type names it" Core.Any primitive type WasmEqRef <: Any 64 end
+@quarantine pin"sdk/lib/_wasm/wasm_types.dart:118 WasmEqRef" "dart:_wasm's WasmEqRef (sdk/lib/_wasm/wasm_types.dart:118 WasmEqRef) is a class of dart's runtime, wasm's eqref; Julia's runtime has no reference compared by identity alone, so a field's type names it" Core.Any primitive type WasmEqRef <: Any 64 end
 
 # ---- a String's data, read and written as dart:_wasm reads and writes a WasmArray --------------------
 # A String is its class's struct, the header and then `_data`, a wasm array of its UTF-8 code units
@@ -377,7 +377,7 @@ operation reads it.
 The number of code units in `s`'s data: dart's `WasmArray.length`, `struct.get _data; array.len`
 (zero-extended). Natively Julia's `Core.sizeof(s)`, a String's byte length (jl_string_len).
 """
-@quarantine "a String's byte length is its wasm data array's length, Julia's Core.sizeof natively" Core.sizeof @noinline wasm_string_length(s::String)::Int = Core.sizeof(s)
+@quarantine unpinned "a String's byte length is its wasm data array's length, Julia's Core.sizeof natively" Core.sizeof @noinline wasm_string_length(s::String)::Int = Core.sizeof(s)
 
 """
     wasm_string_codeunit(s, i) -> UInt8
@@ -385,7 +385,7 @@ The number of code units in `s`'s data: dart's `WasmArray.length`, `struct.get _
 The code unit at offset `i` (from 0) of `s`'s data, unchecked: dart's `WasmArray<WasmI8>.readUnsigned`,
 `struct.get _data; array.get_u`. Natively Julia's byte of the String (jl_string_data), its `i + 1`th.
 """
-@quarantine "a String's byte at an offset is its wasm data array's element, Julia's byte natively" Base.unsafe_load @noinline function wasm_string_codeunit(s::String, i::Int)::UInt8
+@quarantine unpinned "a String's byte at an offset is its wasm data array's element, Julia's byte natively" Base.unsafe_load @noinline function wasm_string_codeunit(s::String, i::Int)::UInt8
     return GC.@preserve s unsafe_load(pointer(s), i + 1)
 end
 
@@ -396,7 +396,7 @@ Stores the code unit `v` at offset `i` (from 0) of `s`'s data, a fresh String's 
 unchecked: dart's `I8ArrayExt.write`, `struct.get _data; array.set`. Natively Julia's store of the
 byte through the String's pointer, its `i + 1`th, as Base's `__unsafe_string!` fills a fresh String.
 """
-@quarantine "a String's byte stored at an offset is its wasm data array's element set (sdk/lib/_wasm/wasm_types.dart:768 I8ArrayExt.write), Julia's unsafe_store! natively" Base.unsafe_store! @noinline function wasm_string_write!(s::String, i::Int, v::UInt8)::Nothing
+@quarantine pin"sdk/lib/_wasm/wasm_types.dart:768 I8ArrayExt.write" "a String's byte stored at an offset is its wasm data array's element set (sdk/lib/_wasm/wasm_types.dart:768 I8ArrayExt.write), Julia's unsafe_store! natively" Base.unsafe_store! @noinline function wasm_string_write!(s::String, i::Int, v::UInt8)::Nothing
     GC.@preserve s unsafe_store!(pointer(s), v, i + 1)
     return nothing
 end
@@ -410,7 +410,7 @@ jl_alloc_string, called as `Base._string_n` calls it, a fresh String whose bytes
 never through `_string_n` itself, which src/patch/string.jl's overlay maps back here, so the closed
 world would infer the pair as a loop that never returns.
 """
-@quarantine "a new String of n bytes is a new wasm data array in its struct, Julia's jl_alloc_string natively" Base.Csize_t @noinline wasm_string_alloc(n::Int)::String =
+@quarantine unpinned "a new String of n bytes is a new wasm data array in its struct, Julia's jl_alloc_string natively" Base.Csize_t @noinline wasm_string_alloc(n::Int)::String =
     ccall(:jl_alloc_string, Ref{String}, (Csize_t,), n)
 
 """
@@ -420,7 +420,7 @@ Copies `n` code units of `src`'s data from `src_offset` into `dst`'s from `dst_o
 fresh String's (wasm_string_alloc): dart's `WasmArray.copy`, `array.copy`. Natively Julia's
 `unsafe_copyto!` of the bytes, as Base's `_string` fills a fresh String.
 """
-@quarantine "copying bytes into a fresh String is a wasm array.copy, Julia's unsafe_copyto! natively" Base.unsafe_copyto! @noinline function wasm_string_copy!(dst::String, dst_offset::Int, src::String, src_offset::Int, n::Int)::Nothing
+@quarantine unpinned "copying bytes into a fresh String is a wasm array.copy, Julia's unsafe_copyto! natively" Base.unsafe_copyto! @noinline function wasm_string_copy!(dst::String, dst_offset::Int, src::String, src_offset::Int, n::Int)::Nothing
     GC.@preserve dst src unsafe_copyto!(pointer(dst) + dst_offset, pointer(src) + src_offset, n)
     return nothing
 end
@@ -435,7 +435,7 @@ that array's; an empty String's is Memory{UInt8}'s one empty instance (genericme
 object memorynew of no element gives. Natively Julia's own call of it, as `unsafe_wrap(Memory{UInt8},
 s)` makes it.
 """
-@quarantine "julia/src/genericmemory.c:104 jl_string_to_genericmemory makes a byte Memory sharing a String's bytes; WasmGC shares the data array" Core.Memory @noinline wasm_string_memory(s::String)::Memory{UInt8} =
+@quarantine pin"julia/src/genericmemory.c:104 jl_string_to_genericmemory" "julia/src/genericmemory.c:104 jl_string_to_genericmemory makes a byte Memory sharing a String's bytes; WasmGC shares the data array" Core.Memory @noinline wasm_string_memory(s::String)::Memory{UInt8} =
     ccall(:jl_string_to_genericmemory, Ref{Memory{UInt8}}, (Any,), s)
 
 """
@@ -455,7 +455,7 @@ the code generator lowers the call (src/intrinsics.jl, its string-data arm), bec
 foreigncall no host supplies. Under minify a symbol constant's `_name` is its ordinal
 (src/symbols.jl get_mangled_symbol_name), so the read rejects there, located.
 """
-@quarantine "dart's getName reads the symbol's _name (sdk/lib/internal/symbol.dart:35 Symbol.getName); Julia's name lies at jl_symbol_name's pointer, WasmTarget's in the Symbol class's _name field" Base.String @noinline wasm_symbol_name(s::Symbol)::String =
+@quarantine pin"sdk/lib/internal/symbol.dart:35 Symbol.getName" "dart's getName reads the symbol's _name (sdk/lib/internal/symbol.dart:35 Symbol.getName); Julia's name lies at jl_symbol_name's pointer, WasmTarget's in the Symbol class's _name field" Base.String @noinline wasm_symbol_name(s::Symbol)::String =
     GC.@preserve s unsafe_string(Base.unsafe_convert(Ptr{UInt8}, s))
 
 """
@@ -514,7 +514,7 @@ their length, else a String over a copy of its first `n` bytes (array.copy), a s
 Julia copies it. `m` is left of length 0, as Julia leaves it (:198). Natively Julia's own call of
 it, as `unsafe_takestring(m)` makes it.
 """
-@quarantine "julia/src/genericmemory.c:189 jl_genericmemory_to_string takes a byte Memory as a String, its own bytes or a copy; WasmGC wraps or copies the data array" Core.Memory @noinline wasm_memory_string(m::Memory{UInt8}, n::Int)::String =
+@quarantine pin"julia/src/genericmemory.c:189 jl_genericmemory_to_string" "julia/src/genericmemory.c:189 jl_genericmemory_to_string takes a byte Memory as a String, its own bytes or a copy; WasmGC wraps or copies the data array" Core.Memory @noinline wasm_memory_string(m::Memory{UInt8}, n::Int)::String =
     ccall(:jl_genericmemory_to_string, Ref{String}, (Any, Int), m, n)
 
 """
@@ -527,7 +527,7 @@ over WasmTarget's layout one `array.copy` of the memories' data arrays (dart's `
 memmove's semantics) and, for elements admitting nothing, one of their set flags. Never inlined, so the
 code generator meets the call and lowers it (src/intrinsics.jl); natively Base's copy.
 """
-@quarantine "julia/src/genericmemory.c:223 jl_genericmemory_copyto copies a memory's elements, overlapping ranges included; WasmGC copies the data arrays (array.copy)" Base.memmove @noinline function wasm_memory_copy!(dest::MemoryRef{T}, src::MemoryRef{T}, n::Int)::Nothing where {T}
+@quarantine pin"julia/src/genericmemory.c:223 jl_genericmemory_copyto" "julia/src/genericmemory.c:223 jl_genericmemory_copyto copies a memory's elements, overlapping ranges included; WasmGC copies the data arrays (array.copy)" Base.memmove @noinline function wasm_memory_copy!(dest::MemoryRef{T}, src::MemoryRef{T}, n::Int)::Nothing where {T}
     # Base's copy written out (base/genericmemory.jl:120-130): its method is the overlay's own in
     # WasmTarget's table (src/patch/genericmemory.jl), a call of which would be a cycle with no way out
     if isbitstype(T)
@@ -548,7 +548,7 @@ into the memory's data array at the reference's offset (classes.jl holds_referen
 be #undef) and, for elements admitting nothing, one of 0 into their set flags. Never inlined, so the code
 generator meets the call and lowers it (src/intrinsics.jl); natively Base's.
 """
-@quarantine "julia/base/genericmemory.jl:78 _unsetindex! stores an element's #undef, C_NULL, through a pointer; WasmGC stores the data array's null (array.set)" Core.Intrinsics.atomic_pointerset @noinline function wasm_memory_unset!(ref::MemoryRef{T})::Nothing where {T}
+@quarantine pin"julia/base/genericmemory.jl:78 _unsetindex!" "julia/base/genericmemory.jl:78 _unsetindex! stores an element's #undef, C_NULL, through a pointer; WasmGC stores the data array's null (array.set)" Core.Intrinsics.atomic_pointerset @noinline function wasm_memory_unset!(ref::MemoryRef{T})::Nothing where {T}
     # Base's store written out (base/genericmemory.jl:88-99): its method is the overlay's own
     # (src/patch/genericmemory.jl), a call of which would be a cycle with no way out, Union{}
     holds_reference(T) || return nothing
@@ -577,7 +577,7 @@ layout one `array.fill` of the memory's data array from the reference's offset, 
 (src/intrinsics.jl); natively Base's memset written out (each fill! is the overlay's own method in
 WasmTarget's table, src/patch/genericmemory.jl).
 """
-@quarantine "julia/base/genericmemory.jl:204 fill! memsets a byte memory's elements through its address, and julia/base/array.jl:430 fill! a byte Array's through its reference's; WasmGC fills the data array from the reference's offset (array.fill)" Base.memset @noinline function wasm_memory_fill!(ref::Union{MemoryRef{UInt8},MemoryRef{Int8}}, x::Union{UInt8,Int8}, n::Int)::Nothing
+@quarantine pin"julia/base/genericmemory.jl:204 fill!" "julia/base/genericmemory.jl:204 fill! memsets a byte memory's elements through its address, and julia/base/array.jl:430 fill! a byte Array's through its reference's; WasmGC fills the data array from the reference's offset (array.fill)" Base.memset @noinline function wasm_memory_fill!(ref::Union{MemoryRef{UInt8},MemoryRef{Int8}}, x::Union{UInt8,Int8}, n::Int)::Nothing
     GC.@preserve ref Base.memset(Base.unsafe_convert(Ptr{Cvoid}, ref), x, n % UInt)
     return nothing
 end

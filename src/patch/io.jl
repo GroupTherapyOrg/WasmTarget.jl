@@ -15,7 +15,7 @@
 # String's bytes from its offset or the byte Vector's from its first: its _unsafe_write's copy
 # (iobuffer.jl:849, unsafe_copyto! from the pointer into the buffer's data) is copyto! from the bytes
 # shared as a Memory, or from the Vector, an array.copy
-@quarantine "julia/base/strings/io.jl:246 write of a String or SubString{String}, and julia/base/io.jl:841 write of a byte Vector, write their bytes from pointer(s) (julia/base/iobuffer.jl:822 unsafe_write into a GenericIOBuffer, unsafe_copyto! from the pointer); WasmGC copies the String's data array, or the Vector's, into the buffer's (array.copy)" Base.write @consistent_overlay METHOD_TABLE function Base.write(to::Base.GenericIOBuffer, s::Union{String,SubString{String},Vector{UInt8}})
+@quarantine pin"julia/base/strings/io.jl:246 write" "julia/base/strings/io.jl:246 write of a String or SubString{String}, and julia/base/io.jl:841 write of a byte Vector, write their bytes from pointer(s) (julia/base/iobuffer.jl:822 unsafe_write into a GenericIOBuffer, unsafe_copyto! from the pointer); WasmGC copies the String's data array, or the Vector's, into the buffer's (array.copy)" Base.write @consistent_overlay METHOD_TABLE function Base.write(to::Base.GenericIOBuffer, s::Union{String,SubString{String},Vector{UInt8}})
     local src, from = s isa String ? (wasm_string_memory(s), 0) : s isa SubString{String} ? (wasm_string_memory(s.string), s.offset) : (s, 0)
     local nb = UInt(sizeof(s))
     Base.ensureroom(to, nb)
@@ -36,7 +36,7 @@ end
 # Base's body of write(io, s::Symbol) (base/io.jl:884), unsafe_write of strlen's bytes from the name's
 # jl_symbol_name pointer, a symbol's name holding no NUL: the bytes of its name, a String
 # (src/julia/wasm_array.jl wasm_symbol_name), written as the String's own write above writes them
-@quarantine "julia/base/io.jl:884 write of a Symbol writes strlen's bytes from its jl_symbol_name pointer (unsafe_write); WasmGC writes its name's String, dart's Symbol.getName" Base.write @consistent_overlay METHOD_TABLE Base.write(to::Base.GenericIOBuffer, s::Symbol) =
+@quarantine pin"julia/base/io.jl:884 write" "julia/base/io.jl:884 write of a Symbol writes strlen's bytes from its jl_symbol_name pointer (unsafe_write); WasmGC writes its name's String, dart's Symbol.getName" Base.write @consistent_overlay METHOD_TABLE Base.write(to::Base.GenericIOBuffer, s::Symbol) =
     write(to, wasm_symbol_name(s))
 
 # Base's write of a String or a SubString{String} (base/strings/io.jl:246, unsafe_write(io, pointer(s),
@@ -47,5 +47,5 @@ end
 # alone: over any other writer, write(writer, s) would dispatch to the writer's own write of a String where
 # Base reaches its unsafe_write, and an overlay of AbstractPipe, which a program subtypes, would cover the
 # subtype's own methods, the overlay table answering before Base's; those stay Base's, a located rejection
-@quarantine "julia/base/strings/io.jl:246 write of a String or SubString{String} into an IOContext over a GenericIOBuffer is unsafe_write of pointer(s), which an AbstractPipe forwards to its pipe_writer's unsafe_write (julia/base/io.jl:454, julia/base/iobuffer.jl:822); WasmGC has no pointer, so the string itself is written to the buffer by its overlay, as dart's _StdSink.write forwards its object to its sink (sdk/lib/io/stdio.dart:429 _StdSink._write)" Base.write @consistent_overlay METHOD_TABLE Base.write(io::Base.IOContext{<:Base.GenericIOBuffer}, s::Union{String,SubString{String}}) =
+@quarantine pin"julia/base/strings/io.jl:246 write" "julia/base/strings/io.jl:246 write of a String or SubString{String} into an IOContext over a GenericIOBuffer is unsafe_write of pointer(s), which an AbstractPipe forwards to its pipe_writer's unsafe_write (julia/base/io.jl:454, julia/base/iobuffer.jl:822); WasmGC has no pointer, so the string itself is written to the buffer by its overlay, as dart's _StdSink.write forwards its object to its sink (sdk/lib/io/stdio.dart:429 _StdSink._write)" Base.write @consistent_overlay METHOD_TABLE Base.write(io::Base.IOContext{<:Base.GenericIOBuffer}, s::Union{String,SubString{String}}) =
     write(Base.pipe_writer(io)::Base.GenericIOBuffer, s)::Int
