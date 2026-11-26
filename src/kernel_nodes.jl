@@ -48,14 +48,21 @@ lookup takes it where dart's one class takes it as a type argument.
 # order, so Julia's field order is the answer and no sort is needed. A lane's reference is its field
 # (the Kernel table's Field row: an instance field is a ClassField). Any other class is no SIMD
 # vector, which dart's int.parse of a lane name would refuse: it rejects, located
-# dart:core's _FunctionType, the runtime type of a closure (sdk/lib/_internal/wasm/common/type.dart:413),
-# and its typeParameterDefaults field (:422): dart's only readers are the dynamic dispatchers' closure
-# shape check (dynamic_dispatchers.dart:596), which no Julia program reaches (D32): Internal
-@parity "dart2wasm/lib/kernel_nodes.dart:104 KernelNodes.functionTypeClass" function_type_class(self::KernelNodes)::Union{} =
-    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:104 KernelNodes.functionTypeClass: the runtime type of a closure, dart's _FunctionType (sdk/lib/_internal/wasm/common/type.dart:413); its only readers are the dynamic dispatchers (dynamic_dispatchers.dart), which no Julia program reaches: Julia's trim verifier admits no dynamic call (D32)"), "KernelNodes.functionTypeClass")
+# dart:core's _FunctionType, the runtime type of a closure (sdk/lib/_internal/wasm/common/type.dart:413), the class
+# of a function type's value. Julia's function type is its function's singleton type, a DataType, whose value is a
+# DataType's (class_for_type's typeof, Constants._makeFunctionTypeConstant's interface type constant): so the class is
+# DataType, the one answer ClosureLayouter.functionTypeType (src/closures.jl) and every other reader takes (dart's
+# readers at the pin: types.dart:69 namedParametersExpectedType, :163 classForType, constants.dart:482
+# _makeFunctionTypeConstant, class_info.dart:142 FieldIndex.validate, closures.dart:380 functionTypeType,
+# dynamic_dispatchers.dart:628)
+@parity "dart2wasm/lib/kernel_nodes.dart:104 KernelNodes.functionTypeClass" function_type_class(self::KernelNodes)::DataType = DataType
 
+# _FunctionType.typeParameterDefaults (sdk/lib/_internal/wasm/common/type.dart:422), which dart reads at
+# constants.dart:487 (a function type constant's fields) and dynamic_dispatchers.dart:629 (a dynamic closure call):
+# Julia's function type constant is a DataType's (Constants._makeFunctionTypeConstant), which holds no such field,
+# and no Julia program makes a dynamic call (D32): Internal
 @parity "dart2wasm/lib/kernel_nodes.dart:118 KernelNodes.functionTypeTypeParameterDefaultsField" function_type_type_parameter_defaults_field(self::KernelNodes)::Union{} =
-    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:118 KernelNodes.functionTypeTypeParameterDefaultsField: _FunctionType.typeParameterDefaults (sdk/lib/_internal/wasm/common/type.dart:422); its only readers are the dynamic dispatchers (dynamic_dispatchers.dart), which no Julia program reaches: Julia's trim verifier admits no dynamic call (D32)"), "KernelNodes.functionTypeTypeParameterDefaultsField")
+    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:118 KernelNodes.functionTypeTypeParameterDefaultsField: _FunctionType.typeParameterDefaults (sdk/lib/_internal/wasm/common/type.dart:422); dart reads it at constants.dart:487, a function type constant's fields, where Julia's function type constant is a DataType's (Constants._makeFunctionTypeConstant), which holds no such field, and at dynamic_dispatchers.dart:629, a dynamic closure call, which Julia's trim verifier admits none of (D32)"), "KernelNodes.functionTypeTypeParameterDefaultsField")
 
 @parity "dart2wasm/lib/kernel_nodes.dart:316 KernelNodes._getLaneReferences" function _get_lane_references(self::KernelNodes, class_node::DataType)::Vector{ClassField}
     local at = "dart2wasm/lib/kernel_nodes.dart:316 KernelNodes._getLaneReferences"
@@ -65,18 +72,22 @@ lookup takes it where dart's one class takes it as a type argument.
     return class_instance_fields(class_node, at)
 end
 
-# dart:core's Object._invokeNoSuchMethod (sdk/lib/_internal/wasm/common/object_patch.dart:66), read only by
-# the dynamic dispatchers, which no Julia program reaches (D32), and Julia has no noSuchMethod: Internal
+# dart:core's Object._invokeNoSuchMethod (sdk/lib/_internal/wasm/common/object_patch.dart:66), which dart calls at
+# code_generator.dart:1813 (a call of Object.noSuchMethod), intrinsics.dart:3446 (a dynamic closure call no vtable
+# entry takes) and the dynamic dispatchers (dynamic_dispatchers.dart:129, :170, :227): Julia has no noSuchMethod, a
+# call no method matches being Julia's MethodError (the runtime's throw_method_error), and no Julia program makes a
+# dynamic call (D32): Internal
 @parity "dart2wasm/lib/kernel_nodes.dart:564 KernelNodes.invokeNoSuchMethod" invoke_no_such_method(self::KernelNodes)::Union{} =
-    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:564 KernelNodes.invokeNoSuchMethod: Object._invokeNoSuchMethod (sdk/lib/_internal/wasm/common/object_patch.dart:66); Julia has no noSuchMethod, a call no method matches is Julia's MethodError; its only readers are the dynamic dispatchers (dynamic_dispatchers.dart), which no Julia program reaches: Julia's trim verifier admits no dynamic call (D32)"), "KernelNodes.invokeNoSuchMethod")
+    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:564 KernelNodes.invokeNoSuchMethod: Object._invokeNoSuchMethod (sdk/lib/_internal/wasm/common/object_patch.dart:66); dart calls it at code_generator.dart:1813, a call of Object.noSuchMethod, which Julia has none of (a call no method matches is Julia's MethodError, the runtime's throw_method_error), and at intrinsics.dart:3446 and dynamic_dispatchers.dart:129, :170, :227, a dynamic call, which Julia's trim verifier admits none of (D32)"), "KernelNodes.invokeNoSuchMethod")
 
-# dart:core's Invocation.getter and Invocation.setter factories (sdk/lib/core/invocation.dart:49, :60),
-# read only by the dynamic dispatchers (D32), noSuchMethod's arguments: Internal
+# dart:core's Invocation.getter and Invocation.setter factories (sdk/lib/core/invocation.dart:49, :60), noSuchMethod's
+# arguments, which dart reads only at dynamic_dispatchers.dart:777 and :793, a dynamic getter's and setter's miss
+# (D32, and Julia has no noSuchMethod): Internal
 @parity "dart2wasm/lib/kernel_nodes.dart:594 KernelNodes.invocationGetterFactory" invocation_getter_factory(self::KernelNodes)::Union{} =
-    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:594 KernelNodes.invocationGetterFactory: Invocation.getter (sdk/lib/core/invocation.dart:49), the noSuchMethod argument; Julia has no noSuchMethod; its only readers are the dynamic dispatchers (dynamic_dispatchers.dart), which no Julia program reaches: Julia's trim verifier admits no dynamic call (D32)"), "KernelNodes.invocationGetterFactory")
+    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:594 KernelNodes.invocationGetterFactory: Invocation.getter (sdk/lib/core/invocation.dart:49), the noSuchMethod argument; Julia has no noSuchMethod; dart reads it only at dynamic_dispatchers.dart:777, a dynamic getter's miss, which Julia's trim verifier admits none of (D32)"), "KernelNodes.invocationGetterFactory")
 
 @parity "dart2wasm/lib/kernel_nodes.dart:599 KernelNodes.invocationSetterFactory" invocation_setter_factory(self::KernelNodes)::Union{} =
-    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:599 KernelNodes.invocationSetterFactory: Invocation.setter (sdk/lib/core/invocation.dart:60), the noSuchMethod argument; Julia has no noSuchMethod; its only readers are the dynamic dispatchers (dynamic_dispatchers.dart), which no Julia program reaches: Julia's trim verifier admits no dynamic call (D32)"), "KernelNodes.invocationSetterFactory")
+    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:599 KernelNodes.invocationSetterFactory: Invocation.setter (sdk/lib/core/invocation.dart:60), the noSuchMethod argument; Julia has no noSuchMethod; dart reads it only at dynamic_dispatchers.dart:793, a dynamic setter's miss, which Julia's trim verifier admits none of (D32)"), "KernelNodes.invocationSetterFactory")
 
 # dart:core's StackTrace.current, as the target's patch defines it: the standalone patch's
 # (src/runtime/standalone/stack_trace_patch.jl), its method in the closed world, an entry point every
@@ -132,13 +143,15 @@ end
 @parity "dart2wasm/lib/kernel_nodes.dart:729 KernelNodes.asInterfaceSubtype0" as_interface_subtype0(self::KernelNodes)::Core.MethodInstance =
     nir_runtime_member(self.component, Runtime._as_interface_subtype0, "KernelNodes.asInterfaceSubtype0")
 
-# dart:core's _checkClosureShape and _checkClosureType (sdk/lib/_internal/wasm/common/type.dart:1772,
-# :1855), read only by the dynamic dispatchers' closure call, which no Julia program reaches (D32): Internal
+# dart:core's _checkClosureShape and _checkClosureType (sdk/lib/_internal/wasm/common/type.dart:1772, :1855), which
+# dart calls at translator.dart:3399 and :3411 (_ClosureArgumentsToVtableEntryDispatcherGenerator._verifyAssumptions, a
+# closure called with its arguments in arrays) and dynamic_dispatchers.dart:639 and :649, each a dynamic closure call,
+# which no Julia program makes: Julia's trim verifier admits no dynamic call (D32): Internal
 @parity "dart2wasm/lib/kernel_nodes.dart:749 KernelNodes.checkClosureShape" check_closure_shape(self::KernelNodes)::Union{} =
-    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:749 KernelNodes.checkClosureShape: _checkClosureShape (sdk/lib/_internal/wasm/common/type.dart:1772), a dynamic closure call's shape check; its only readers are the dynamic dispatchers (dynamic_dispatchers.dart), which no Julia program reaches: Julia's trim verifier admits no dynamic call (D32)"), "KernelNodes.checkClosureShape")
+    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:749 KernelNodes.checkClosureShape: _checkClosureShape (sdk/lib/_internal/wasm/common/type.dart:1772), a dynamic closure call's shape check; dart calls it at translator.dart:3399 (a closure called with its arguments in arrays) and dynamic_dispatchers.dart:639, each a dynamic closure call, which Julia's trim verifier admits none of (D32)"), "KernelNodes.checkClosureShape")
 
 @parity "dart2wasm/lib/kernel_nodes.dart:753 KernelNodes.checkClosureType" check_closure_type(self::KernelNodes)::Union{} =
-    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:753 KernelNodes.checkClosureType: _checkClosureType (sdk/lib/_internal/wasm/common/type.dart:1855), a dynamic closure call's type check; its only readers are the dynamic dispatchers (dynamic_dispatchers.dart), which no Julia program reaches: Julia's trim verifier admits no dynamic call (D32)"), "KernelNodes.checkClosureType")
+    reject!(Internal("dart2wasm/lib/kernel_nodes.dart:753 KernelNodes.checkClosureType: _checkClosureType (sdk/lib/_internal/wasm/common/type.dart:1855), a dynamic closure call's type check; dart calls it at translator.dart:3411 (a closure called with its arguments in arrays) and dynamic_dispatchers.dart:649, each a dynamic closure call, which Julia's trim verifier admits none of (D32)"), "KernelNodes.checkClosureType")
 
 # dart:_internal's printToConsole, as the target's patch defines it: the JS patch's
 # (src/runtime/js_common/print_patch.jl), its method in the closed world; the standalone patch's

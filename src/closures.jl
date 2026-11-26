@@ -187,8 +187,10 @@ metadata is Julia's inference, which the NIR holds, and the NIR has no constant 
             end),
             Late{WasmBuilder.IR.RefType}("dart2wasm/lib/closures.dart:379 ClosureLayouter.functionTypeType",
                 function ()
-                    local info = get(self.translator.class_info, DataType, nothing)
-                    info === nothing && reject!(Internal("dart2wasm/lib/closures.dart:379 ClosureLayouter.functionTypeType: DataType, a function type's class, is no class of the closed world"), "ClosureLayouter.functionTypeType")
+                    # translator.functionTypeClass, KernelNodes' one answer (src/kernel_nodes.jl function_type_class)
+                    local cls = function_type_class(self.translator)
+                    local info = get(self.translator.class_info, cls, nothing)
+                    info === nothing && reject!(Internal("dart2wasm/lib/closures.dart:379 ClosureLayouter.functionTypeType: $cls, a function type's class, is no class of the closed world"), "ClosureLayouter.functionTypeType")
                     return info.non_nullable_type
                 end),
             Dict{Int,WasmBuilder.IR.StructType}(),

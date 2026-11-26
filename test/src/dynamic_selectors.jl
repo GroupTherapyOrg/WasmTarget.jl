@@ -51,19 +51,21 @@ rejected(f, kind) = (e = caught(f); e isa WasmTarget.RejectionError && e.rejecti
     @test DD._emit_dynamic_dispatch_table_call_via_field(g, b, shape, class_id, receiver, receiver, nsm) === nothing
 end
 
-@testset "kernel_nodes.dart: the dynamic dispatchers' runtime members, Internal (D32)" begin
+@testset "kernel_nodes.dart: functionTypeClass is DataType's class; the runtime members no Julia program reaches, Internal, each naming dart's readers (D32)" begin
     local data = DD.build_module_output_data(DD.DefaultModuleStrategy(DD.WasmCompilerOptions_default_options()))
     local t = DD.Translator(WasmTarget.build_nir(WasmTarget.check_subset(Cases.k, (Cases.Holder,), "dynamic_selectors", Base.get_world_counter()), "test"), data, DD.TranslatorOptions())
-    for (f, site) in ((DD.function_type_class, "kernel_nodes.dart:104 KernelNodes.functionTypeClass"),
-                      (DD.function_type_type_parameter_defaults_field, "kernel_nodes.dart:118 KernelNodes.functionTypeTypeParameterDefaultsField"),
-                      (DD.invoke_no_such_method, "kernel_nodes.dart:564 KernelNodes.invokeNoSuchMethod"),
-                      (DD.invocation_getter_factory, "kernel_nodes.dart:594 KernelNodes.invocationGetterFactory"),
-                      (DD.invocation_setter_factory, "kernel_nodes.dart:599 KernelNodes.invocationSetterFactory"),
-                      (DD.check_closure_shape, "kernel_nodes.dart:749 KernelNodes.checkClosureShape"),
-                      (DD.check_closure_type, "kernel_nodes.dart:753 KernelNodes.checkClosureType"))
+    # a function type's value is a DataType's: the one class every reader of translator.functionTypeClass takes,
+    # ClosureLayouter.functionTypeType among them
+    @test DD.function_type_class(t) === DataType
+    for (f, site, readers) in ((DD.function_type_type_parameter_defaults_field, "kernel_nodes.dart:118 KernelNodes.functionTypeTypeParameterDefaultsField", ("constants.dart:487", "dynamic_dispatchers.dart:629")),
+                               (DD.invoke_no_such_method, "kernel_nodes.dart:564 KernelNodes.invokeNoSuchMethod", ("code_generator.dart:1813", "intrinsics.dart:3446", "dynamic_dispatchers.dart:129")),
+                               (DD.invocation_getter_factory, "kernel_nodes.dart:594 KernelNodes.invocationGetterFactory", ("dynamic_dispatchers.dart:777",)),
+                               (DD.invocation_setter_factory, "kernel_nodes.dart:599 KernelNodes.invocationSetterFactory", ("dynamic_dispatchers.dart:793",)),
+                               (DD.check_closure_shape, "kernel_nodes.dart:749 KernelNodes.checkClosureShape", ("translator.dart:3399", "dynamic_dispatchers.dart:639")),
+                               (DD.check_closure_type, "kernel_nodes.dart:753 KernelNodes.checkClosureType", ("translator.dart:3411", "dynamic_dispatchers.dart:649")))
         local e = caught(() -> f(t))
         @test e isa WasmTarget.RejectionError && e.rejection isa WasmTarget.Internal &&
-              occursin(site, e.rejection.site) && occursin("(D32)", e.rejection.site)
+              occursin(site, e.rejection.site) && occursin("(D32)", e.rejection.site) && all(r -> occursin(r, e.rejection.site), readers)
     end
     # the Symbols field is read as a field: dart's symbols.getterSymbolFromName
     @test DD.getter_symbol_from_name(t.symbols, :x) === :x && DD.setter_symbol_from_name(t.symbols, :x) === Symbol("x=")
