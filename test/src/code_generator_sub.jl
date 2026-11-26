@@ -256,10 +256,9 @@ end
         append!(cases, [WTChild.RunCase("$(nameof(f))($x)", bytes, (x,), f(x)) for x in xs])
     end
     @test answers_native(cases)
-    # MissingFieldTraps: a class the receiver admits without the field reaches Julia's FieldError, a
-    # located rejection at the dispatch table's build
-    local e = rejection(() -> W.compile(V.missing_side, (Int,); optimize = false))
-    @test e !== nothing && e.rejection isa W.Unquarantined && occursin("FieldError", e.rejection.row)
+    # SiteCheckTraps: a class the receiver admits without the field raises Julia's FieldError at the site, before
+    # the selector's call, which admits the rest (test/src/field_site_check.jl runs the raise against native)
+    @test rejection(() -> W.compile(V.missing_side, (Int,); optimize = false)) === nothing
 end
 
 module TypeofCases

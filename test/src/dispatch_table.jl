@@ -235,13 +235,16 @@ end
     # a method is no instance member: no selector
     local e = try; DD.selector_for_target(dt, t.component.entry); nothing; catch x; x; end
     @test e isa W.RejectionError && e.rejection isa W.Internal
-    # MissingFieldTraps: a class the receiver admits without the field reaches Julia's FieldError, a
-    # target not yet written, so the build rejects there, located, never leaving the slot empty
+    # SiteCheckTraps (dev/formal/MCFieldSelectorTableSiteCheck.tla): a class the receiver admits without the
+    # field raises Julia's FieldError at the site (classes_without_field), so the selector admits A alone and its
+    # row holds no error (test/src/field_site_check.jl runs it)
     local t2 = DD.Translator(W.build_nir(W.check_subset(F.missing_side, (Int,), "dispatch_table", Base.get_world_counter()), "test"), data, DD.TranslatorOptions())
     DD._init_modules(t2, nothing)
     collect(DD.ClassInfoCollector(t2))
-    local e2 = try; DD.build(t2.dispatch_table[]); nothing; catch x; x; end
-    @test e2 isa W.RejectionError && e2.rejection isa W.Unquarantined && occursin("FieldError", e2.rejection.row)
+    @test [(c.name, c.is_setter, c.call_count, Set(c.classes)) for c in W.field_selector_calls(t2.component, admitted(t2))] == [("side", false, 1, Set([F.A]))]
+    DD.build(t2.dispatch_table[])
+    local s2 = DD.selector_for_target(t2.dispatch_table[], getter(F.A, "side"))
+    @test [r.target for r in DD.targets(s2; unchecked = false).all_target_ranges] == [getter(F.A, "side")]
     # a read by position is the selector of the field each admitted class holds there (Julia's
     # get_checked_fieldindex), never a selector named "1" that every class lacks (A69S2)
     local world(f) = W.build_nir(W.check_subset(f, (Int,), "dispatch_table", Base.get_world_counter()), "test")
@@ -257,7 +260,7 @@ end
     # a position naming different fields in different classes: located
     local em = try; (tm = numbered(F.first_mixed); W.field_selector_calls(tm.component, admitted(tm))); nothing; catch x; x; end
     @test em isa W.RejectionError && em.rejection isa W.Unquarantined && occursin("side, tag", em.rejection.row)
-    # a position past a class's fields: that class raises Julia's BoundsError at the site (classes_past_position),
+    # a position past a class's fields: that class raises Julia's BoundsError at the site (classes_without_field),
     # so the selector admits only the classes holding the field (test/src/field_bounds.jl runs it)
     local ts = numbered(F.second_short)
     @test [(c.name, c.is_setter, c.call_count, Set(c.classes)) for c in W.field_selector_calls(ts.component, admitted(ts))] == [("tag", false, 1, Set([F.A]))]

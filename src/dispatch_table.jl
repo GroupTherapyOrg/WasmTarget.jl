@@ -378,11 +378,15 @@ call count from TFA; here a selector exists for each field name a call reads on 
 left abstract (`field_selector_calls`, src/julia/classes.jl), the only selectors a table row or a call reads.
 
 Julia's `getfield(x::T, f)` may reach a concrete subtype of `T` with no field `f`, where Julia throws
-FieldError; dart's typing rules that receiver out, so its table has no answer for it. Such a class's
-target is Julia's FieldError throw (dev/formal/FieldSelectorTable.tla's MissingFieldTraps), a
-function not yet written: a located Unquarantined rejection here, never an empty slot.
+FieldError (BoundsError past a position); dart's typing rules that receiver out, so its table has no
+answer for it. Julia checks the field at the read (julia/src/builtins.c:994 get_checked_fieldindex),
+so the read's site raises it before the selector's call (visitInstanceGet) and the selector admits only
+the classes holding the field (field_selector_calls, classes_without_field): no row holds an error.
+A class a selector admits whose class layout holds no accessor of the field is a located rejection
+here, never an empty slot.
 
-formal(dev/formal/FieldSelectorTable.tla): no slot taken twice, a class with the field reaches its own accessor
+formal(dev/formal/FieldSelectorTable.tla): no slot taken twice, a class with the field reaches its own accessor;
+formal(dev/formal/MCFieldSelectorTableSiteCheck.tla): a class without it raises at the site, no row holds an error
 """
 @parity "dart2wasm/lib/dispatch_table.dart:501 DispatchTable.build" function build(self::DispatchTable)::Nothing
     local at = "dart2wasm/lib/dispatch_table.dart:501 DispatchTable.build"
@@ -445,11 +449,13 @@ formal(dev/formal/FieldSelectorTable.tla): no slot taken twice, a class with the
         for (selector_info, target) in selectors_in_class[cls]
             get!(() -> LinkedHashMap{Int,Reference}(), selector_targets, selector_info)[class_id] = target
         end
-        # a class a call's receiver admits that lacks the field: Julia's FieldError throw
+        # a class a call admits holds Julia's field (a class without it raises at the site, never reaching the
+        # selector: classes_without_field); one whose class layout holds no accessor of it (a kind's runtime type
+        # layout, a setter of a field its layout holds immutable) has no target
         for (_, selector) in self._selector_info
             haskey(selectors_in_class[cls], selector) && continue
             cls in calls[selector.id + 1].classes &&
-                reject!(Unquarantined("src/dispatch_table.jl build: Julia's FieldError for $cls, which a call of $(selector.name)$(selector.is_setter ? "'s setter" : "") may reach without that field, a target not yet written"), at)
+                reject!(Unquarantined("src/dispatch_table.jl build: $cls, which a call of $(selector.name)$(selector.is_setter ? "'s setter" : "") reaches, holds Julia's field and its class layout no accessor of it, a target not yet written"), at)
         end
     end
     for (_, selector) in self._selector_info

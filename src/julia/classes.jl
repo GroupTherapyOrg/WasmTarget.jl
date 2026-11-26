@@ -1683,14 +1683,19 @@ end
     end
 end
 
-# the classes among `admitted` that a field access at the constant position `f` reaches past their fields,
-# where Julia's getfield raises BoundsError of the receiver and `f` before reading (get_checked_fieldindex,
-# julia/src/builtins.c:994): the classes visitInstanceGet tests the receiver's class id against before its
-# selector call, which reaches every other class's field; a name's absent field (FieldError) is the
-# dispatch table's located rejection (DispatchTable.build)
-@quarantine pin"julia/src/builtins.c:994 get_checked_fieldindex" "Julia's getfield checks a position against the receiver's own type before it reads, raising BoundsError past its fields" Base.filter function classes_past_position(admitted::Vector{DataType}, @nospecialize(f), at::String)::Vector{DataType}
-    f isa Int || return DataType[]
-    return filter(c -> field_at_position(c, f, at) === nothing, admitted)
+# the classes among `admitted` that a field access by the constant `f` finds no field of, where Julia's getfield
+# raises before it reads: get_checked_fieldindex (julia/src/builtins.c:994) checks the field against the value's
+# own type, a position past its field count raising BoundsError of the value and the position (:1006
+# jl_bounds_error), a name jl_field_index does not find (julia/src/datatype.c:1781: the type's field names, a
+# NamedTuple's its names parameter, a tuple's its positions, so a tuple held as its record holds no name) raising
+# FieldError of the type and the name (julia/src/rtutils.c:169 jl_has_no_field_error). The one answer of which
+# classes raise: visitInstanceGet tests the receiver's class id against theirs before its selector call
+# (formal(dev/formal/MCFieldSelectorTableSiteCheck.tla) SiteCheckTraps), and the selector admits the rest
+# (field_selector_calls)
+@quarantine pin"julia/src/builtins.c:994 get_checked_fieldindex" "Julia's getfield checks the field against the receiver's own type before it reads, raising BoundsError past its field count and FieldError for a name it lacks" Base.filter function classes_without_field(admitted::Vector{DataType}, @nospecialize(f), at::String)::Vector{DataType}
+    f isa Int && return filter(c -> field_at_position(c, f, at) === nothing, admitted)
+    f isa Symbol && return filter(c -> tuple_record_arity(c) !== nothing || Base.fieldindex(c, f, false) == 0, admitted)
+    return DataType[]
 end
 
 # the field selector a field access names on receivers of the classes `admitted`: a name, its own; a
@@ -1698,7 +1703,7 @@ end
 # record's own field for a tuple held as one). The selectors are named by their fields
 # (DispatchTable.build), so a position naming one field in every admitted class that holds it is that
 # field's selector; a class it reaches past its fields raises Julia's BoundsError at the site
-# (classes_past_position), never through the selector; a position naming different fields in different
+# (classes_without_field), never through the selector; a position naming different fields in different
 # classes is no one named selector, a located rejection
 @quarantine "Julia's getfield reads a position or a name as one field index of the receiver's own type (julia/src/builtins.c:994 get_checked_fieldindex), one name for the classes holding the field" Base.only function field_selector_name(@nospecialize(f), admitted::Vector{DataType})::String
     local at = "src/julia/classes.jl field_selector_name"
@@ -1721,8 +1726,8 @@ dispatch table. Each selector, a `FieldSelectorCalls` of its name and kind, in t
 maps to its call count and the classes its receivers' types admit, `admitted(receiver)`, the
 classes the receiver holds (field_receiver_classes: its concrete classes as
 ClassIdNumbering.getConcreteClassIdRange reads them, the one reading, src/class_info.jl, a tuple as its
-record), which DispatchTable.build passes, less those a read at a position reaches past their fields
-(classes_past_position), which raise at the site. DispatchTable.build (src/dispatch_table.jl)
+record), which DispatchTable.build passes, less those holding no field of its name or position
+(classes_without_field), which raise Julia's FieldError or BoundsError at the site. DispatchTable.build (src/dispatch_table.jl)
 reads it where dart reads TFA's selector ids. A receiver of a concrete type is a direct access, no call of a selector.
 """
 @quarantine "a field access on a receiver Julia's inference left abstract is dart's dynamic call through the dispatch table, which TFA registers when the call is not direct (pkg/vm/lib/transformations/type_flow/table_selector_assigner.dart:142 TableSelectorAssigner.registerGetterCall)" Core.getfield function field_selector_calls(world::NirWorld, admitted_classes::Function)::Vector{FieldSelectorCalls}
@@ -1744,13 +1749,13 @@ reads it where dart reads TFA's selector ids. A receiver of a concrete type is a
         name_op isa NirConst && (name_op.c.val isa Symbol || name_op.c.val isa Int) || continue
         local admitted = admitted_classes(receiver)::Vector{DataType}
         local name = field_selector_name(name_op.c.val, admitted); local is_setter = f === Core.setfield!
-        # a class a read at a position reaches past its fields raises Julia's BoundsError at the site
-        # (classes_past_position), so the selector admits only the classes holding the field; a write's
-        # check of the class's mutability comes first (get_checked_fieldindex's mutabl), not yet written
-        local past = classes_past_position(admitted, name_op.c.val, "src/julia/classes.jl field_selector_calls")
-        is_setter && !isempty(past) &&
-            reject!(Unquarantined("src/julia/classes.jl field_selector_calls: Julia's setfield! at position $(name_op.c.val) of $(join(past, ", ")), past its fields, whose mutability get_checked_fieldindex checks first (julia/src/builtins.c:994), a target not yet written"), "$(b.ci.def) statement $index")
-        admitted = filter(c -> !(c in past), admitted)
+        # a class holding no field of the name or position raises Julia's FieldError or BoundsError at the site
+        # (classes_without_field), so the selector admits only the classes holding the field; a write's check
+        # of the class's mutability comes first (get_checked_fieldindex's mutabl), not yet written
+        local without = classes_without_field(admitted, name_op.c.val, "src/julia/classes.jl field_selector_calls")
+        is_setter && !isempty(without) &&
+            reject!(Unquarantined("src/julia/classes.jl field_selector_calls: Julia's setfield! of the field $(repr(name_op.c.val)) of $(join(without, ", ")), which holds no such field, whose mutability get_checked_fieldindex checks first (julia/src/builtins.c:994), a target not yet written"), "$(b.ci.def) statement $index")
+        admitted = filter(c -> !(c in without), admitted)
         # a getter selector reads its field in every class it admits (ImplicitFieldAccessorCodeGenerator):
         # a field WasmTarget holds in another form than Julia's rejects at this site, as _directGet's read
         # rejects (memoryref_address_unread), never the selector's getter reading it as Julia's value

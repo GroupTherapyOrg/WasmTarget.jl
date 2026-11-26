@@ -142,4 +142,9 @@ MissingFieldTraps == phase = "done" =>
     \A f \in Names : \A c \in recv[f] : f \notin has[c] => Call(f, c) = FieldErr
 
 Ends == <>(phase = "done")
+
+\* SUPERSEDED for a class without the field: Julia checks at the read (julia/src/builtins.c:994
+\* get_checked_fieldindex), so the port raises FieldError or BoundsError at the site and the row holds only the
+\* classes with the field; MCFieldSelectorTableSiteCheck.tla models it (SiteCheckTraps). MissingFieldTraps stays
+\* checked here as the row plan it was.
 =============================================================================
