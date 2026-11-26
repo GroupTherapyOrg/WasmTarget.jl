@@ -584,7 +584,8 @@ id and the value, no identity hash: dart's box, `i32.const classId`, then the va
         local module_map = get!(() -> LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Global}(), self.constants.value_type_constants, NirConst(Core.Const(v)))
         local per_module_global = get(module_map, b.module_builder, nothing)
         if per_module_global === nothing
-            local info = translator.class_info[typeof(v)]
+            local info = get(translator.class_info, typeof(v), nothing)
+            info === nothing && reject!(Internal("dart2wasm/lib/constants.dart:622 ConstantInstantiator.visitIntConstant: the class $(typeof(v)) of the boxed constant $v has no class info"), "ConstantInstantiator.visitIntConstant")
             local global_type = WasmBuilder.IR.GlobalType(WasmBuilder.IR.RefType(info.struct_; nullable = false); mutable = false)
             local defined_global = WasmBuilder.define(b.module_builder.globals[], global_type,
                 _constant_name(self.constants._constant_accessor[], NirConst(Core.Const(v))))
@@ -620,7 +621,8 @@ each Julia float type is its own class, its box the class id and the value as da
         local module_map = get!(() -> LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Global}(), self.constants.value_type_constants, NirConst(Core.Const(v)))
         local per_module_global = get(module_map, b.module_builder, nothing)
         if per_module_global === nothing
-            local info = translator.class_info[typeof(v)]
+            local info = get(translator.class_info, typeof(v), nothing)
+            info === nothing && reject!(Internal("dart2wasm/lib/constants.dart:658 ConstantInstantiator.visitDoubleConstant: the class $(typeof(v)) of the boxed constant $v has no class info"), "ConstantInstantiator.visitDoubleConstant")
             local global_type = WasmBuilder.IR.GlobalType(WasmBuilder.IR.RefType(info.struct_; nullable = false); mutable = false)
             local defined_global = WasmBuilder.define(b.module_builder.globals[], global_type,
                 _constant_name(self.constants._constant_accessor[], NirConst(Core.Const(v))))
@@ -806,7 +808,8 @@ below the top type, its class id then its value, no identity hash, as dart's.
 """
 @parity "dart2wasm/lib/constants.dart:846 ConstantCreator.visitBoolConstant" function visit_bool_constant(self::ConstantCreator, constant::Bool)::Union{ConstantInfo,Nothing}
     local translator = self.constants.translator
-    local info = translator.class_info[Bool]
+    local info = get(translator.class_info, Bool, nothing)
+    info === nothing && reject!(Internal("dart2wasm/lib/constants.dart:846 ConstantCreator.visitBoolConstant: the class Bool of the boxed constant $constant has no class info"), "ConstantCreator.visitBoolConstant")
     return create_constant(self, NirConst(Core.Const(constant)), ConstantInfo[], info.non_nullable_type, function (_::ConstantInfo, b::WasmBuilder.InstructionsBuilder, _::Bool)
         WasmBuilder.i32_const(b, class_id(info))
         WasmBuilder.i32_const(b, constant ? 1 : 0)
