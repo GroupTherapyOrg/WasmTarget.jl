@@ -1464,12 +1464,22 @@ def two_commits(before, after, msg, climb_from=None, blank=()):
     c1 = git(*ident, "commit-tree", fix(before), "-m", "the tree before the change")
     return git(*ident, "commit-tree", fix(after), "-p", c1, "-m", msg)
 
-def agent_tree(user, run_id, ref, sha, files=None):
+SALVAGES = "salvages.json"   # each hold's latest salvaged commit: {hold id: {branch, sha, t, why}} (salvage_record)
+
+def salvage_record(hold_id, branch, sha, why):
+    """The hold's latest salvaged commit (a dropped landing's, lander.drop; a move the driver stopped, slots.slot_once):
+    the one record the hold's next move reads, which puts the commit in its climber's clone as the branch `salvage`
+    (slots.salvage_refs), so the next climber starts from the work, never only from a handoff naming a branch its clone
+    cannot reach."""
+    update_json(SALVAGES, {}, lambda s: s.__setitem__(hold_id, {"branch": branch, "sha": sha, "t": stamp(), "why": why[:300]}))
+
+def agent_tree(user, run_id, ref, sha, files=None, extra=None):
     """A clone of its own in build user `user`'s home ($HOME/w/<run>), made by the user in the `check` profile from a
     run directory holding `sha` as `ref`: with origin's history for a slot (hard links), a copy for any other role;
-    `files` ({path in the clone: text}) laid in after. Returns its path."""
+    `files` ({path in the clone: text}) laid in after; `extra` ({branch: sha}) further commits of the main repository the
+    clone holds as branches (a slot's `salvage`, slots.salvage_refs). Returns its path."""
     d = door.give(user, run_id, {f"files/{k}": v for k, v in (files or {}).items()})
-    door.repo(d, REPO, {ref: sha}, history=ref != "review", links=user in door.HISTORY)
+    door.repo(d, REPO, {ref: sha, **(extra or {})}, history=ref != "review", links=user in door.HISTORY)
     w = f"{door.home(user)}/w/{run_id}"
     rc, o, e = door.run(user, ["/bin/sh", "-c", 'rm -rf "$HOME/w" && git clone -q -b "$2" "$1/repo.git" "$3" && cd "$3" && '
                                'git config user.name climb && git config user.email climb@localhost && '

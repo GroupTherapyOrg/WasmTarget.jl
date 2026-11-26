@@ -247,7 +247,8 @@ def move(h, slot_name):
     hb = sorted(h["cases"])
     with door.using(user):
         clone = agent_tree(user, slot_name, slot_name, base, dict(env, **{".git/hooks/commit-msg": open(os.path.join(ROOT, "dev", "hooks", "commit-msg")).read(),
-                                                                         ".wtd/hold-cases.txt": "".join(f"{l}\n" for l in hb)}))
+                                                                         ".wtd/hold-cases.txt": "".join(f"{l}\n" for l in hb)}),
+                           extra=salvage_refs(h))   # a salvaged commit of the hold's: the branch `salvage`
         warm = {}   # the slot's Kaimon starts and its session warms beside the base measurement
         def warmup():
             try:
@@ -625,6 +626,35 @@ def line_stopped(lane):
     p = os.path.join(COMMON, "wt-line-stop")
     return os.path.exists(p) and (open(p).read().split("\n")[0].strip() != lane)
 
+def salvage_refs(h):
+    """The hold's latest salvaged commit (core.salvage_record), as the branch `salvage` of its next climber's clone
+    (agent_tree's `extra`), when the main repository still holds it; else none."""
+    s = state_json(SALVAGES, {}).get(h["id"])
+    ok = s and sh(["git", "cat-file", "-e", f"{s['sha']}^{{commit}}"], cwd=REPO).returncode == 0
+    return {"salvage": s["sha"]} if ok else {}
+
+def driver_fault_salvage(h, name, before, e):
+    """A move the DRIVER stopped (slot_once's driver-error: the driver's own code raised, never the move) keeps its work:
+    a commit the move brought back (its bundle's ref, refs/climb/<slot>, moved since the move began) goes on a salvage
+    branch, recorded for the hold's next climber (salvage_record: its clone holds it as `salvage`), and the hold's handoff
+    says the driver, not the move, stopped it; no stop is counted (finish's infra). 2026-11-15 19:19:34Z: climb-1's move,
+    claimed at 16:49:41Z, two review rounds in, died on a torn power reading and its work was salvaged nowhere. Work the
+    move never brought back (its climber's tree since its last bundle) stays in the slot user's home until its next use.
+    Returns the branch, or None when the move brought back no commit."""
+    after = git("rev-parse", "-q", "--verify", f"refs/climb/{name}", check=False) or None
+    if not after or after == before:
+        return None
+    branch = f"salvage/{h['id']}-{now().strftime('%Y%m%dT%H%M%S')}"
+    common_write(f"the salvage branch {branch}")
+    git("branch", branch, after)
+    salvage_record(h["id"], branch, after, f"driver: {e}")
+    event("salvaged", slot=name, branch=branch, hold_id=h["id"], sha=after[:12], why="driver")
+    text = (f"The driver, not the move, stopped this hold's last move ({str(e)[:300]}); no stop is counted against the hold. "
+            f"That move's last commit, {after[:12]}, which the driver measured, is in your clone as the branch `salvage` (and "
+            f"in the main repository as {branch}): start from it, not from nothing.")
+    update_json("handoffs.json", {}, lambda hs: hs.__setitem__(h["id"], (hs.get(h["id"], "") + "\n\n" + text)[-2500:]))
+    return branch
+
 def slot_once(name):
     """One iteration of a slot, a process of its own (launch.sh loops it): one move, then exit. Exit 0 after a move,
     3 when there is nothing to do yet (the loop sleeps)."""
@@ -644,10 +674,12 @@ def slot_once(name):
     h = next((h for h in pick(name) if claim(h, name)), None)
     if not h:
         return 3
+    before = git("rev-parse", "-q", "--verify", f"refs/climb/{name}", check=False) or None   # the slot's last bundle
     try:
         move(h, name)
     except Exception as e:   # every fault of the driver's is infrastructure: an event, a backoff, the hold kept (26)
         event("driver-error", slot=name, hold=h.get("key"), error=repr(e)[:400])
+        driver_fault_salvage(h, name, before, e)   # the move's commit kept for the hold's next climber
         finish(h, "infra", name, f"the driver: {e}", driver=True)
         return 3
     except BaseException:   # a stop (TERM, ^C): its hold freed

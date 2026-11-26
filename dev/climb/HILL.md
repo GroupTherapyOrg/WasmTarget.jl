@@ -1433,7 +1433,12 @@ and learned nothing, and ten D14 reds that saw battery wrote no note (those prob
   user reaped, a slot's Kaimon with it) is infrastructure at once, never resumed; a hung Kaimon call errors to the
   agent after `kaimon_http_s` (`MCP_TOOL_TIMEOUT`, O6-12) (O6-4; probed with stubs: a resume
   the governor refused ended the move `budget`, an empty one `infra`, neither a stop); a base measurement of origin that fails is the driver's, one
-  note and the slot's backoff, never the hold's (O5). One wrapper holds every loop's iteration, the slots', the
+  note and the slot's backoff, never the hold's (O5). A move the driver's own code stops (a slot's `driver-error`) keeps
+  the commit it brought back (its bundle's ref moved since the move began): on a salvage branch, recorded for the hold
+  (`core.salvage_record`, as a dropped landing's salvage is), its handoff saying the driver, not the move, stopped it,
+  and no stop counted; the hold's next climber's clone holds the hold's latest salvaged commit as the branch `salvage`
+  (`slots.salvage_refs`), so it starts from the work (2026-11-15 19:19:34Z: climb-1's move, two review rounds in, died
+  on a torn power reading, salvaged nowhere). One wrapper holds every loop's iteration, the slots', the
   lander's, the scoreboard's and the audit's: any exception, a subprocess's timeout among them, is an event and a
   backoff of `retry_backoff_s`, doubled each time it repeats (`backoff_cap_s` at most), which ends when the driver's
   own code changes (`core.running`: the fault may be the code a landing replaced), with one note for Dale at

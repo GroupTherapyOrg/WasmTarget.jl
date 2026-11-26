@@ -428,12 +428,14 @@ def drop(item, outcome, note, stop=True):
         branch = f"salvage/{item['hold_id']}-{now().strftime('%Y%m%dT%H%M%S')}"
         git("branch", "-m", item["branch"], branch)
         event("salvaged", slot="climb-land", branch=branch, hold_id=item["hold_id"])
+        if item.get("kind", "move") == "move":   # its hold's next climber starts from it (slots.salvage_refs)
+            salvage_record(item["hold_id"], branch, git("rev-parse", branch), f"{outcome}: {note[:200]}")
     else:
         git("branch", "-D", item["branch"], check=False)
     # a note leads with its reason (landing_reason: the check's own failure lines first), so its head is kept, never its
     # tail: a tail ended inside a broken lock's description and hid the reason (2026-11-15, hold 17c2f6adf0)
     text = f"An approved commit for this hold, {item.get('sha', item['branch'])[:12]}, did not land: {note[:1500]}" + \
-           (f"\nIt is on the local branch {branch}." if branch else "")
+           (f"\nIt is on the local branch {branch}, and in your clone as the branch `salvage`." if branch else "")
     if item.get("kind", "move") == "move":
         update_json("handoffs.json", {}, lambda hs: hs.__setitem__(item["hold_id"], (hs.get(item["hold_id"], "") + "\n\n" + text)[-2500:]))
         if stop:

@@ -3472,6 +3472,18 @@ const BOUNDED_BREAKS = (
      "            raise PowerUnread(f\"pmset names AC with a battery and no adapter's wattage", "            raise ClimbError(f\"pmset names AC with a battery and no adapter's wattage", 49),
     ("Low Power Mode read as off on an unread reading", "dev/climb/core.py",
      "    return POWER_UNREAD[0] is not None or POWER[2] is None or bool(POWER[2][1])", "    return bool(POWER[2] and POWER[2][1])", 49),
+    # a move the driver stops keeps its work for the hold's next climber (2026-11-15 19:19:34Z, climb-1)
+    ("a move the driver stopped salvaged nowhere", "dev/climb/slots.py",
+     "        driver_fault_salvage(h, name, before, e)   # the move's commit kept for the hold's next climber", "        pass", 50),
+    ("a salvaged commit left out of the next climber's clone", "dev/climb/slots.py",
+     "                           extra=salvage_refs(h))   # a salvaged commit of the hold's", "                           extra=None)   # a salvaged commit of the hold's", 50),
+    ("a stale bundle salvaged as the move's", "dev/climb/slots.py", "    if not after or after == before:", "    if not after:", 50),
+    ("a move the driver stopped charged a stop", "dev/climb/slots.py",
+     "        finish(h, \"infra\", name, f\"the driver: {e}\", driver=True)", "        finish(h, \"refused\", name, f\"the driver: {e}\")", 50),
+    ("a dropped landing's salvage unrecorded for its hold", "dev/climb/lander.py",
+     "            salvage_record(item[\"hold_id\"], branch, git(\"rev-parse\", branch), f\"{outcome}: {note[:200]}\")", "            pass", 50),
+    ("the handoff silent on the driver having stopped the move", "dev/climb/slots.py",
+     "    text = (f\"The driver, not the move, stopped this hold's last move", "    text = (f\"This hold's last move stopped", 50),
     # a measurement's own directory is its holder's (L1)
     ("measurements of one base sharing one directory (L1)", "dev/climb/measure.py",
      "    w = tempfile.mkdtemp(prefix=f\"{role}-{task}@{os.getpid()}-{door.BOOT}-\", dir=root)",

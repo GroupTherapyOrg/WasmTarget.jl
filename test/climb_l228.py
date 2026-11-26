@@ -2779,3 +2779,93 @@ except Exception as e:
 finally:
     core.sh, core.cfg = real49["sh"], real49["cfg"]
     core.POWER[:] = real49["POWER"]; core.POWER_UNREAD[:] = real49["unread"]
+# 50. a move the driver stops keeps its work (slots.driver_fault_salvage, core.salvage_record, slots.salvage_refs,
+# through slots.slot_once and slots.move): the driver's own code raising mid-round, after the move brought back a commit
+# (its bundle's ref, refs/climb/<slot>, moved): the commit on a salvage branch, recorded for the hold, its handoff naming
+# the branch and that the driver, not the move, stopped it, the hold unclaimed with no stop; with no commit brought back,
+# nothing salvaged; and the hold's next move's clone holds the salvaged commit as the branch `salvage`. 2026-11-15
+# 19:19:34Z: climb-1's move, two review rounds in, died on a torn power reading, its work salvaged nowhere
+#: limit 30
+import slots as SL50
+names50 = ("line_stopped", "pause", "backed_off", "week_half", "token_refused", "power_ok", "probe_gate", "over_budget",
+           "admitted_queue", "pick", "claim", "move", "users", "update_json", "labels_for", "base_choice", "environment",
+           "deps", "agent_tree")
+real50 = {k: getattr(SL50, k) for k in names50} | {"using": door.using}
+try:
+    core.claim_repo()
+    g("checkout", "-q", "--detach", h)
+    open(f"{repo}/src/s50.jl", "w").write("s = 1\n"); g("add", "-A"); g("commit", "-q", "-m", "round 2's commit"); c50 = g("rev-parse", "HEAD")
+    g("checkout", "-q", "--detach", h)
+    g("update-ref", "refs/climb/climb-1", h)   # the slot's last bundle before this move
+    h50 = {"id": "h50", "key": "a hold of section 50", "cases": ["m/a"], "n": 1}
+    SL50.line_stopped = lambda n: False
+    SL50.pause = SL50.week_half = SL50.token_refused = SL50.over_budget = lambda *a: False
+    SL50.backed_off = lambda *a, **k: False
+    SL50.power_ok = SL50.probe_gate = lambda *a: True
+    SL50.admitted_queue = lambda *a: []
+    SL50.pick = lambda name: [h50]
+    SL50.claim = lambda h_, name: True
+    def fault50(bring):
+        def mv(h_, name):
+            if bring:
+                g("update-ref", f"refs/climb/{name}", c50)   # the move brought its commit back (its bundle)
+            raise core.ClimbError("planted: a torn power reading")
+        return mv
+    core.update_json("handoffs.json", {}, lambda hs: hs.pop("h50", None))
+    core.update_json(core.SALVAGES, {}, lambda s: s.pop("h50", None))
+    n_stop = lambda: sum(1 for e in core.events() if e["kind"] == "stopped" and e.get("hold_id") == "h50")
+    SL50.move = fault50(True)
+    rc50 = SL50.slot_once("climb-1")
+    sal50 = core.state_json(core.SALVAGES, {}).get("h50") or {}
+    hand50 = core.state_json("handoffs.json", {}).get("h50", "")
+    br50 = sal50.get("branch", "")
+    on50 = g("rev-parse", "-q", "--verify", f"refs/heads/{br50}") if br50 else ""
+    if rc50 != 3 or sal50.get("sha") != c50 or on50 != c50 or "The driver, not the move" not in hand50 or br50 not in hand50 \
+            or n_stop() or os.path.exists(f"{state}/claims/h50"):
+        fault(f"a driver error after the move brought back {c50[:10]}: rc {rc50}, recorded {sal50}, branch at {on50[:10]}, "
+              f"handoff {hand50[-160:]!r}, stops {n_stop()} (the commit salvaged, the handoff naming it, no stop, unclaimed)")
+    core.update_json("handoffs.json", {}, lambda hs: hs.pop("h50", None))
+    core.update_json(core.SALVAGES, {}, lambda s: s.pop("h50", None))
+    SL50.move = fault50(False)   # the slot's ref unmoved: the move brought nothing back
+    g("update-ref", "refs/climb/climb-1", h)
+    SL50.slot_once("climb-1")
+    if core.state_json(core.SALVAGES, {}).get("h50") or core.state_json("handoffs.json", {}).get("h50"):
+        fault("a driver error before the move brought back a commit salvaged or handed off something")
+    # the hold's next move: its clone holds the salvaged commit as `salvage`
+    os.makedirs(f"{repo}/dev/hooks", exist_ok=True)
+    if not os.path.exists(f"{repo}/dev/hooks/commit-msg"):
+        open(f"{repo}/dev/hooks/commit-msg", "w").write("#!/bin/sh\n")   # what move() lays into a clone (section 11's)
+    core.salvage_record("h50", "salvage/h50-x", c50, "driver: planted")
+    trees50 = []
+    SL50.users = lambda name: ("_wtk1", "review1")
+    SL50.update_json = lambda *a, **k: None
+    SL50.labels_for = lambda h_: {"m/a"}
+    SL50.base_choice = lambda labels: h
+    SL50.environment = lambda sha_: {"Manifest.toml": "", "LocalPreferences.toml": ""}
+    SL50.deps = lambda sha_, man: "/nonexistent"
+    door.using = lambda role: contextlib.nullcontext()
+    def tree50(*a, **k):
+        trees50.append(k.get("extra"))
+        raise RuntimeError("stop at the clone")
+    SL50.agent_tree = tree50
+    SL50.move = real50["move"]
+    with contextlib.suppress(RuntimeError):
+        SL50.move(h50, "climb-1")
+    if trees50 != [{"salvage": c50}]:
+        fault(f"the hold's next move's clone was given {trees50}, not the salvaged commit as `salvage`")
+    # a dropped landing's salvage is recorded for its hold the same way (lander.drop)
+    g("branch", "-f", "ready/h50b-1", c50)
+    L.drop({"branch": "ready/h50b-1", "hold_id": "h50b", "hold": "a hold of section 50 (b)", "kind": "move", "sha": c50},
+           "landing-red", "a planted red", stop=False)
+    if (core.state_json(core.SALVAGES, {}).get("h50b") or {}).get("sha") != c50:
+        fault(f"a dropped landing's salvage is not recorded for its hold: {core.state_json(core.SALVAGES, {}).get('h50b')}")
+except Exception as e:
+    import traceback
+    fault(f"a move the driver stopped raised {type(e).__name__}: {str(e)[:240]} {traceback.format_exc()[-300:]}")
+finally:
+    for k, v in real50.items():
+        if k != "using":
+            setattr(SL50, k, v)
+    door.using = real50["using"]
+    with contextlib.suppress(Exception):
+        g("update-ref", "-d", "refs/climb/climb-1")
