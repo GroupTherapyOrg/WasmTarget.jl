@@ -56,14 +56,72 @@ equal contents another.
 precedent(julia: src/staticdata.c:2987 jl_as_global_root, Julia's own table of rooted objects, a String
 among them, which hands back the one object it holds). dart keys its constants by value (constants.dart:154
 constantInfo); Julia's differs because a String's identity is observable (dataids).
+
+A mutable struct, its field const: Julia's Dict tries `===` before `isequal` (julia/base/dict.jl:249, ht_keyindex), and
+`===` on an immutable key compares the String by its contents, so two objects of equal contents whose slots met in a
+probe (their 7-bit hash tags equal, at addresses that vary by run) were one key. A mutable key's `===` is its own
+identity, so the Dict always asks `==`, the object's address.
 """
-@quarantine pin"julia/src/staticdata.c:2987 jl_as_global_root" "Julia's literal Strings are objects, rooted once by contents in compressed IR, and a const binding's String is its own object; dart keys its constants by value, so a String constant is keyed by the object the IR holds" Core.String struct StringObject
-    s::String
+@quarantine pin"julia/src/staticdata.c:2987 jl_as_global_root" "Julia's literal Strings are objects, rooted once by contents in compressed IR, and a const binding's String is its own object; dart keys its constants by value, so a String constant is keyed by the object the IR holds" Core.String mutable struct StringObject
+    const s::String
 end
 @quarantine pin"julia/src/staticdata.c:2987 jl_as_global_root" "two String constants are one exactly when the IR holds one object, told by its address" Base.pointer_from_objref Base.:(==)(a::StringObject, b::StringObject) =
     pointer_from_objref(a.s) == pointer_from_objref(b.s)
 @quarantine pin"julia/src/staticdata.c:2987 jl_as_global_root" "a String constant's hash is its object's address, as its equality" Base.pointer_from_objref Base.hash(k::StringObject, h::UInt) =
     hash(UInt(pointer_from_objref(k.s)), h)
+
+"""
+    HeldStrings(constant)
+
+An immutable constant's key among the program's constants (src/constants.jl ensureConstant), its value not a String:
+the value compared by Julia's `===`, except that each String it holds is compared by its object, as a String constant
+is keyed (StringObject). `===` recurses through an immutable's fields and a SimpleVector's elements and compares a
+String by its contents (julia/src/builtins.c:243 jl_egal__bitstag: compare_fields, compare_svec and the jl_string_tag
+arm), so two immutables holding equal Strings that are two objects are egal. Keyed by `===` alone they were one
+constant, whose sub-constants are the first one's Strings: a use of the second that builds it from its own fields (a
+tuple boxed into its record, src/constants.jl ConstantInstantiator.instantiate) met a String constant no info's
+children held, created inside its parent's eager initializer, the re-entry dart2wasm/lib/constants.dart:2196 asserts
+against. Keyed by its Strings' objects too, the key is congruent with its fields' keys: two values one key exactly
+when their fields are, so a constant's children are every equal value's, and two such immutables are two constants,
+each holding its own Strings, as natively each holds its own objects (their data ids differ) while `===` on them still
+answers by contents (src/intrinsics.jl Val(:string_egal)). dev/formal/ConstantKeys.tla models the key (Same). A mutable
+struct, as StringObject is: its `===` is its identity, so Julia's Dict, which tries `===` before `isequal`
+(julia/base/dict.jl:249, ht_keyindex), never takes two keys of egal values with two String objects for one.
+"""
+@quarantine pin"julia/src/builtins.c:243 jl_egal__bitstag" "Julia's === compares a String held in an immutable by its contents, while its object is observable (dataids); a String constant is keyed by its object (StringObject), so an immutable holding Strings is keyed by them too, or one key holds two values whose Strings are different constants" Base.ismutable mutable struct HeldStrings
+    const constant::NirConst
+    HeldStrings(constant::NirConst) = ismutable(constant.c.val) || constant.c.val isa String ?
+        reject!(Internal("src/julia/wasm_array.jl HeldStrings: a $(typeof(constant.c.val)) is keyed by its identity or its object, never through its fields"), "HeldStrings") : new(constant)
+end
+@quarantine pin"julia/src/builtins.c:243 jl_egal__bitstag" "two immutable constants are one exactly when they are egal and each String they hold, at each position, is one object" Core.:(===) Base.:(==)(a::HeldStrings, b::HeldStrings) =
+    a.constant.c.val === b.constant.c.val && _same_objects(a.constant.c.val, b.constant.c.val)
+@quarantine pin"julia/src/builtins.c:243 jl_egal__bitstag" "the key's hash is the literal's, which agrees with === (a String hashed by its contents), so values of one key hash alike" Base.hash Base.hash(k::HeldStrings, h::UInt) =
+    hash(k.constant, h)
+# jl_egal's recursion (compare_fields, compare_svec) with a String compared by its object: one box is itself (jl_egal's
+# `a == b`, which keeps a shared value linear), a mutable value and a Symbol or type by `===`, an immutable by its type
+# and each field, an #undef field only against an #undef one
+@quarantine pin"julia/src/builtins.c:243 jl_egal__bitstag" "jl_egal's walk, a String compared by its object where jl_egal compares its contents" Base.ismutable function _same_objects(@nospecialize(a), @nospecialize(b))::Bool
+    ccall(:jl_value_ptr, Ptr{Cvoid}, (Any,), a) == ccall(:jl_value_ptr, Ptr{Cvoid}, (Any,), b) && return true
+    a isa String && return b isa String && pointer_from_objref(a) == pointer_from_objref(b)
+    b isa String && return false
+    if a isa Core.SimpleVector
+        b isa Core.SimpleVector && length(a) == length(b) || return false
+        for i in eachindex(a)
+            local da, db = isassigned(a, i), isassigned(b, i)
+            da == db || return false
+            da && !_same_objects(a[i], b[i]) && return false
+        end
+        return true
+    end
+    (ismutable(a) || isbits(a) || a isa Union{Symbol,Type}) && return a === b
+    typeof(a) === typeof(b) || return false
+    for i in 1:nfields(a)
+        local da, db = isdefined(a, i), isdefined(b, i)
+        da == db || return false
+        da && !_same_objects(getfield(a, i), getfield(b, i)) && return false
+    end
+    return true
+end
 
 """
     WasmArrayLiteral(element_type, mutable, owner, entries)
