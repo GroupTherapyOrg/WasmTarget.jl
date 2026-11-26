@@ -604,7 +604,6 @@ member the intrinsifier lowers at its call, whose body is never collected (nir_i
 statement its kind of `NirStmt`, each operand of `NirValue`, each type Julia's. A form outside the
 census rejects with `Unquarantined`, located at the compile `at` names.
 
-formal(dev/formal/NirHandoff.tla): a record no body, one body per CodeInstance, each statement at its position
 formal(dev/formal/FirstListing.tla): a body per CodeInstance from its first listing, a repeat skipped by identity
 """
 @quarantine pin"julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel" "the closed world Julia inferred comes as CodeInstance and CodeInfo pairs at one world, as julia/Compiler/src/typeinfer.jl:1534 typeinf_ext_toplevel returns them, read once" Core.CodeInfo function build_nir(world::ClosedWorld, at::String)::NirWorld
