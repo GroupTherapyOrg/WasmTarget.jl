@@ -538,7 +538,8 @@ The closed world in NIR, dart's Kernel `Component`: `entry`, the ClosedWorld's e
 (dart's Component.mainMethod), `bodies`, every function of the ClosedWorld Julia's trim verifier
 accepted, in Julia's order, `world`, the ClosedWorld's world, the one its code was inferred in and
 the compiled program's task runs at (julia/src/jlapi.c:316), and `bindings`, every binding its bodies name, each
-read once at that world (NirBinding). Read as a list (iterate, index, length), never built as one.
+read once at that world (NirBinding), and `ports`, the runtime ports its foreign calls reach, the ClosedWorld's
+(src/julia/subset.jl reached_runtime_ports). Read as a list (iterate, index, length), never built as one.
 
 A typestate by construction: its one constructor takes the token `_NirToken`, which only this file
 holds, and `build_nir`, which takes a `ClosedWorld`, is its only caller, so a stage that takes a
@@ -555,8 +556,9 @@ same typestate (construction_check(::Val{:ClosedWorld}), src/julia/subset.jl; L2
     bodies::Vector{NirBody}
     world::UInt
     bindings::NirBindings
-    NirWorld(::_NirToken, entry::Core.MethodInstance, bodies::Vector{NirBody}, bindings::NirBindings) =
-        new(entry, bodies, bindings.world, bindings)
+    ports::Vector{Function}
+    NirWorld(::_NirToken, entry::Core.MethodInstance, bodies::Vector{NirBody}, bindings::NirBindings, ports::Vector{Function}) =
+        new(entry, bodies, bindings.world, bindings, ports)
 end
 
 # the bodies read as a list: iterated, indexed and counted in Julia's order
@@ -625,7 +627,7 @@ formal(dev/formal/FirstListing.tla): a body per CodeInstance from its first list
     end
     any(b -> b.ci.def === world.entry, bodies) ||
         reject!(Internal("src/julia/nir.jl: the closed world's entry $(world.entry) has no body"), at)
-    return NirWorld(_NirToken(), world.entry, bodies, bindings)
+    return NirWorld(_NirToken(), world.entry, bodies, bindings, world.ports)
 end
 
 # the two closed sums' assertions, run when the package loads

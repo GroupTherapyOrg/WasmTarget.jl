@@ -666,7 +666,7 @@ end
     conv === :ccall || conv === :cdecl ||
         reject!(Internal("julia/Compiler/src/ssair/inlining.jl:1746: jl_type_unionall called by the convention $(repr(conv)), not C's"), at)
     local ops = nir_foreign_operands(node)
-    local target = nir_runtime_member(t.component, jl_type_unionall, at)
+    local target = nir_runtime_member(t.component, first(libjulia_ports(:jl_type_unionall)), at)
     local inputs = signature_for_direct_call(t, target).inputs
     for (op, w) in zip(ops, inputs)
         translate_expression(self.code_gen, op, w)
@@ -688,7 +688,7 @@ end
     local conv = cc isa NirConst ? (cc.c.val isa Tuple ? cc.c.val[1] : cc.c.val) : nothing
     conv === :ccall || conv === :cdecl ||
         reject!(Internal("julia/base/hashing.jl:32: jl_type_hash called by the convention $(repr(conv)), not C's"), at)
-    local target = nir_runtime_member(t.component, jl_type_hash, at)
+    local target = nir_runtime_member(t.component, first(libjulia_ports(:jl_type_hash)), at)
     for (op, w) in zip(nir_foreign_operands(node), signature_for_direct_call(t, target).inputs)
         translate_expression(self.code_gen, op, w)
     end
@@ -788,7 +788,7 @@ end
     # where a statement reaches it, src/julia/subset.jl reached_runtime_ports), its
     # premise among DataTypes of no free variable, the program's type values' check (run_time_type_test!)
     run_time_type_test!(t, at)
-    local target = nir_runtime_member(t.component, jl_types_equal, at)
+    local target = nir_runtime_member(t.component, first(libjulia_ports(:jl_types_equal)), at)
     for (a, w) in zip(args, signature_for_direct_call(t, target).inputs)
         translate_expression(self.code_gen, a, w)
     end
@@ -3390,10 +3390,10 @@ end
     load_class_id(b, t, top_nn)
     class_id_search(b, ranges, WasmBuilder.IR.ValueType[i32], cls -> begin
             local info = t.class_info[cls]
-            if cls === UnionAll && any(body -> body.ci.def.def in methods(jl_egal_unionall), t.component)
+            if cls === UnionAll && jl_egal_unionall in t.component.ports
                 # two UnionAlls where the program makes one at run time (src/julia/runtime/jltypes.jl
-                # jl_new_unionall, its port in the closed world with jl_egal_unionall, src/julia/subset.jl
-                # reached_runtime_ports), by Julia's structural egal (jl_egal__bitstag's jl_unionall_tag arm,
+                # jl_new_unionall, its port in the closed world with jl_egal_unionall: the world's ports,
+                # src/julia/subset.jl libjulia_ports), by Julia's structural egal (jl_egal__bitstag's jl_unionall_tag arm,
                 # egal_types(a, b, NULL, 1): the runtime's jl_egal_unionall); elsewhere each UnionAll is one canonical
                 # constant, the kinds' reference compare below
                 WasmBuilder.local_get(b, x)
@@ -4698,7 +4698,7 @@ end
         reject!(Internal("src/intrinsics.jl generate_static_intrinsic: a finalizer's inlining operand that is no constant"), at)
     translate_expression(code_gen, args[2], tr.top_type[])
     translate_expression(code_gen, args[1], tr.top_type[])
-    foreach(_ -> WasmBuilder.drop(code_gen.b[]), call(code_gen, nir_runtime_member(tr.component, jl_gc_add_finalizer_, at)))
+    foreach(_ -> WasmBuilder.drop(code_gen.b[]), call(code_gen, nir_runtime_member(tr.component, first(libjulia_ports(Core.finalizer)), at)))
     local nothing_type = translate_type(tr, Nothing)
     translate_expression(code_gen, NirConst(Core.Const(nothing)), nothing_type)
     return nothing_type

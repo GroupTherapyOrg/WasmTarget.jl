@@ -30,7 +30,8 @@ statement of the world; and `world`, the world age the closed world was inferred
 the world a compiled program's task runs at: an embedded or juliac image's task runs at the world its
 code was inferred in (julia/src/jlapi.c:316 jl_call sets ct->world_age to jl_get_world_counter(), the
 image's; a juliac image's @ccallable wrapper stores jl_world_counter into the task's world age,
-julia/src/codegen.cpp:7190 emit_abi_call).
+julia/src/codegen.cpp:7190 emit_abi_call); and `ports`, the runtime ports its foreign calls reach
+(reached_runtime_ports, over libjulia_ports), each queued into it, found once here and read by every later stage.
 
 A typestate by construction: its one constructor takes the token `_SubsetToken`, which only this
 file holds, and `check_subset` is its only caller, so every stage after the subset check takes a
@@ -46,8 +47,10 @@ by reflection when the package loads (check_sole_constructor).
     notes::Vector{TrimError}
     parents::IdDict{Core.CodeInstance,Tuple{Core.CodeInstance,Int}}
     world::UInt
+    ports::Vector{Function}
     ClosedWorld(::_SubsetToken, entry::Core.MethodInstance, codeinfos::Vector{Any}, notes::Vector{TrimError},
-                parents::IdDict{Core.CodeInstance,Tuple{Core.CodeInstance,Int}}, world::UInt) = new(entry, codeinfos, notes, parents, world)
+                parents::IdDict{Core.CodeInstance,Tuple{Core.CodeInstance,Int}}, world::UInt, ports::Vector{Function}) =
+        new(entry, codeinfos, notes, parents, world, ports)
 end
 
 # Julia's closed-world inference for trimming at `world`, of its queue: the entry's MethodInstance and
@@ -141,36 +144,67 @@ end
     return out
 end
 
-# The runtime ports a closed world's foreign calls reach: Julia's codegen emits a foreign call of a libjulia
-# function as a call of its runtime (julia/src/ccall.cpp:1419 emit_ccall), linked whole into every process; a WasmTarget
-# module holds a port where its program reaches it, as dart compiles a runtime member its program reaches (TFA). A
-# statement `Expr(:foreigncall, :jl_type_unionall, ...)` (Julia's inliner's of UnionAll(v, t), Compiler/src/ssair/
-# inlining.jl:1745) reaches the port src/julia/runtime/jltypes.jl jl_type_unionall, which the code generator calls
-# for it (src/intrinsics.jl), and jl_egal_unionall, the egal of the UnionAlls it makes at run time, which the egal
-# arm calls (Julia's jl_egal's unionall arm, builtins.c:167 egal_types); `:jl_types_equal` (Base's == of two types,
-# base/operators.jl:295) the port jl_types_equal, which the types_equal arm calls where no key splits the operands;
-# `:jl_type_hash` (Base's hash of a type, base/hashing.jl:32) the port jl_type_hash. A call of the builtin Core.finalizer,
-# which Julia's codegen emits as its runtime's jl_f_finalizer (julia/src/builtins.c:2078), reaches the port
-# src/julia/runtime/rtutils.jl jl_gc_add_finalizer_, which the code generator calls for it (src/intrinsics.jl, the
-# finalizer arm). Each port as its function, queued as a runtime root is (_runtime_roots), its one method's
-# specialization
+"""
+    libjulia_ports(name) -> Tuple{Vararg{Function}}
+
+The runtime ports a foreign call of the libjulia function `name` lowers to, the one table of them: its first the
+port the code generator calls for the foreign call (src/intrinsics.jl's arm for it), the rest the ports what that
+port makes at run time reaches; none for a name lowered inline or not lowered. Julia's codegen calls its runtime's
+function for a foreign call of a libjulia symbol (julia/src/ccall.cpp:1419 emit_ccall), its runtime linked whole
+into every process; a WasmTarget module holds a port where its program reaches it, as dart compiles a runtime
+member its program reaches (TFA). `jl_type_unionall`, Julia's inliner's foreign call of every UnionAll(v, t) whose
+v is a TypeVar (Compiler/src/ssair/inlining.jl:1745), lowers to the port src/julia/runtime/jltypes.jl
+jl_type_unionall, whose UnionAlls made at run time reach jl_egal_unionall, their egal (Julia's jl_egal's unionall
+arm, builtins.c:167 egal_types), which the egal arm calls. `jl_types_equal` (Base's == of two types,
+base/operators.jl:295) lowers to the port jl_types_equal, which the types_equal arm calls where no key splits the
+operands; `jl_type_hash` (Base's hash of a type, base/hashing.jl:32) to the port jl_type_hash. A builtin is keyed
+by itself: Julia's codegen emits a call of the builtin Core.finalizer as its runtime's jl_f_finalizer
+(julia/src/builtins.c:2078), whose port is src/julia/runtime/rtutils.jl jl_gc_add_finalizer_, which the finalizer
+arm calls.
+"""
+@quarantine pin"julia/src/ccall.cpp:1419 emit_ccall" "Julia's emit_ccall keys a libjulia function's lowering by its name (its is_libjulia_func, :1464); a WasmTarget module's port for one is the runtime function its code generator calls for it" Core.Symbol function libjulia_ports(name::Core.Symbol)::Tuple{Vararg{Function}}
+    name === :jl_type_unionall && return (jl_type_unionall, jl_egal_unionall)
+    name === :jl_types_equal && return (jl_types_equal,)
+    name === :jl_type_hash && return (jl_type_hash,)
+    return ()
+end
+# the table's entries for builtins, each keyed by the builtin itself (libjulia_ports' docstring), as a list so a call
+# naming one by its GlobalRef in Core is matched to its key by the key's own name, never by a lookup
+@quarantine pin"julia/src/builtins.c:2078 jl_f_finalizer" "Julia's codegen calls a builtin's runtime function (builtins.c's JL_CALLABLEs); a WasmTarget module's port for one is the runtime function its code generator calls for it" Core.Builtin builtin_ports()::Tuple{Vararg{Pair{<:Core.Builtin,<:Tuple{Vararg{Function}}}}} =
+    (Core.finalizer => (jl_gc_add_finalizer_,),)
+@quarantine pin"julia/src/builtins.c:2078 jl_f_finalizer" "a builtin's ports are its entry of the table, builtin_ports" Core.Builtin function libjulia_ports(f::Core.Builtin)::Tuple{Vararg{Function}}
+    for (b, ports) in builtin_ports()
+        b === f && return ports
+    end
+    return ()
+end
+
+# The runtime ports a closed world's foreign calls reach: each foreign call's libjulia_ports, in the order the closed
+# world first meets them, each queued as a runtime root is (_runtime_roots), its one method's specialization
 @quarantine pin"julia/src/ccall.cpp:1419 emit_ccall" "Julia's codegen calls its runtime's function for a foreign call of a libjulia symbol; a WasmTarget module holds the port where a statement reaches it, as dart compiles a runtime member its program reaches" Core.CodeInfo function reached_runtime_ports(codeinfos::Vector{Any})::Vector{Function}
     local out = Function[]
     for x in codeinfos
         x isa Core.CodeInfo || continue
         for st in x.code
+            # a call of a builtin (Core's, named directly or by its GlobalRef), keyed by the builtin; a foreign call by its name
+            local key = nothing
             if Meta.isexpr(st, :call)
                 local f = st.args[1]
-                (f === Core.finalizer || f isa GlobalRef && f.mod === Core && f.name === :finalizer) &&
-                    !(jl_gc_add_finalizer_ in out) && push!(out, jl_gc_add_finalizer_)
-                continue
+                f isa Core.Builtin && (key = f)
+                if f isa GlobalRef && f.mod === Core
+                    for (b, _) in builtin_ports()
+                        nameof(b) === f.name && (key = b)
+                    end
+                end
+            elseif Meta.isexpr(st, :foreigncall)
+                local name = st.args[1]
+                name isa QuoteNode && (name = name.value)
+                name isa Symbol && (key = name)
             end
-            Meta.isexpr(st, :foreigncall) || continue
-            local name = st.args[1]
-            name isa QuoteNode && (name = name.value)
-            name === :jl_type_unionall && !(jl_type_unionall in out) && append!(out, Function[jl_type_unionall, jl_egal_unionall])
-            name === :jl_types_equal && !(jl_types_equal in out) && push!(out, jl_types_equal)
-            name === :jl_type_hash && !(jl_type_hash in out) && push!(out, jl_type_hash)
+            key === nothing && continue
+            for p in libjulia_ports(key)
+                p in out || push!(out, p)
+            end
         end
     end
     return out
@@ -381,7 +415,8 @@ formal(dev/formal/NirHandoff.tla): every reached ccallable's record queued and j
     isempty(ccallables) || ((codeinfos, notes, parents) = _infer_verified(Any[roots; entry; ccallables], world, at))
     # the runtime ports the program's foreign calls reach (reached_runtime_ports), queued after the entry as its
     # ccallables are, so the closed world holds a port where, and only where, the program reaches it
-    local ports = Any[something(_entry_specialization(only(methods(f)).sig, world)) for f in reached_runtime_ports(codeinfos)]
+    local reached = reached_runtime_ports(codeinfos)
+    local ports = Any[something(_entry_specialization(only(methods(f)).sig, world)) for f in reached]
     isempty(ports) || ((codeinfos, notes, parents) = _infer_verified(Any[roots; entry; ccallables; ports], world, at))
     _check_export_names(entry, codeinfos, at)
     # each root queued is inferred into the closed world, Julia's answer for a queued item; one missing is
@@ -390,7 +425,7 @@ formal(dev/formal/NirHandoff.tla): every reached ccallable's record queued and j
         any(x -> x isa Core.CodeInstance && x.def === r, codeinfos) ||
             reject!(Internal("src/julia/subset.jl check_subset: the runtime entry point $r is not in the closed world"), at)
     end
-    return ClosedWorld(_SubsetToken(), entry, codeinfos, notes, parents, world)
+    return ClosedWorld(_SubsetToken(), entry, codeinfos, notes, parents, world, reached)
 end
 
 # the typestate's assertion, run when the package loads: ClosedWorld and its token each have one
