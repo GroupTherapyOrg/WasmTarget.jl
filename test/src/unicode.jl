@@ -13,8 +13,9 @@ space(x::Int64) = isspace(Char(x))                                  # Base's iss
 # Base._isoperator (jl_is_operator's port): c doubled, after a dot, before a suffix (², a no-suffix operator's
 # kept unstripped), a no-suffix operator with a prime, a word operator, a suffix character first, a
 # non-operator, a combining mark as suffix, a Symbol, a NUL, Base's Cstring conversion's ArgumentError, and
-# sequences cut off by the name's end, which C decodes with the NUL after the name (0xce and NUL, U+0300)
-# and a lone three-byte lead with the zeros past it (0xe3: U+0F80; 0xe1: no suffix, the walk passing the NUL)
+# sequences cut off by the name's end, which C decodes with the NUL after the name (0xce and NUL, U+0300) and a
+# lone three-byte lead with the NUL and one byte past it, which C never wrote (0xe1, 0xe3; the port reads zeros
+# there: 0xe3 is U+0F80, a suffix, 0xe1 no suffix, the walk passing the NUL)
 _op(s::Union{String,Symbol}) = Int64(Base._isoperator(s))
 isop(n::Int64) = (c = Char(n);
     _op(string(c, c)) + 2 * _op(string('.', c)) + 4 * _op(string(c, '²')) + 8 * _op(string('≔', '′')) + 16 * _op(string('i', 'n')) +
@@ -22,10 +23,17 @@ isop(n::Int64) = (c = Char(n);
     512 * (try; _op(string(c, '\0')); 0; catch e; e isa ArgumentError ? 1 : 2; end) +
     1024 * _op(string(c, "\xce")) + 2048 * _op(string(c, "\xe1\xb9")) + 4096 * _op(string("\xce", c)) +
     8192 * _op(string(c, "\xe1")) + 16384 * _op(string(c, "\xe3")))
+# isop's names, bit k's at index k: nothing at bit 512, whose String holds a NUL (Base's Cstring conversion throws
+# before C walks it), and the name of the Symbol at bit 256
+isop_names(n::Int64) = (c = Char(n);
+    (string(c, c), string('.', c), string(c, '²'), string('≔', '′'), string('i', 'n'), string('²', c), string(c, 'x'),
+     string(c, '̂'), n > 0x2b ? "+" : "foo", nothing, string(c, "\xce"), string(c, "\xe1\xb9"), string("\xce", c),
+     string(c, "\xe1"), string(c, "\xe3")))
 strip3(n::Int64) = ncodeunits(strip(n > 0 ? "  a　b ﻿ " : " x\t"))   # strip of Unicode space
 end
 
 include(joinpath(@__DIR__, "..", "pinned_tables.jl"))
+include(joinpath(@__DIR__, "..", "pinned_parser.jl"))   # the pinned parser's defines and C's walk over zeros
 
 @testset "utf8proc's tables are the pinned file's, entry for entry" begin
     local dir = WasmTarget._c_pin_checkout(:utf8proc)
@@ -124,10 +132,43 @@ end
     end
 end
 
+# isop's expected answer, bit by bit: libjulia's where C's answer is defined (every character flisp's strip-op-suffix
+# decodes ends at or before the name's NUL); where it is not, C's walk over zeros (dev/formal/StripWalk.tla,
+# PortIsZeroGarbage). A three-byte lead cut off by the name's end ("→\xe3") makes u8_nextchar
+# (julia/src/support/utf8.c:269) read the NUL and one byte past it that C never wrote (julia/src/flisp/flisp.c:217
+# mk_symbol's block, malloc'd to an 8-byte multiple), and libjulia answers by what that byte holds: zeros on macOS
+# aarch64, where "→\xe3" strips to "→" (U+0F80 a suffix) and is an operator; on hpc3's linux x86_64 not, on some runs
+# (isop(8594) natively 3974, the module 20358)
 @testset "_isoperator compiled answers as native Julia" begin
+    local parser = pinned_parser()
+    @test parser !== nothing   # bash dev/fetch_julia.sh makes it
+    local operators = parser === nothing ? String[] : parser[2][:operators]
+    local no_suffix = parser === nothing ? String[] : parser[2][Symbol("no-suffix?")]
+    local (p, o) = Main.WTVerdict._modules(WasmTarget.compile, UnicodeCases.isop, (Int64(1),))
     local runs = Main.WTChild.RunCase[]
-    for args in ((Int64(0x2b),), (Int64(0x3d),), (Int64(0x61),), (Int64(0x2192),))
-        append!(runs, first(Main.WTChild.answer_cases("unicode/isop$args", WasmTarget.compile, UnicodeCases.isop, args)))
+    for x in (Int64(0x2b), Int64(0x3d), Int64(0x61), Int64(0x2192))
+        local native = Main.WTChild.native_answer(UnicodeCases.isop, (x,))
+        local expected = Int64(0)
+        local by_native, by_model = 0, 0
+        for (k, s) in enumerate(UnicodeCases.isop_names(x))
+            local bit = Int64(1) << (k - 1)
+            local (a, d) = s === nothing ? (false, true) : c_operator_over_zeros(s, operators, no_suffix)
+            if d   # native's bit; the name's own libjulia answer and the walk over zeros agree with it
+                s === nothing || @test a == Base._isoperator(s) == (native & bit != 0)
+                expected |= native & bit
+                by_native += 1
+            else   # the walk's over zeros
+                @test !isvalid(s)
+                expected |= a ? bit : Int64(0)
+                by_model += 1
+            end
+        end
+        # per argument, 13 bits natively (12 names C walks to their NUL, and the NUL's ArgumentError) and 2 by the
+        # model (c * "\xe1" and c * "\xe3")
+        @test (by_native, by_model) == (13, 2)
+        # this host's libjulia read a byte past the NUL that was no zero: its answer and the expected value, named
+        native == expected || println("unicode/isop($x,): libjulia answers $native natively, C's walk over zeros $expected at the bits it reads past the NUL")
+        push!(runs, Main.WTChild.RunCase("unicode/isop($x,)", p, (x,), expected; optimized = o))
     end
     local results = Main.WTChild.run_cases(runs)
     foreach(r -> r.ok || println(r.label, ": ", r.why), results)
