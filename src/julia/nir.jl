@@ -1142,6 +1142,24 @@ The body in `world` (the closed world's NIR) Julia inferred for `mi`: dart's mem
 end
 
 """
+    nir_reads_exception_stack(world) -> Bool
+
+Whether any function of the closed world reads Julia's task exception stack: a try region with a catch,
+whose enter records the stack's depth and whose catch reads its top (julia/src/codegen.cpp:9359
+jl_excstack_state, :6675 jl_current_exception), or a call of Base.rethrow, which reads the top or finds
+the stack empty (julia/src/task.c:801 jl_rethrow, :810 jl_rethrow_other). Where none does, the stack is
+never read, so an export's entry that records and restores it (src/functions.jl, JL_TRY and JL_CATCH)
+changes no answer, and the export is the function itself.
+"""
+@quarantine pin"julia/src/task.c:801 jl_rethrow" "only a catch or a rethrow reads Julia's task exception stack; a program with neither never observes it" Base.rethrow function nir_reads_exception_stack(world::NirWorld)::Bool
+    for b in world, st in b.stmts
+        st isa NirEnter && st.catch_dest != 0 && return true
+        st isa NirInvoke && (let d = nir_invoke_target(st).def; d isa Method && d in methods(Base.rethrow) end) && return true
+    end
+    return false
+end
+
+"""
     nir_invoke_target(node) -> MethodInstance
 
 The MethodInstance an invoke calls: its target, or the MethodInstance its CodeInstance instantiates.

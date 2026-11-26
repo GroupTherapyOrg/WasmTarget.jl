@@ -1037,8 +1037,9 @@ one fact Julia's flat IR keeps apart from the statement (Kernel nests a used exp
 parent), and `nothing` otherwise: a used value is Kernel's `VariableDeclaration` with its
 initializer, a local (translateVariableDeclaration), an unused one an `ExpressionStatement`
 (visitExpressionStatement, the void marker expected); a return is a `ReturnStatement`, an emptied
-statement an `EmptyStatement`. A try region's entry, exit and exception-stack pop are the
-stackifier's structure (visit_block) and emit nothing here. The other Julia-only forms (the flat IR's
+statement an `EmptyStatement`. A try region's entry and exit are the stackifier's structure
+(visit_block); the entry records the depth of Julia's exception stack and its pop_exception
+restores it, as Julia's codegen does. The other Julia-only forms (the flat IR's
 jumps and merges, exception-edge values, GC preservation, loop hints) reject, located, until the
 stackifier (dev/MARCH.md 1.D), and a foreign call or C function pointer until the host imports (1.F).
 dart's source-map offset is set from the node; the NIR's line table takes that place with the source
@@ -1065,11 +1066,18 @@ map.
         (s::NirGCPreserveEnd) => nothing
         # control leaves a try region by the stackifier's branch out of its TRY_TABLE (visit_block)
         (s::NirLeave) => nothing
-        # Julia's exception stack is read where compute_trycatch says it is topped
-        # (NirHandlers.exception_at): the_exception and rethrow() read the CATCH locals of the catch
-        # topping it (visit_block), so a pop leaves nothing to emit
-        (s::NirPopException) => nothing
-        (s::NirTheException) => reject!(Internal("$at: the caught exception, which visit_block reads from its catch's CATCH local, as a statement"), at)
+        # Julia's pop_exception sets the task's exception stack back to the depth its region's enter
+        # recorded (julia/src/codegen.cpp:6231, jl_restore_excstack of the enter's value)
+        (s::NirPopException) => begin
+            local restore = nir_runtime_member(self.translator.component, jl_restore_excstack, "$(julia_text(self.enclosing_member)): $at")
+            length(s.args) == 1 && s.args[1] isa NirSSA && self.body.stmts[(s.args[1]::NirSSA).id] isa NirEnter ||
+                reject!(Internal("$at: a pop_exception whose operand $(s.args) is no EnterNode's value"), at)
+            translate_expression(self, s.args[1], only(signature_for_direct_call(self.translator, restore).inputs))
+            # a statement: the call's value, its `nothing`, is dropped, as visitExpressionStatement drops it
+            foreach(_ -> WasmBuilder.drop(self.b[]), call(self, restore))
+            nothing
+        end
+        (s::NirTheException) => reject!(Internal("$at: the caught exception, which visit_block reads from the task's exception stack, as a statement"), at)
         # Julia's loop hints: its codegen makes them the loop's LLVM metadata (julia/src/codegen.cpp's
         # emit_expr, loopinfo, ctx.LoopID), an optimizer hint WebAssembly's backend emits nothing for
         (s::NirLoopInfo) => nothing
@@ -1104,8 +1112,20 @@ map.
         (s::NirUnreachable) => WasmBuilder.unreachable(self.b[])
         (s::NirPhi) => reject!(Internal("$at: an SSA merge, which visit_block reads from its incoming register, as a statement"), at)
         (s::NirPi) => variable === nothing ? visit_expression_statement(self, s) : translate_variable_declaration(self, variable)
-        # the try region's TRY_TABLE, which the stackifier placed, opens it (visit_block)
-        (s::NirEnter) => nothing
+        # the try region's TRY_TABLE, which the stackifier placed, opens it (visit_block); an enter with
+        # a catch first records the depth of the task's exception stack as its value, which its
+        # pop_exception restores (julia/src/codegen.cpp:9359, jl_excstack_state)
+        (s::NirEnter) => if s.catch_dest != 0
+            local state = nir_runtime_member(self.translator.component, jl_excstack_state, "$(julia_text(self.enclosing_member)): $at")
+            local outputs = call(self, state)
+            if variable === nothing
+                WasmBuilder.drop(self.b[])
+            else
+                local l = add_local(self, only(outputs))
+                self.locals[variable] = l
+                WasmBuilder.local_set(self.b[], l)
+            end
+        end
         (s::NirUpsilon) => reject!(Internal("$at: an exception-edge value, which visit_block writes to its PhiCs' registers, as a statement"), at)
         (s::NirPhiC) => reject!(Internal("$at: an exception-edge merge, which visit_block reads from its register, as a statement"), at)
     end
@@ -1149,8 +1169,9 @@ end
 # (PHIElimination), and BR_TABLE and CONST_I32 read and write FixIrreducibleControlFlow's label
 # registers. A try region is LLVM's: TRY_TABLE opens a label whose one catch clause, dart's catch of
 # its exception tag (visitTryCatch), branches to a BLOCK typed by the values the tag carries; the CATCH
-# after that block's end stashes the caught exception in a local, as dart's visitTryCatch does after
-# its catch, and Julia's the_exception in the catch block reads it; an Upsilon writes the register of
+# after that block's end drops them, where dart's visitTryCatch stashes them in its try block's locals:
+# Julia's catch reads the task's exception stack, whose top the throw pushed (the_exception,
+# jl_current_exception, and rethrow, visit_rethrow), so the payload is no second source of it; an Upsilon writes the register of
 # each PhiC naming it, which the PhiC reads, as Julia's codegen does; UNREACHABLE is wasm's. A nested
 # try_table fixing an unwind mismatch catches every exception's exnref to a trampoline, a BLOCK of
 # type exnref, whose end THROW_REF follows
@@ -1190,10 +1211,6 @@ end
         # LLVM's exnref, wasm's (ref null exn)
         imm(mi, 1) == BLOCK_TYPE_EXNREF ? WasmBuilder.IR.ValueType[WasmBuilder.IR.RefType_exn(; nullable = true)] :
         reject!(Internal("src/code_generator.jl visit_block: block type $(imm(mi, 1))"), at)
-    # each catch block's EnterNode, by its block (machine_function's numbering, Julia's block k + 1),
-    # and the exception each catch's CATCH stashed, by its EnterNode
-    local catch_enter = Dict{Int,Int}(Core.Compiler.block_for_inst(node.cfg, st.catch_dest) + 1 => k
-                                      for (k, st) in enumerate(node.stmts) if st isa NirEnter && st.catch_dest != 0)
     # a value read where its set does not structurally dominate the read: the stackifier may place the
     # read after the end of the wasm block holding the set, where wasm counts a non-nullable local
     # uninitialized again (a use Julia's dominance allows, a def in a try region read after it). Each
@@ -1236,7 +1253,6 @@ end
         node.stmts[k] isa Union{NirPhi,NirPhiC} && continue
         t isa WasmBuilder.IR.RefType && !t.nullable && (self.locals[NirSSA(k)] = add_local(self, WasmBuilder.with_nullability(t, true)))
     end
-    local caught = Dict{Int,NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}}()
     for mbb in mf.layout, mi in mf.blocks[mbb].instrs
         local op = mi.opcode
         if op == BLOCK
@@ -1257,17 +1273,12 @@ end
             WasmBuilder.var"end"(b)
             pop!(labels)
         elseif op == CATCH
-            # dart's visitTryCatch: the exception and stack trace its catch pushed, each stashed in a
-            # local, its try block's locals for the statements whose exception stack it tops. Each is
-            # defaultable, as a phi's register is: the stackifier may place a read (a rethrow, a
-            # the_exception) after the end of the wasm block holding the set, where a non-nullable
-            # local is uninitialized again; each read converts to the type it needs
-            local thrown = add_local(self, WasmBuilder.with_nullability(self.translator.top_type_non_nullable[], true))
-            local thrown_stack_trace = add_local(self, WasmBuilder.with_nullability(self.translator.stack_trace_type[], true))
-            WasmBuilder.local_set(b, thrown_stack_trace)
-            WasmBuilder.local_set(b, thrown)
-            caught[get(() -> reject!(Internal("src/code_generator.jl visit_block: a CATCH in block $mbb, no EnterNode's catch"), at), catch_enter, mbb)] =
-                (exception_local = thrown, stack_trace_local = thrown_stack_trace)
+            # dart's visitTryCatch stashes the exception and stack trace its catch pushed in its try
+            # block's locals; Julia's catch reads the top of the task's exception stack, which the throw
+            # pushed and the unwind left (julia/src/codegen.cpp:6675 jl_current_exception), the entry
+            # the payload carries, so the payload is dropped (dev/formal/TaskExcStack.tla: a landing
+            # reads nothing of it)
+            foreach(_ -> WasmBuilder.drop(b), catch_tag().type.inputs)
         elseif op == UNREACHABLE
             WasmBuilder.unreachable(b)
         elseif op == IMPLICIT_DEF
@@ -1281,11 +1292,6 @@ end
         elseif op == STMTS
             for k in imm(mi, 1):imm(mi, 2)
                 local st = node.stmts[k]
-                # the top of Julia's exception stack here, the caught exception the_exception and
-                # rethrow() read (dart's tryBlockLocals.last), by Julia's compute_trycatch
-                local e = node.handlers.exception_at[k]
-                e == 0 || push!(self.try_block_locals,
-                    get(() -> reject!(Internal("src/code_generator.jl visit_block: statement $k reads the exception of the EnterNode at $e, whose CATCH is not yet emitted"), at), caught, e))
                 if st isa NirPhi
                     # the PHI's destination, a copy of its incoming register
                     local dest = add_local(self, incoming_reg(k).type)
@@ -1311,22 +1317,19 @@ end
                     WasmBuilder.local_get(b, incoming_reg(k))
                     WasmBuilder.local_set(b, dest)
                 elseif st isa NirTheException
-                    # Julia's the_exception, the top of its exception stack, the exception its catch's
-                    # CATCH stashed (codegen.cpp's jl_current_exception); Julia's inference may have
+                    # Julia's the_exception, the top of the task's exception stack, `nothing` where it is
+                    # empty (julia/src/codegen.cpp:6675, jl_current_exception); Julia's inference may have
                     # narrowed its type (the try body's exception type), so a primitive's box unboxes
                     # by that class (convertType's boxed_class)
-                    e == 0 && reject!(Internal("src/code_generator.jl visit_block: the_exception at statement $k, where Julia's exception stack is empty"), at)
-                    local thrown = self.try_block_locals[end].exception_local
+                    local current = nir_runtime_member(self.translator.component, jl_current_exception, at)
                     local caught_type = node.types[k]
                     local dest = get(() -> add_local(self, translate_type_of_local_variable(self.translator, caught_type)), self.locals, NirSSA(k))
                     self.locals[NirSSA(k)] = dest
-                    WasmBuilder.local_get(b, thrown)
-                    convert_type(self.translator, b, thrown.type, dest.type; boxed_class = caught_type isa DataType ? caught_type : nothing)
+                    convert_type(self.translator, b, only(call(self, current)), dest.type; boxed_class = caught_type isa DataType ? caught_type : nothing)
                     WasmBuilder.local_set(b, dest)
                 else
                     translate_statement(self, st, k in self.used ? NirSSA(k) : nothing; statement = k)
                 end
-                e == 0 || pop!(self.try_block_locals)
             end
         elseif op == COPY
             local p = imm(mi, 1)
@@ -2873,32 +2876,28 @@ end
 end
 
 # Julia's rethrow(), an invoke of Base.rethrow() (translateExpression routes it here; its body, the
-# foreign call jl_rethrow, julia/src/task.c:801, rethrows the top of the task's exception stack): the
-# exception and stack trace its catch stashed thrown again under the exception tag. rethrow(e), an
-# invoke of Base.rethrow(::Any) (its body the foreign call jl_rethrow_other, julia/src/task.c:810),
-# first overwrites the exception on the top of the stack with e (:819), the catch's stashed exception,
-# which the_exception and a later rethrow() of the same catch read, and then rethrows it with the stack
-# trace the top's throw captured (throw_internal pushes no entry). Julia's runtime raises an
-# ErrorException where the stack is empty (:805, :816)
+# foreign call jl_rethrow, julia/src/task.c:801), and rethrow(e), an invoke of Base.rethrow(::Any) (its
+# body the foreign call jl_rethrow_other, julia/src/task.c:810): the top of the task's exception stack
+# (src/julia/runtime/rtutils.jl), its exception overwritten with e first for rethrow(e) (:819), thrown
+# again under the exception tag with the backtrace its throw recorded, as dart's visitRethrow throws its
+# catch's stashed exception and stack trace. The raise pushes no entry (throw_internal(ct, NULL)), so it
+# is the tag's throw here, never the runtime's Error._throw, which pushes. Where the stack is empty,
+# jl_rethrow and jl_rethrow_other raise Julia's ErrorException (:805, :816), a throw, which pushes. The
+# stack is the task's, so a rethrow in a function its caller calls from inside a catch rethrows the
+# caller's exception (dev/formal/TaskExcStack.tla)
 @parity "dart2wasm/lib/code_generator.dart:2966 AstCodeGenerator.visitRethrow" function visit_rethrow(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
-    isempty(self.try_block_locals) && reject!(Unquarantined(length(node.args) == 1 ?
-        "src/julia/runtime/rtutils.jl: rethrow() outside a catch block, which Julia's runtime raises as ErrorException (julia/src/julia.h:2437 jl_rethrow)" :
-        "src/julia/runtime/rtutils.jl: rethrow(exc) outside a catch block, which Julia's runtime raises as ErrorException (julia/src/julia.h:2438 jl_rethrow_other)"), "$(julia_text(self.enclosing_member))")
+    local at = "$(julia_text(self.enclosing_member))"
     local b = self.b[]
-    local exception_locals = self.try_block_locals[end]
     local tag = get_dart_exception_tag(self.translator, b.module_builder)
-    if length(node.args) == 2
-        # jl_rethrow_other's write of the top (`jl_excstack_raw(excstack)[excstack->top-1].jlvalue = e`):
-        # the top at a statement of a catch region is the exception its catch stashed
-        # (compute_trycatch's exception stack, NirHandlers.exception_at), so e is stored in that local
-        translate_expression(self, node.args[2], self.translator.top_type_non_nullable[])
-        convert_type(self.translator, b, self.translator.top_type_non_nullable[], exception_locals.exception_local.type)
-        WasmBuilder.local_set(b, exception_locals.exception_local)
+    local top = if length(node.args) == 2
+        local other = nir_runtime_member(self.translator.component, jl_rethrow_other, at)
+        translate_expression(self, node.args[2], only(signature_for_direct_call(self.translator, other).inputs))
+        call(self, other)
+    else
+        call(self, nir_runtime_member(self.translator.component, jl_rethrow, at))
     end
-    WasmBuilder.local_get(b, exception_locals.exception_local)
-    convert_type(self.translator, b, exception_locals.exception_local.type, tag.type.inputs[1])
-    WasmBuilder.local_get(b, exception_locals.stack_trace_local)
-    convert_type(self.translator, b, exception_locals.stack_trace_local.type, tag.type.inputs[2])
+    convert_type(self.translator, b, only(top), tag.type.inputs[1])
+    convert_type(self.translator, b, only(call(self, nir_runtime_member(self.translator.component, jl_excstack_bt_data, at))), tag.type.inputs[2])
     WasmBuilder.throw_(b, tag)
     return expected_type
 end

@@ -30,28 +30,28 @@ overwritten(x::Int64)::Int64 = try; overwrite_outer(x); catch e; kind(e); end
     return 0
 end
 inner_only(x::Int64)::Int64 = try; overwrite_inner(x); catch e; kind(e); end
-# rethrow(e) with no catch region of its own function: the top is the task's, which only run time knows
+# rethrow(e) with no catch region of its own function: the top is the task's, which only run time knows;
+# called from no catch, the stack is empty and Julia raises ErrorException (task.c:816)
 @noinline outside(x::Int64)::Int64 = (x > 0 && rethrow(ArgumentError("a")); Int64(0))
+outside_of(x::Int64)::Int64 = try; outside(x); catch e; kind(e); end
 end
 
 const RC = RethrowCases
 
 @testset "rethrow(e) overwrites the top of Julia's exception stack" begin
     local cases = Main.WTChild.RunCase[]
-    for (f, xs) in ((RC.replace_top, (1, 0)), (RC.overwritten, (1, 2)), (RC.inner_only, (1,)))
+    for (f, xs) in ((RC.replace_top, (1, 0)), (RC.overwritten, (1, 2)), (RC.inner_only, (1,)), (RC.outside_of, (1, 0)))
         local (p, o) = Main.WTVerdict._modules(WasmTarget.compile, f, (Int64(1),))
         for x in xs
             push!(cases, Main.WTChild.RunCase("rethrow_other/$(nameof(f))($x)", p, (Int64(x),), Main.WTChild.native_answer(f, (Int64(x),)); optimized = o))
         end
     end
-    # native's answers: the replacement caught with its value, none thrown, the outer exception kept or overwritten
-    @test [c.native for c in cases] == [12, 0, 1, 2, 1]
+    # native's answers: the replacement caught with its value, none thrown, the outer exception kept or overwritten,
+    # Julia's ErrorException where the task's stack is empty
+    @test [c.native for c in cases] == [12, 0, 1, 2, 1, 4, 0]
     for r in Main.WTChild.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
     end
-    # outside a catch region of its own function the top is the task's: rejected, located, never a default
-    local e = try; WasmTarget.compile(RC.outside, (Int64,)); nothing; catch x; x; end
-    @test e isa WasmTarget.RejectionError && occursin("rethrow(exc) outside a catch block", sprint(showerror, e))
 end
 
 end # module

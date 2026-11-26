@@ -183,9 +183,44 @@ unused where Julia's effects prove it (hasWasmPureFunctionPragma).
     local function_ = WasmBuilder.define(module_.functions[], ftype, get_function_name(self, target))
     function_.is_pure = is_pure
     function_.inline_hint = inline_hint
-    if export_name !== nothing
+    if export_name !== nothing && !nir_reads_exception_stack(translator.component)
+        # a program that never reads Julia's exception stack: the host calls the function itself
         function_.is_js_called = true
         WasmBuilder.var"export"(module_.exports, export_name, function_)
+    elseif export_name !== nothing
+        # The host calls an export through an entry of its own, "<export name> (export)" (as dart names
+        # an import "<name> (import)"): the host is the catching frame of its call, Julia's JL_TRY and
+        # JL_CATCH (julia/src/julia.h:2548 and :2555), which record the depth of the task's exception
+        # stack at the call (jl_excstack_state) and restore it after an escape (jl_restore_excstack). The
+        # entry records the depth, calls the function inside a try_table catching every exception, and on
+        # an escape restores the depth and throws the exception on (throw_ref), so a call the host makes,
+        # top-level or from inside an import, leaves the stack as it found it. Wasm catches no trap, so a
+        # call after a trap starts where the trap left the stack (dev/formal/TaskExcStack.tla, ESCAPES).
+        # The module's own calls call the function itself, so a call from inside a catch keeps the
+        # caller's stack
+        local state = get_function(self, nir_runtime_member(translator.component, jl_excstack_state, "$target"))
+        local restore = get_function(self, nir_runtime_member(translator.component, jl_restore_excstack, "$target"))
+        state.type.inputs == WasmBuilder.IR.ValueType[] && state.type.outputs == WasmBuilder.IR.ValueType[WasmBuilder.IR.NumType_i64] &&
+            restore.type.inputs == WasmBuilder.IR.ValueType[WasmBuilder.IR.NumType_i64] ||
+            reject!(Internal("dart2wasm/lib/functions.dart:90 FunctionCollector.getFunction: jl_excstack_state $(state.type) and jl_restore_excstack $(restore.type), not () -> i64 and (i64) -> ()"), "get_function")
+        local entry = WasmBuilder.define(module_.functions[], ftype, "$export_name (export)")
+        entry.is_js_called = true
+        local b = WasmBuilder.body(entry)
+        local depth = WasmBuilder.add_local(b, WasmBuilder.IR.NumType_i64)
+        call_function(translator, state, b)
+        WasmBuilder.local_set(b, depth)
+        local escaped = WasmBuilder.block(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[WasmBuilder.IR.RefType_exn(; nullable = true)])
+        WasmBuilder.try_table(b, WasmBuilder.TryTableCatch[WasmBuilder.CatchAllRef(escaped)], WasmBuilder.IR.ValueType[], ftype.outputs)
+        foreach(l -> WasmBuilder.local_get(b, l), WasmBuilder.locals(entry)[1:length(ftype.inputs)])
+        call_function(translator, function_, b)
+        WasmBuilder.var"end"(b)
+        WasmBuilder.return_(b)
+        WasmBuilder.var"end"(b)
+        WasmBuilder.local_get(b, depth)
+        call_function(translator, restore, b)
+        WasmBuilder.throw_ref(b)
+        WasmBuilder.var"end"(b)
+        WasmBuilder.var"export"(module_.exports, export_name, entry)
     end
     self._functions[target] = function_
     add(translator.compilation_queue[], AstCompilationTask(function_, get_member_code_generator(translator, function_, target), target))

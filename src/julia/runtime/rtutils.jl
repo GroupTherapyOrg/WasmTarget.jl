@@ -1,3 +1,16 @@
+# Julia's exception stack (julia/src/julia_internal.h:1534 _jl_excstack_t): its top's index, the size
+# of its buffer and the buffer, each entry two slots, the backtrace and then the exception (Julia's: the
+# backtrace's raw frames, their count and the exception)
+@quarantine pin"julia/src/julia_internal.h:1534 _jl_excstack_t" "Julia's task holds a stack of the exceptions thrown and not yet handled, its entries in one growable buffer" Core.Memory mutable struct jl_excstack_t
+    top::Int
+    reserved_size::Int
+    raw::Memory{Any}
+end
+
+# the task's exception stack (julia/src/julia_threads.h:284, jl_task_t's `excstack`), none until its
+# first push; a module's one task holds it, one per instance
+@quarantine pin"julia/src/julia_internal.h:1534 _jl_excstack_t" "Julia's exception stack belongs to the task, outliving every call (julia/src/julia_threads.h:284 jl_task_t.excstack)" Core.Ref const jl_current_task_excstack = Ref{Union{Nothing,jl_excstack_t}}(nothing)
+
 # ---- Julia's runtime: libjulia's functions the code generator calls, each rooted in every closed world (RUNTIME_ROOTS) ----
 # The functions of Julia's own C runtime (src/rtutils.c, src/runtime_intrinsics.c, julia.h, builtins.c)
 # which Julia's codegen calls: the raises where a builtin or an intrinsic fails, each building Julia's
@@ -270,6 +283,94 @@ end
         parent === nothing ? (jl_symtab.root = node) : wasm_symbol_set_child!(parent, right, node)
     end
     return node
+end
+
+# The task's exception stack (julia/src/julia_internal.h:1534 _jl_excstack_t, the task's `excstack`,
+# julia_threads.h:284): Julia's own array of entries and the index of its top, each entry the
+# backtrace its throw recorded and then the exception. A throw pushes its entry (task.c:756
+# throw_internal; the runtime's Error._throw, src/intrinsics.jl), an enter records the top
+# (codegen.cpp:9359) and its pop_exception restores it (codegen.cpp:6231), the_exception reads the
+# top (codegen.cpp:6675), rethrow() and rethrow(e) raise it without pushing (src/code_generator.jl
+# visit_rethrow), and an export's entry empties it (src/functions.jl), as the host's JL_CATCH restores
+# it after a call that escaped (julia.h:2555). An entry's backtrace is one object, the embedder's stack
+# trace, where Julia's is its raw frames and their count. formal(dev/formal/TaskExcStack.tla) Agrees
+
+# jl_copy_excstack: the entries below `src`'s top copied into `dest`, whose top becomes `src`'s
+@quarantine pin"julia/src/rtutils.c:379 jl_copy_excstack" "Julia's exception stack grows by copying its entries into a larger buffer" Core.Nothing @noinline function jl_copy_excstack(dest::jl_excstack_t, src::jl_excstack_t)::Nothing
+    for i in 1:src.top
+        @inbounds dest.raw[i] = src.raw[i]
+    end
+    dest.top = src.top
+    return nothing
+end
+
+# jl_reserve_excstack: the task's stack, made where it has none, replaced by one of exactly
+# `reserved_size` slots, its entries copied, where its own is smaller
+@quarantine pin"julia/src/rtutils.c:386 jl_reserve_excstack" "Julia's task holds its exception stack in a buffer reserved to the size a push needs" Core.Memory @noinline function jl_reserve_excstack(reserved_size::Int)::Nothing
+    local s = jl_current_task_excstack[]
+    s !== nothing && s.reserved_size >= reserved_size && return nothing
+    local new_s = jl_excstack_t(0, reserved_size, Memory{Any}(undef, reserved_size))
+    s === nothing || jl_copy_excstack(new_s, s)
+    jl_current_task_excstack[] = new_s
+    return nothing
+end
+
+# jl_push_excstack: an entry pushed above the top, its backtrace and then its exception
+@quarantine pin"julia/src/rtutils.c:402 jl_push_excstack" "every throw pushes its exception and backtrace on the task's exception stack (julia/src/task.c:756 throw_internal)" Core.Nothing @noinline function jl_push_excstack(@nospecialize(exception::Any), @nospecialize(bt::Any))::Nothing
+    jl_reserve_excstack(jl_excstack_state() + 2)
+    local s = jl_current_task_excstack[]::jl_excstack_t
+    @inbounds s.raw[s.top + 1] = bt
+    @inbounds s.raw[s.top + 2] = exception
+    s.top += 2
+    return nothing
+end
+
+# jl_excstack_state: the top's index, 0 where the task has no stack
+@quarantine pin"julia/src/rtutils.c:364 jl_excstack_state" "Julia's codegen records the exception stack's depth at a try region's enter (julia/src/codegen.cpp:9359)" Core.Int @noinline function jl_excstack_state()::Int
+    local s = jl_current_task_excstack[]
+    return s === nothing ? 0 : s.top
+end
+
+# jl_restore_excstack: the top set back to `state`, the index an enter recorded
+@quarantine pin"julia/src/rtutils.c:370 jl_restore_excstack" "Julia's codegen restores the exception stack's depth at a pop_exception (julia/src/codegen.cpp:6231), and the host's JL_CATCH after a call that escaped (julia/src/julia.h:2555)" Core.Int @noinline function jl_restore_excstack(state::Int)::Nothing
+    local s = jl_current_task_excstack[]
+    s === nothing || (s.top = state)
+    return nothing
+end
+
+# jl_excstack_exception: the exception of the entry whose top is `itr`
+@quarantine pin"julia/src/julia_internal.h:1549 jl_excstack_exception" "an entry's exception is its last slot" Core.Int @noinline jl_excstack_exception(s::jl_excstack_t, itr::Int)::Any =
+    @inbounds s.raw[itr]
+
+# jl_excstack_bt_data, of the top's entry: the backtrace its throw recorded, the slot below its exception
+@quarantine pin"julia/src/julia_internal.h:1558 jl_excstack_bt_data" "an entry's backtrace lies below its exception" Core.Any @noinline function jl_excstack_bt_data()::Any
+    local s = jl_current_task_excstack[]::jl_excstack_t
+    return @inbounds s.raw[s.top - 1]
+end
+
+# jl_current_exception: the top's exception, `nothing` where the stack is empty, which Julia's
+# the_exception reads (julia/src/codegen.cpp:6675)
+@quarantine pin"julia/src/jlapi.c:193 jl_current_exception" "Julia's the_exception reads the top of the task's exception stack" Core.Any @noinline function jl_current_exception()::Any
+    local s = jl_current_task_excstack[]
+    return s !== nothing && s.top != 0 ? jl_excstack_exception(s, s.top) : nothing
+end
+
+# jl_rethrow up to its raise: the top's exception, Julia's ErrorException raised (jl_error, a throw,
+# which pushes) where the stack is empty; the code generator raises it without a push
+# (throw_internal(ct, NULL), src/code_generator.jl visit_rethrow)
+@quarantine pin"julia/src/task.c:801 jl_rethrow" "Julia's rethrow() raises the top of the task's exception stack, or ErrorException where it is empty" Core.ErrorException @noinline function jl_rethrow()::Any
+    local s = jl_current_task_excstack[]
+    (s === nothing || s.top == 0) && Runtime.Error__throw_with_current_stack_trace(ErrorException("rethrow() not allowed outside a catch block"))
+    return jl_excstack_exception(s, s.top)
+end
+
+# jl_rethrow_other up to its raise: the top's exception overwritten with `e`, Julia's ErrorException
+# raised where the stack is empty; the code generator raises it without a push
+@quarantine pin"julia/src/task.c:810 jl_rethrow_other" "Julia's rethrow(e) overwrites the exception on the top of the task's exception stack and raises it, or ErrorException where it is empty" Core.ErrorException @noinline function jl_rethrow_other(@nospecialize(e::Any))::Any
+    local s = jl_current_task_excstack[]
+    (s === nothing || s.top == 0) && Runtime.Error__throw_with_current_stack_trace(ErrorException("rethrow(exc) not allowed outside a catch block"))
+    @inbounds s.raw[s.top] = e
+    return e
 end
 
 # ---- end of Julia's runtime ----

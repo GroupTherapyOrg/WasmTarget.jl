@@ -5134,13 +5134,25 @@ method, Julia having resolved it, so no call is one.
     local b = self.code_gen.b[]
     # Error._throw: the object and its stack trace thrown with the program's exception tag. dart first
     # stores the stack trace in an Error's _stackTrace field where the field is null; Julia's exceptions
-    # have no such field, so the object and the trace are all. Every other intrinsic's dart member has
-    # no runtime port (MemberIntrinsic.fromProcedure), so none reaches here
+    # have no such field, and Julia's throw records the two on the task's exception stack instead (below).
+    # Every other intrinsic's dart member has no runtime port (MemberIntrinsic.fromProcedure), so none
+    # reaches here
     intrinsic === MemberIntrinsic_errorThrow ||
         reject!(Internal("dart2wasm/lib/intrinsics.dart:2943 Intrinsifier.generateMemberIntrinsic: the member intrinsic $intrinsic, whose dart member the runtime does not port"), "$target")
     local object_local = param_locals[1] # ref #Top
     local stack_trace_local = param_locals[2]
     local tag = get_dart_exception_tag(translator(self), b.module_builder)
+    # where dart stores the trace in the Error, Julia's throw pushes the exception and its backtrace
+    # on the task's exception stack before it jumps to the handler (julia/src/task.c:756
+    # throw_internal's jl_push_excstack), which the_exception and rethrow read; a rethrow raises the
+    # top without a push (src/code_generator.jl visit_rethrow), never through here
+    local push = nir_runtime_member(translator(self).component, jl_push_excstack, "$target")
+    local push_inputs = signature_for_direct_call(translator(self), push).inputs
+    WasmBuilder.local_get(b, object_local)
+    convert_type(translator(self), b, object_local.type, push_inputs[1])
+    WasmBuilder.local_get(b, stack_trace_local)
+    convert_type(translator(self), b, stack_trace_local.type, push_inputs[2])
+    call(self.code_gen, push)
     WasmBuilder.local_get(b, object_local)
     convert_type(translator(self), b, object_local.type, tag.type.inputs[1])
     WasmBuilder.local_get(b, stack_trace_local)

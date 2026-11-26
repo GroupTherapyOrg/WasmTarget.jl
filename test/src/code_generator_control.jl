@@ -112,15 +112,15 @@ end
 
 @testset "code_generator.dart: a try/catch, the stackifier's try_table around the call that unwinds to the catch" begin
     # tc's body alone in standalone mode (thr's is not generated), each instruction accepted by the
-    # builder (D10): a BLOCK typed by the exception tag's payload, the try_table catching the tag
-    # into it around the call, an unreachable after the try_table's end; after the block's end the
-    # caught stack trace and exception stashed (dart's visitTryCatch) and Julia's the_exception, narrowed
-    # to E, cast
+    # builder (D10): the enter's record of the exception stack's depth, a BLOCK typed by the exception
+    # tag's payload, the try_table catching the tag into it around the call, an unreachable after the
+    # try_table's end; after the block's end the payload dropped and Julia's the_exception, the top of the
+    # task's exception stack (jl_current_exception), narrowed to E, cast
     local names = generated_instructions(TryGenCases.tc, (Int64,); standalone = true)
     local t = findfirst(==("try_table"), names)
-    @test names[t-2:t] == ["block", "block", "try_table"] && names[t+1:t+2] == ["local.get", "call"]
+    @test names[1:2] == ["call", "local.set"] && names[t-2:t] == ["block", "block", "try_table"] && names[t+1:t+2] == ["local.get", "call"]
     local u = findfirst(==("unreachable"), names)
-    @test names[u-1:u+6] == ["end", "unreachable", "end", "local.set", "local.set", "local.get", "ref.cast", "local.set"]
+    @test names[u-1:u+6] == ["end", "unreachable", "end", "drop", "drop", "call", "ref.cast", "local.set"]
     # nested try regions: the value the inner catch receives, x, through its Upsilon into the PhiC's
     # register, which the catch block reads
     local nn = generated_instructions(TryGenCases.tn, (Int64,); standalone = true)
@@ -129,12 +129,18 @@ end
     local ir = only(Base.code_ircode(TryGenCases.tci, (Int64,)))[1]
     @test [ir.stmts.type[i] for i in 1:length(ir.stmts) if Meta.isexpr(ir.stmts.stmt[i], :the_exception)] == [Int64]
     @test "struct.get" in generated_instructions(TryGenCases.tci, (Int64,); standalone = true)
-    # a try region's entry, exit and pop are the stackifier's structure and emit nothing; its catch's
-    # exception and exception-edge values are read where visit_block translates them, never as statements
+    # a try region's entry and exit are the stackifier's structure: its exit and a scope-only enter emit
+    # nothing, an enter with a catch records the depth of the task's exception stack (jl_excstack_state,
+    # dropped where no pop_exception reads it), and a pop_exception restores the depth its enter's value
+    # holds, so one whose operand is no EnterNode's is WasmTarget's defect; its catch's exception and
+    # exception-edge values are read where visit_block translates them, never as statements
     local g = ready_codegen_of(CodegenCases.f_add, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
-    for st in (W.NirEnter(2, nothing), W.NirLeave(W.NirValue[W.NirSSA(1)]), W.NirPopException(W.NirValue[W.NirSSA(1)]))
+    for st in (W.NirEnter(0, nothing), W.NirLeave(W.NirValue[W.NirSSA(1)]))
         @test isempty(emitted_by(() -> D.translate_statement(g, st, nothing), g))
     end
+    @test emitted_by(() -> D.translate_statement(g, W.NirEnter(2, nothing), nothing), g) == ["call", "drop"]
+    local rp = rejection(() -> D.translate_statement(g, W.NirPopException(W.NirValue[W.NirArgument(2)]), nothing))
+    @test rp.rejection isa W.Internal && occursin("pop_exception", sprint(showerror, rp))
     for st in (W.NirTheException(W.NirValue[]), W.NirUpsilon(W.NirArgument(2)), W.NirPhiC(W.NirValue[W.NirSSA(1)]))
         local r = rejection(() -> D.translate_statement(g, st, W.NirSSA(3)))
         @test r.rejection isa W.Internal && occursin("visit_block", r.rejection.site)
