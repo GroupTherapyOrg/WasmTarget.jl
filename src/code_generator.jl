@@ -2090,6 +2090,10 @@ end
     # holds an address) rejects at the read, located (src/julia/classes.jl memoryref_address_unread)
     local unread = memoryref_address_unread(target)
     unread === nothing || reject!(unread, "$(julia_text(self.enclosing_member))")
+    # a field whose type Julia's inference reads as another than the one it holds (Julia 1.12's TypeName
+    # linearcache) rejects at the read, located (src/julia/classes.jl declared_type_unheld)
+    local unheld = declared_type_unheld(target.cls, target.index)
+    unheld === nothing || reject!(unheld, "$(julia_text(self.enclosing_member))")
     local info = get(self.translator.class_info, target.cls, nothing)
     info === nothing && reject!(Internal("dart2wasm/lib/code_generator.dart:2353 AstCodeGenerator._directGet: no class info for $(target.cls)"), "$(julia_text(self.enclosing_member))")
     local field_index = self.translator.field_index[target]
@@ -2197,6 +2201,10 @@ end
 # (ImplicitFieldAccessorCodeGenerator, its setter arm): the struct, the value at the field's type,
 # struct.set; the value kept where the expression's value is used
 @parity "dart2wasm/lib/code_generator.dart:2477 AstCodeGenerator._directSet" function _direct_set(self::AstCodeGenerator, target::ClassField, receiver::NirValue, value::NirValue; preserved::Bool, use_unchecked_entry::Bool)::WasmBuilder.IR.ValueType
+    # a field whose type Julia's inference reads as another than the one it holds rejects at the write, located,
+    # as _directGet's read does (src/julia/classes.jl declared_type_unheld)
+    local unheld = declared_type_unheld(target.cls, target.index)
+    unheld === nothing || reject!(unheld, "$(julia_text(self.enclosing_member))")
     local info = get(self.translator.class_info, target.cls, nothing)
     info === nothing && reject!(Internal("dart2wasm/lib/code_generator.dart:2477 AstCodeGenerator._directSet: no class info for $(target.cls)"), "$(julia_text(self.enclosing_member))")
     local field_index = self.translator.field_index[target]

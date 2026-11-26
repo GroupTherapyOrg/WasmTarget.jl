@@ -648,7 +648,7 @@ end
 end
 
 # a class met by the walk: itself, its supertype chain, and a concrete non-kind class's field types
-@quarantine "pkg/dart2wasm/lib/class_info.dart:420 ClassInfoCollector._createStructForClass meets a class's supertypes before it; a Julia class's parent is its supertype and its fields' classes Julia's fieldtypes" Base.fieldtypes function _meet_class!(out::Vector{DataType}, seen::Base.IdSet{DataType}, t::DataType, at::String)::Nothing
+@quarantine "pkg/dart2wasm/lib/class_info.dart:420 ClassInfoCollector._createStructForClass meets a class's supertypes before it; a Julia class's parent is its supertype and its fields' classes Julia's field types (class_field_type)" Base.fieldcount function _meet_class!(out::Vector{DataType}, seen::Base.IdSet{DataType}, t::DataType, at::String)::Nothing
     t in seen && return nothing
     push!(seen, t)
     push!(out, t)
@@ -675,7 +675,7 @@ end
         # a memory reference holds its offset and its memory (_memoryref_instance_fields)
         foreach(f -> _meet_value!(out, seen, f.type, at), class_instance_fields(t, at))
     else
-        foreach(f -> _meet_value!(out, seen, f, at), fieldtypes(t))
+        foreach(i -> _meet_value!(out, seen, class_field_type(t, i), at), 1:fieldcount(t))
     end
     return nothing
 end
@@ -826,6 +826,47 @@ primitive class's register: a class it gives one that is no builtin type's."""
     primitive_value_type(translator, cls) !== nothing && !haskey(translator.builtin_types[], cls)
 
 """
+    class_field_type(c, i) -> Type
+
+The type Julia declares for the field `i` of the struct `c`, the type of the values its runtime holds
+there: `fieldtype`, Julia's answer, read from the type's `types` (julia/src/jltypes.c:2945 jl_init_types
+builds a builtin's). For `Core.TypeName`'s `linearcache` the two disagree at the pin: jl_init_types's
+`types` (julia/src/jltypes.c:3019, the entry at :3023) declares it a `Core.MethodCache`, and the fixups
+after it (:3844-3855) reassign other slots but not this one, while the field's storage is
+`_Atomic(jl_svec_t*) linearcache` (julia/src/julia.h:534) and Julia's runtime writes it a SimpleVector
+every time (julia/src/datatype.c:82, julia/src/jltypes.c:1236). The field's type here is the storage's:
+`Core.SimpleVector` where the running Julia declares `Core.MethodCache`, and `fieldtype` wherever the
+declaration is the storage's already. The one source of a field's type for a class's layout
+(`class_instance_fields`), `field_may_be_null` and the class walk (`_meet_class!`).
+
+How Julia 1.12 differs: its inference trusts the declared `Core.MethodCache` (`getfield_tfunc`), so a
+program's read of the field is typed by a class the field never holds; such a read or write rejects,
+located, at the access (`declared_type_unheld`), never the SimpleVector converted to that type.
+"""
+@quarantine pin"julia/src/jltypes.c:2945 jl_init_types" "Julia 1.12's jl_init_types declares TypeName's linearcache a Core.MethodCache (julia/src/jltypes.c:3023) while its storage is a jl_svec_t* (julia/src/julia.h:534) that the runtime writes a SimpleVector (julia/src/datatype.c:82, julia/src/jltypes.c:1236); the field's type is its storage's; Julia differs: its fieldtype answers the declaration" Base.fieldtype function class_field_type(c::DataType, i::Int)::Type
+    local t = fieldtype(c, i)
+    c === Core.TypeName && fieldname(c, i) === :linearcache && t === Core.MethodCache && return Core.SimpleVector
+    return t
+end
+
+"""
+    declared_type_unheld(c, i) -> Union{Rejection,Nothing}
+
+Why a program's access of the field `i` of the struct `c` gives no value of Julia's, or `nothing`: a struct's field whose
+type (`class_field_type`) is not the one the running Julia declares (`fieldtype`), Julia 1.12's
+`Core.TypeName` `linearcache`, which its inference types `Core.MethodCache` (`getfield_tfunc`) while it
+holds a SimpleVector: the typed IR's answer for that read is Julia's unsound one (on 1.12.7,
+`typeof(tn.linearcache) === Core.SimpleVector` folds to false while the value held is one), so the access is Unquarantined, located,
+never the SimpleVector cast to the declared class.
+"""
+@quarantine pin"julia/src/jltypes.c:2945 jl_init_types" "Julia 1.12's inference types an access of TypeName's linearcache by the declared Core.MethodCache (julia/src/jltypes.c:3023), a class the field never holds (julia/src/julia.h:534); WasmTarget holds the SimpleVector, so an access answers no value of Julia's" Base.fieldtype function declared_type_unheld(c::DataType, i::Int)::Union{Rejection,Nothing}
+    1 <= i <= fieldcount(c) || return nothing   # index 0, a field that is not Julia's (ClassField)
+    local declared, held = fieldtype(c, i), class_field_type(c, i)
+    held === declared && return nothing
+    return Unquarantined("src/julia/classes.jl class_field_type: an access of the field $(fieldname(c, i)) of $c, which Julia's inference types $declared, a type the field never holds (it holds $held, julia/src/julia.h:534)")
+end
+
+"""
     class_instance_fields(c, at) -> Vector{ClassField}
 
 dart's `cls.fields.where((f) => f.isInstanceMember)`, a class's own instance fields, Julia's answers:
@@ -872,7 +913,7 @@ allocation may leave undefined whose type admits `nothing`, dart's late lowering
     end
     c <: Core.GenericMemory && return _memory_instance_fields(c, at)
     c <: Core.GenericMemoryRef && return _memoryref_instance_fields(c, at)
-    local fields = ClassField[ClassField(c, i, string(fieldname(c, i)), fieldtype(c, i), ismutabletype(c) && !isconst(c, i)) for i in 1:fieldcount(c)]
+    local fields = ClassField[ClassField(c, i, string(fieldname(c, i)), class_field_type(c, i), ismutabletype(c) && !isconst(c, i)) for i in 1:fieldcount(c)]
     for i in 1:fieldcount(c)
         local flag = class_is_set_field(fields[i])
         flag === nothing || push!(fields, flag)
@@ -909,7 +950,7 @@ the ones every constructor assigns (the trailing `n_uninitialized` of its type's
 `Core.Compiler.datatype_min_ninitialized`) holding a reference (`holds_reference`).
 """
 @quarantine "julia/src/cgutils.cpp:2768 field_may_be_null: a field past n_uninitialized's start holding a reference" Core.Compiler.datatype_min_ninitialized field_may_be_null(c::DataType, i::Int)::Bool =
-    1 <= i <= fieldcount(c) && i > Core.Compiler.datatype_min_ninitialized(c) && holds_reference(fieldtype(c, i))
+    1 <= i <= fieldcount(c) && i > Core.Compiler.datatype_min_ninitialized(c) && holds_reference(class_field_type(c, i))
 
 """
     class_is_set_field(field) -> Union{ClassField,Nothing}
@@ -1326,6 +1367,13 @@ reads it where dart reads TFA's selector ids. A receiver of a concrete type is a
             local k = findfirst(x -> x.name == name, fs)
             local unread = k === nothing ? nothing : memoryref_address_unread(fs[k])
             unread === nothing || reject!(unread, "$(b.ci.def) statement $index")
+        end
+        # a field whose type Julia's inference reads as another than the one it holds rejects at a getter's or a
+        # setter's site, as _directGet and _directSet do (declared_type_unheld)
+        for c in admitted
+            isconcretetype(c) && isstructtype(c) || continue
+            local unheld = declared_type_unheld(c, Base.fieldindex(c, Symbol(name), false))
+            unheld === nothing || reject!(unheld, "$(b.ci.def) statement $index")
         end
         local k = findfirst(e -> e.name == name && e.is_setter == is_setter, out)
         k === nothing && (push!(out, FieldSelectorCalls(name, is_setter, 0, DataType[], FieldAccessSite[])); k = length(out))

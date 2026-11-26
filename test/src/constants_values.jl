@@ -391,7 +391,8 @@ boxed_p8(n::Int64) = (v = Any[n, Core.Intrinsics.bitcast(P8, 0xc8)]; v[2] === p8
 # text is the program's namemap, which the constant's name never reads)
 hue_sum(n::Int64) = (s = Int64(0); for h in instances(Hue); s += Int64(Int(h)) * n; end; s)
 # a TypeName constant: its Ptr fields their registers' literals, then the SimpleVector Julia holds in its
-# `linearcache`, declared Core.MethodCache, refused, located
+# `linearcache`, the field's type by its storage's (src/julia/classes.jl class_field_type, julia/src/julia.h:534), never refused
+# as outside a declared Core.MethodCache
 _rt(x::Int64) = x > 0 ? Int64 : Float64
 typename_bounded(x::Int64) = (r = Base.check_world_bounded(_rt(x).name); r === nothing ? -1 : Int64(first(r) >= 0))
 # a Ptr constant (a mutable's field, read at run time): C_NULL and all ones are values a module holds; a host address
@@ -430,8 +431,10 @@ late_tup(n::Int64) = LATE_TV[n] === Val{late_red} ? 1 : 2
     @test e3 isa WasmTarget.RejectionError && e3.rejection isa WasmTarget.Unquarantined &&
           occursin("a Ptr{Nothing} constant holding the host address 0x1234", e3.rejection.row)
     local e2 = try; WasmTarget.compile(typename_bounded, (Int64,)); nothing; catch x; x; end
-    @test e2 isa WasmTarget.RejectionError && e2.rejection isa WasmTarget.Unquarantined &&
-          occursin("the field linearcache of a Core.TypeName constant holds a Core.SimpleVector, outside its declared type", e2.rejection.row)
+    # its TypeName constants made, the compile goes on to check_world_bounded's binding lookup, a C function
+    # of libjulia's no host supplies, its next gap
+    @test (e2 isa WasmTarget.RejectionError && e2.rejection isa WasmTarget.Unquarantined &&
+           occursin("jl_get_module_binding", e2.rejection.row)) || (@info "typename_bounded" sprint(showerror, e2); false)
     for (f, args) in ((egal_p8, (Int64(0), Int64(1))), (ult_p40, (Int64(1), Int64(3))), (boxed_enum, (Int64(5),)), (boxed_p8, (Int64(0), Int64(2))), (hue_sum, (Int64(3),)),
                        (ptr_null, (Int64(4),)), (ptr_ones, (Int64(4),)), (late_tup, (Int64(1), Int64(2))))
         for a in args

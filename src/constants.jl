@@ -985,9 +985,10 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
             # popped isbits element's bytes, an unfilled slot) holds none, whatever bytes Julia left there
             owner_of(self.constants._constant_accessor[].statics, v, field.name, at)
         elseif isdefined(v, field.index)
-            # a value outside its field's declared type (Julia's TypeName holds a SimpleVector in its
-            # `linearcache`, declared Core.MethodCache): the class's struct holds the declared type, so no
-            # constant of it is made here; rejected, located, never written into a slot it does not fit
+            # a value outside its field's type (src/julia/classes.jl class_field_type, the type Julia's runtime
+            # holds there: Julia 1.12's TypeName linearcache a SimpleVector, julia/src/julia.h:534): the class's struct
+            # holds that type, so no constant of another is made here; rejected, located, never written into a
+            # slot it does not fit
             local held = getfield(v, field.index)
             held isa field.type ||
                 reject!(Unquarantined("src/constants.jl visitInstanceConstant: the field $(field.name) of a $cls constant holds a $(typeof(held)), outside its declared type $(field.type)"), at)
