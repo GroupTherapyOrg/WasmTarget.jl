@@ -469,6 +469,13 @@ formal(dev/formal/TypeParamClasses.tla): where a type value is held, every liste
             # throw_methoderror's arguments, the tuple jl_method_error makes of them (jl_f_tuple), passed
             # as the runtime's open Tuple: the record of their count
             st isa NirCall && nir_callee(st) === Core.throw_methoderror && _meet_value!(out, seen, tuple_record_class(length(st.args) - 2), at)
+            # a DataType's field named at run time (src/code_generator.jl visitInstanceGet) reads its tables
+            # (kind_field_table): `hash`, an Int32, and `flags`, a UInt16, each boxed into the read's open result
+            if st isa NirCall && nir_callee(st) === Core.getfield && length(st.args) >= 3 && !(st.args[3] isa NirConst) &&
+                    let rt = nir_value_type(b, st.args[2]); rt === DataType || Base.isType(rt) && rt.parameters[1] isa DataType end
+                _meet_value!(out, seen, Int32, at)
+                _meet_value!(out, seen, UInt16, at)
+            end
             # a memory builtin on a reference whose type is no concrete GenericMemoryRef checks its
             # operand at run time (builtins.c:1781 jl_f_memoryrefget's JL_TYPECHK, the erased arm of
             # src/intrinsics.jl), raising TypeError with GenericMemoryRef, the type as a value
@@ -1126,6 +1133,102 @@ where dart has one, and Julia's own fields where only Julia has the kind.
     c === UnionAll && return ClassField[nullable, ClassField(c, 1, "var", Any, false), ClassField(c, 2, "body", Any, false)]
     c === Core.TypeofBottom && return ClassField[nullable]
     reject!(Internal("src/julia/classes.jl _kind_instance_fields: $c, no kind of Julia's"), at)
+end
+
+"""
+    KindFieldTable
+
+One of Julia's own fields of a DataType that its type value's layout (`_kind_instance_fields`, dart's
+`_InterfaceType`) does not hold, as a table by class id: `values[id + 1]` the field's value of the class
+`id`'s type value (an element of `type`), and `states[id + 1]` what that entry is: `KIND_ENTRY_SET`
+(the value is Julia's), `KIND_ENTRY_UNDEF` (Julia's #undef, which jl_f_getfield raises UndefRefError
+for) or `KIND_ENTRY_GAP` (a value no constant of the closed world holds, `gap` saying which, the fatal
+arm at its read). `values` is `nothing` where no entry is set (a field whose every entry is a gap).
+formal(dev/formal/KindFieldTable.tla) ReadAgrees, ReadAnswers: the state is kept beside the value, so a
+null value (Julia's `nothing`, Nothing's `instance`) is never read as #undef or a gap as `nothing`.
+"""
+@quarantine pin"julia/src/julia.h:626 jl_datatype_t" "a DataType's fields dart's _InterfaceType does not hold, each a table by class id as dart keeps a per-class runtime fact (pkg/dart2wasm/lib/types.dart:1424 _getTypeNames), its entries' states beside their values" Core.DataType struct KindFieldTable
+    field::Symbol
+    type::Type
+    values::Union{Nothing,Vector{Any}}
+    states::Vector{UInt8}
+    gap::String
+end
+
+@quarantine "julia/src/builtins.c:1023 jl_f_getfield answers a set field's value" Core.UInt8 const KIND_ENTRY_SET = UInt8(1)
+@quarantine "julia/src/builtins.c:1023 jl_f_getfield reads the field by jl_get_nth_field_checked, which raises UndefRefError for a field that is #undef" Core.UInt8 const KIND_ENTRY_UNDEF = UInt8(0)
+@quarantine "a value no constant of the closed world holds ends the program at its read, located, as Julia's runtime ends one it cannot continue (julia/src/init.c:194 jl_exit), the fatal arm (src/intrinsics.jl Val(:fatal))" Core.UInt8 const KIND_ENTRY_GAP = UInt8(2)
+
+"""
+    kind_field_table(translator, i, at) -> KindFieldTable
+
+The table of DataType's field `i`, one of Julia's own (julia/src/julia.h:605-626 jl_datatype_t: name,
+super, parameters, types, instance, layout, hash, flags) that the type value's layout does not hold
+(`_kind_instance_fields` holds `parameters`). Its entries are the classes' in class id order
+(`type_value_entries`, the typeof table's, the one list of the type values the program holds): a class
+with no type value is a gap no read reaches. Each of Julia's fields, by its value in the compiling
+process (each fixed when Julia makes the type; `hash` the compiling process's, as datatype_hash folds it):
+- `super`, a DataType: set where its type value is one the table holds (a class's supertype is a class,
+  closed_world_classes), else a gap. A table, never a field: `Any.super === Any` (julia/src/jltypes.c:2966)
+  would be a constant cycle, which constants refuse (dev/formal/Constants.tla CyclesReject).
+- `types`, a SimpleVector of the field types: #undef where Julia has not computed it, set where every
+  element is a value a constant holds (`_kind_value_held`), else a gap.
+- `instance`, a singleton's one value: #undef for every other type; set where its class is one a constant
+  of is made (a singleton has no fields), else a gap.
+- `hash` (Int32) and `flags` (UInt16): bits, always set.
+- `name`, Julia's TypeName (julia.h jl_typename_t), and `layout`, a host address (`const
+  jl_datatype_layout_t *`): every entry a gap. No TypeName is a class of the closed world (its layout,
+  with Julia's method caches, is not ported) and a WasmGC module has no addresses.
+"""
+@quarantine pin"julia/src/julia.h:626 jl_datatype_t" "a DataType's own fields in the compiling process, each by its class's type value, its #undef kept as Julia's" Core.DataType function kind_field_table(translator, i::Int, at::String)::KindFieldTable
+    local f = fieldname(DataType, i)
+    local entries = type_value_entries(translator)
+    local held = Base.IdSet{DataType}(e for e in entries if e !== nothing)
+    local n = length(entries)
+    f in (:name, :layout) && return KindFieldTable(f, fieldtype(DataType, i), nothing, fill(KIND_ENTRY_GAP, n),
+        f === :name ? "julia/src/julia.h jl_typename_t: a DataType's name, a TypeName, which no class of the closed world holds (its layout, with Julia's method caches, is not ported)" :
+                      "julia/src/julia.h:611 jl_datatype_t.layout: a host address, which a WasmGC module does not have")
+    f in (:super, :types, :instance, :hash, :flags) ||
+        reject!(Internal("src/julia/classes.jl kind_field_table: DataType's field $f, which the type value's layout holds or Julia does not have"), at)
+    local type = f === :super ? Union{Nothing,DataType} : f === :types ? Union{Nothing,Core.SimpleVector} :
+                 f === :instance ? Any : fieldtype(DataType, i)
+    local values = Vector{Any}(undef, n)
+    local states = Vector{UInt8}(undef, n)
+    for (k, e) in enumerate(entries)
+        local (state, value) = if e === nothing
+            (KIND_ENTRY_GAP, nothing)
+        elseif !isdefined(e, f)
+            (KIND_ENTRY_UNDEF, nothing)
+        else
+            local v = getfield(e, f)
+            local ok = f === :super ? v in held :
+                       f === :types ? constant_unmade(translator, Core.SimpleVector) === nothing && all(x -> _kind_value_held(translator, held, x), v) :
+                       f === :instance ? constant_unmade(translator, typeof(v)) === nothing && fieldcount(typeof(v)) == 0 :
+                       true
+            ok ? (KIND_ENTRY_SET, v) : (KIND_ENTRY_GAP, nothing)
+        end
+        states[k] = state
+        # an entry that is not set holds no value of Julia's: its state is read first and raises or ends the
+        # program; a bits table's slot is its type's zero, the reference tables' the null, neither ever read
+        values[k] = state == KIND_ENTRY_SET ? value : isbitstype(type) ? zero(type) : nothing
+    end
+    local gap = "julia/src/julia.h:605 jl_datatype_t.$f of a type whose value there no constant of the closed world holds"
+    return KindFieldTable(f, type, values, states, gap)
+end
+
+# whether a constant of the closed world holds `x`, an element of a type value's `types`: a type value of
+# the table (`held`), a Union or UnionAll of held ones where its kind is a class, Union{}; else a value of a
+# class a constant of is made (constant_unmade, the one source)
+@quarantine "dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant makes a constant of a class the closed world holds; a type value's, the typeof table's" Core.typeof function _kind_value_held(translator, held::Base.IdSet{DataType}, @nospecialize(x))::Bool
+    x === Union{} && return true
+    x isa DataType && return x in held
+    x isa Union && return constant_unmade(translator, Union) === nothing &&
+        _kind_value_held(translator, held, x.a) && _kind_value_held(translator, held, x.b)
+    x isa UnionAll && return constant_unmade(translator, UnionAll) === nothing && constant_unmade(translator, TypeVar) === nothing &&
+        _kind_value_held(translator, held, x.var.lb) && _kind_value_held(translator, held, x.var.ub) &&
+        _kind_value_held(translator, held, x.body)
+    x isa TypeVar && return false
+    return constant_unmade(translator, typeof(x)) === nothing
 end
 
 """

@@ -59,12 +59,12 @@ end
     @test R.by_index(1) == 1 && R.by_index(2) == 1000 && R.by_index(3) == 2001 && R.by_index(4) == -9 && R.by_index(0) == -9
     @test R.undef_read(3) == -1 && R.undef_read(-3) == 1 && R.no_fields(1) == 7 && R.tuple_name(3) == 5
     # run by node, each arm and each raise answers as native Julia
-    for (f, xs) in ((R.by_name, Int64[3, 1, 0, -6]), (R.by_index, Int64[1, 2, 3, 4, 0, -1]), (R.undef_read, Int64[3, -3]), (R.no_fields, Int64[1]), (R.tuple_name, Int64[3]))
+    # a DataType's fields its type value's layout does not hold are read from their tables by class id
+    # (src/julia/classes.jl kind_field_table): `hash` and `flags` answer as native (test/src/kind_field_table.jl reads the rest)
+    for (f, xs) in ((R.by_name, Int64[3, 1, 0, -6]), (R.by_index, Int64[1, 2, 3, 4, 0, -1]), (R.undef_read, Int64[3, -3]), (R.no_fields, Int64[1]), (R.tuple_name, Int64[3]),
+                    (R.of_dt, Int64[3, 1]))
         queue_native!("$(nameof(f)) ", W.compile(f, (Int,); optimize = false), f, [(x,) for x in xs])
     end
-    # a DataType's layout holds dart's runtime type fields, not all of Julia's: the rest are named, located
-    local e = rejection(() -> W.compile(R.of_dt, (Int,)))
-    @test e !== nothing && e.rejection isa W.Unquarantined && occursin("the fields name, super, types, instance, layout, hash, flags of DataType", e.rejection.row)
     # a Module's getfield is jl_f_getglobal, a binding: located
     local m = rejection(() -> W.compile(R.of_module, (Int,)))
     @test m !== nothing && m.rejection isa W.Unquarantined && occursin("a field of Module named at run time, which Julia reads as the module's global binding", m.rejection.row)

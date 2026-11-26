@@ -2067,13 +2067,16 @@ end
         reject!(Unquarantined("src/code_generator.jl visitInstanceGet: a field of $cls named at run time"), where_)
     length(node.args) == 4 && dart_type_of(self, node.args[4]) !== Bool &&
         reject!(Unquarantined("src/code_generator.jl visitInstanceGet: a field of $cls named at run time with a memory order, jl_f_getfield's atomic check (julia/src/builtins.c:1045)"), where_)
-    # Julia's fields in Julia's order (jl_field_names), each the field of the class's layout at its index
+    # Julia's fields in Julia's order (jl_field_names), each the field of the class's layout at its index;
+    # a DataType's field its type value's layout does not hold (dart's _InterfaceType's) is its table by
+    # class id (src/julia/classes.jl kind_field_table, formal(dev/formal/KindFieldTable.tla))
     local layout = class_instance_fields(cls, at)
-    local fields = ClassField[]
+    local fields = Union{ClassField,KindFieldTable}[]
     local unheld = Symbol[]
     for i in (tuple ? (1:0) : 1:fieldcount(cls))
         local k = findfirst(f -> f.index == i, layout)
-        k === nothing ? push!(unheld, fieldname(cls, i)) : push!(fields, layout[k])
+        k !== nothing ? push!(fields, layout[k]) : cls === DataType ? push!(fields, kind_field_table(t, i, where_)) :
+            push!(unheld, fieldname(cls, i))
     end
     isempty(unheld) ||
         reject!(Unquarantined("src/julia/classes.jl: the fields $(join(unheld, ", ")) of $cls, which its class layout (a kind's runtime type layout) does not hold, named at run time"), where_)
@@ -2081,7 +2084,8 @@ end
     why === nothing ||
         reject!(Unquarantined("src/julia/classes.jl type_value_unmade: a field of $cls named at run time, whose type value has no constant for Julia's FieldError ($(something(why)))"), where_)
     local b = self.b[]
-    local result = isempty(fields) ? t.top_type[] : translate_type(t, Union{Any[f.type for f in fields]...})
+    local index_of(f::Union{ClassField,KindFieldTable})::Int = f isa ClassField ? f.index : Base.fieldindex(DataType, f.field)
+    local result = isempty(fields) ? t.top_type[] : translate_type(t, Union{Any[f isa ClassField ? f.type : fieldtype(DataType, index_of(f)) for f in fields]...})
     local key_type = translate_type(t, K)
     local key = add_local(self, key_type)
     translate_expression(self, node.args[3], key_type)
@@ -2091,17 +2095,73 @@ end
         local miss = WasmBuilder.block(b)
         WasmBuilder.local_get(b, key)
         if K === Symbol
-            translate_expression(self, NirConst(Core.Const(fieldname(cls, f.index))), key_type)
+            translate_expression(self, NirConst(Core.Const(fieldname(cls, index_of(f)))), key_type)
             WasmBuilder.ref_eq(b)
         else
-            WasmBuilder.i64_const(b, f.index)
+            WasmBuilder.i64_const(b, index_of(f))
             WasmBuilder.i64_eq(b)
         end
         WasmBuilder.i32_eqz(b)
         WasmBuilder.br_if(b, miss)
-        local got = _direct_get(self, f, receiver)
-        convert_type(t, b, got, result; boxed_class = f.type isa DataType ? f.type : nothing)
-        WasmBuilder.br(b, done)
+        if f isa ClassField
+            local got = _direct_get(self, f, receiver)
+            convert_type(t, b, got, result; boxed_class = f.type isa DataType ? f.type : nothing)
+            WasmBuilder.br(b, done)
+        else
+            # the receiver's class id, the entry of each table: its state (jl_get_nth_field_checked's #undef
+            # raises UndefRefError; a gap is the fatal arm, located), then its value
+            local info = get(t.class_info, DataType, nothing)
+            info === nothing && reject!(Internal("$at: a field of DataType named at run time where DataType has no class info"), where_)
+            local id_field = only(c for c in class_instance_fields(DataType, at) if c.name == "classId")
+            local class_id()::Nothing = (translate_expression(self, receiver, info.non_nullable_type);
+                                         WasmBuilder.struct_get(b, info.struct_, t.field_index[id_field]); nothing)
+            local site = "$where_ (at run time, $(generate_static_intrinsic(self.intrinsifier[], Val(:statement_location), node)))"
+            local fatal()::Nothing = generate_static_intrinsic(self.intrinsifier[], Val(:fatal), Unquarantined(f.gap), site)
+            local table(T::Type, entries::Vector{NirConst})::WasmBuilder.IR.ArrayType = begin
+                local array_type = array_type_for_dart_type(t, T; mutable_ = true)
+                instantiate_constant(t.constants[], b, make_array_of(t.constants[], T, entries),
+                    WasmBuilder.IR.RefType_def(array_type; nullable = false))
+                class_id()
+                array_type
+            end
+            # an entry of a table, its element read as its storage holds it (a packed one zero-extended)
+            local entry(array_type::WasmBuilder.IR.ArrayType)::WasmBuilder.IR.ValueType = begin
+                local storage = array_type.element_type[].type
+                storage isa WasmBuilder.IR.PackedType ? WasmBuilder.array_get_u(b, array_type) : WasmBuilder.array_get(b, array_type)
+                WasmBuilder.unpacked(storage)
+            end
+            if f.values === nothing
+                fatal()
+            else
+                local undef = KIND_ENTRY_UNDEF in f.states
+                local gap = KIND_ENTRY_GAP in f.states
+                if undef || gap
+                    local state = add_local(self, WasmBuilder.IR.NumType_i32)
+                    # the states as dart's class-id tables hold their integers, a WasmI32 each (types.dart:1209)
+                    entry(table(WasmI32, NirConst[make_wasm_i32(t.constants[], Int(x)) for x in f.states]))
+                    WasmBuilder.local_set(b, state)
+                    if undef
+                        WasmBuilder.local_get(b, state)
+                        WasmBuilder.i32_const(b, Int(KIND_ENTRY_UNDEF))
+                        WasmBuilder.i32_eq(b)
+                        WasmBuilder.if_(b)
+                        call(self, nir_runtime_member(t.component, throw_undef_ref_error, "$where_: a read of DataType.$(f.field)"))
+                        WasmBuilder.unreachable(b)
+                        WasmBuilder.var"end"(b)
+                    end
+                    if gap
+                        WasmBuilder.local_get(b, state)
+                        WasmBuilder.i32_const(b, Int(KIND_ENTRY_GAP))
+                        WasmBuilder.i32_eq(b)
+                        WasmBuilder.if_(b)
+                        fatal()
+                        WasmBuilder.var"end"(b)
+                    end
+                end
+                convert_type(t, b, entry(table(f.type, NirConst[NirConst(Core.Const(v)) for v in f.values])), result; boxed_class = f.type isa DataType ? f.type : nothing)
+                WasmBuilder.br(b, done)
+            end
+        end
         WasmBuilder.var"end"(b)
     end
     if K === Symbol
