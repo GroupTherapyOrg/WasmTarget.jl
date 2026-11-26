@@ -967,7 +967,7 @@ end
             NirTheException => reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: Julia's Expr(:the_exception), a statement visit_block translates, as a value"), "$(julia_text(self.enclosing_member))")
             NirThrowUndefIfNot => reject!(Unquarantined("src/julia: Julia's Expr(:throw_undef_if_not)"), "$(julia_text(self.enclosing_member))")
             NirCFunction => reject!(Unquarantined("src/julia: Julia's Expr(:cfunction), a quarantined host import (dev/MARCH.md 1.F)"), "$(julia_text(self.enclosing_member))")
-            NirInvokeModify => reject!(Unquarantined("src/julia: Julia's Expr(:invoke_modify)"), "$(julia_text(self.enclosing_member))")
+            (m::NirInvokeModify) => visit_instance_set(self, m, expected_type)
             NirPhi => reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: Julia's PhiNode as a value, which visit_block reads from its incoming register"), "$(julia_text(self.enclosing_member))")
             NirPhiC => reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: Julia's PhiCNode, a statement visit_block translates, as a value"), "$(julia_text(self.enclosing_member))")
             NirEnter => reject!(Internal("dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression: Julia's EnterNode, a try region visit_block opens as a try_table, as a value"), "$(julia_text(self.enclosing_member))")
@@ -1097,7 +1097,7 @@ map.
             WasmBuilder.unreachable(b)
             WasmBuilder.var"end"(b)
         end
-        (s::NirInvokeModify) => reject!(Unquarantined("src/code_generator.jl visitInstanceSet: an atomic field modify (modifyfield!), its read, call and write"), at)
+        (s::NirInvokeModify) => variable === nothing ? (visit_instance_set(self, s, void_marker(self)); nothing) : translate_variable_declaration(self, variable)
         (s::NirGoto) => reject!(Internal("$at: a jump of the flat IR, which the stackifier's BR carries (visit_block), as a statement"), at)
         (s::NirGotoIfNot) => reject!(Internal("$at: a conditional jump of the flat IR, which the stackifier's BR_IF or BR_UNLESS carries (visit_block), as a statement"), at)
         # Julia's codegen emits a trap where Julia proved the code unreachable
@@ -2608,6 +2608,119 @@ end
     translate_expression(self, NirConst(Core.Const(msg)), translate_type(self.translator, String))
     call(self, nir_runtime_member(self.translator.component, raiser, "$(julia_text(self.enclosing_member)): Julia's setfield!"))
     WasmBuilder.unreachable(self.b[])
+    return expected_type
+end
+
+# modifyfield!(x, f, op, v, order) resolved by Julia's optimizer, Expr(:invoke_modify, target, modifyfield!, x, f, op, v,
+# order), as Julia's codegen emits it (julia/src/codegen.cpp:5422 emit_invoke_modify, its emit_f_opfield arm for
+# modifyfield!, :3728): the order, read as jl_get_atomic_order reads a load and a store (julia/src/builtins.c:950; an
+# invalid one "invalid atomic ordering"), then a name compile time knows that is one of Julia's fields, of a type free
+# of type variables, codegen's own arm (:3776-3827): the atomic ordering, the immutable struct and the const field, in
+# that order, each raising its message, then the modify (julia/src/cgutils.cpp:4028 union_store's modify, the
+# non-atomic arm, every atomic access plain): load the field, call the operator's instance Julia resolved (`target`,
+# emit_invoke) on the old value and v, check its result has the field's type (emit_typecheck, "modifyfield!"), load
+# the field again and store the result where it is still egal to the old (emit_f_is), else again from the load (the
+# operator may have written it); the value Pair{T,T}(old, new) (jl_apply_modify_type, julia/src/jltypes.c:1497).
+# Every other modify rejects, located: a name, an order or a receiver class only run time knows (jl_f_modifyfield's
+# run-time arm), an operator that carries data, a result type that is not the field's, and a field whose egal compare
+# is not a primitive's bits
+@parity "dart2wasm/lib/code_generator.dart:2434 AstCodeGenerator.visitInstanceSet" function visit_instance_set(self::AstCodeGenerator, node::NirInvokeModify, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    local where_ = "$(julia_text(self.enclosing_member))"
+    local t = self.translator
+    local b = self.b[]
+    local gap(why::String) = reject!(Unquarantined("src/code_generator.jl visitInstanceSet: an atomic field modify (modifyfield!) $why"), where_)
+    length(node.args) == 6 || gap("of $(length(node.args) - 1) operands")
+    local fop, receiver, name, op, v, ord = node.args
+    local callee = fop isa NirConst ? fop.c.val : fop isa NirGlobal && nir_binding_is_constant(fop.binding) ? fop.binding.value : nothing
+    callee === Core.modifyfield! || gap("of the callee $callee, not modifyfield!")
+    local cls = dart_type_of(self, receiver)
+    cls isa DataType && isconcretetype(cls) || gap("on a receiver of $cls, whose class only run time knows")
+    name isa NirConst && name.c.val isa Union{Symbol,Int} || gap("of a field named at run time")
+    ord isa NirConst && ord.c.val isa Symbol || gap("with an order only run time knows")
+    # jl_get_atomic_order(order, loading = 1, storing = 1)
+    local s = ord.c.val
+    local order = s === :not_atomic ? :notatomic : s in (:monotonic, :acquire_release, :sequentially_consistent) ? :atomic : :invalid
+    order === :invalid && return visit_instance_set(self, throw_atomic_error, "invalid atomic ordering", expected_type)
+    local key = name.c.val
+    local idx = key isa Symbol ? something(Base.fieldindex(cls, key, false), 0) : 1 <= key <= fieldcount(cls) ? key : 0
+    idx != 0 && !Base.has_free_typevars(fieldtype(cls, idx)) || gap("of the field $key of $cls, which jl_f_modifyfield finds at run time")
+    local isatomic = Base.isfieldatomic(cls, idx)
+    isatomic == (order === :notatomic) &&
+        return visit_instance_set(self, throw_atomic_error, isatomic ? "modifyfield!: atomic field cannot be written non-atomically" : "modifyfield!: non-atomic field cannot be written atomically", expected_type)
+    ismutabletype(cls) || return visit_instance_set(self, jl_error, "modifyfield!: immutable struct of type $(cls.name.name) cannot be changed", expected_type)
+    isconst(cls, idx) && return visit_instance_set(self, jl_error, "modifyfield!: const field .$(fieldname(cls, idx)) of type $(cls.name.name) cannot be changed", expected_type)
+    local fields = class_instance_fields(cls, where_)
+    local k = findfirst(f -> f.index == idx, fields)
+    k === nothing && reject!(Internal("src/code_generator.jl visitInstanceSet: the field $key of $cls, which its class layout does not hold"), where_)
+    local f = fields[k]
+    local info = get(t.class_info, cls, nothing)
+    info === nothing && reject!(Internal("src/code_generator.jl visitInstanceSet: no class info for $cls"), where_)
+    local field_index = t.field_index[f]
+    local storage = info.struct_.fields[field_index + 1].type
+    local field_type = WasmBuilder.unpacked(storage)
+    # emit_f_is of two values of the field's type: a primitive's bits (an integer register's eq)
+    local ft = f.type
+    (ft isa DataType && isprimitivetype(ft) && field_type in (WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64)) ||
+        gap("of a field of $ft, whose egal compare after the operator is not ported here (julia/src/codegen.cpp emit_f_is)")
+    local target = node.target isa Core.CodeInstance ? node.target.def : node.target
+    target isa Core.MethodInstance || gap("whose operator is a $(typeof(target))")
+    nir_carries_data(dart_type_of(self, op)) && gap("whose operator $(dart_type_of(self, op)) carries data")
+    local rt = type_of_return_value(t, target)
+    rt <: ft || gap("whose operator returns $rt, not the field's $ft (emit_typecheck's TypeError, not ported here)")
+    local signature = signature_for_direct_call(t, target)
+    length(signature.inputs) == 2 || gap("whose operator takes $(length(signature.inputs)) parameters, not the old value and v")
+    local load(r::WasmBuilder.IR.Local) = begin
+        WasmBuilder.local_get(b, r)
+        if storage isa WasmBuilder.IR.PackedType
+            ft <: Signed ? WasmBuilder.struct_get_s(b, info.struct_, field_index) : WasmBuilder.struct_get_u(b, info.struct_, field_index)
+        else
+            WasmBuilder.struct_get(b, info.struct_, field_index)
+        end
+    end
+    local r = add_local(self, info.non_nullable_type)
+    translate_expression(self, receiver, info.non_nullable_type)
+    WasmBuilder.local_set(b, r)
+    local x = add_local(self, signature.inputs[2])
+    translate_expression(self, v, signature.inputs[2])
+    WasmBuilder.local_set(b, x)
+    local old, new = add_local(self, field_type), add_local(self, field_type)
+    local done = WasmBuilder.block(b)
+    local retry = WasmBuilder.loop(b)
+    load(r)
+    WasmBuilder.local_set(b, old)
+    WasmBuilder.local_get(b, old)
+    convert_type(t, b, field_type, signature.inputs[1])
+    WasmBuilder.local_get(b, x)
+    local result = output_or_void(t, call(self, target))
+    convert_type(t, b, result, field_type)
+    WasmBuilder.local_set(b, new)
+    # the field again, stored where it is still the old value
+    load(r)
+    WasmBuilder.local_get(b, old)
+    field_type == WasmBuilder.IR.NumType_i64 ? WasmBuilder.i64_eq(b) : WasmBuilder.i32_eq(b)
+    WasmBuilder.if_(b)
+    WasmBuilder.local_get(b, r)
+    WasmBuilder.local_get(b, new)
+    WasmBuilder.struct_set(b, info.struct_, field_index)
+    WasmBuilder.br(b, done)
+    WasmBuilder.var"end"(b)
+    WasmBuilder.br(b, retry)
+    WasmBuilder.var"end"(b)
+    WasmBuilder.var"end"(b)
+    expected_type == void_marker(self) && return expected_type
+    # Pair{T,T}(old, new), jl_apply_modify_type's
+    local P = Pair{ft,ft}
+    local pinfo = get(t.class_info, P, nothing)
+    pinfo === nothing && reject!(Internal("src/code_generator.jl visitInstanceSet: no class info for $P, the modify's value"), where_)
+    local pfields = class_instance_fields(P, where_)
+    record_class_allocation(t.functions[], class_id(pinfo))
+    push_object_header_fields(b, t, pinfo)
+    for (pf, l) in zip(pfields, (old, new))
+        WasmBuilder.local_get(b, l)
+        convert_type(t, b, l.type, WasmBuilder.unpacked(pinfo.struct_.fields[t.field_index[pf] + 1].type))
+    end
+    WasmBuilder.struct_new(b, pinfo.struct_)
+    convert_type(t, b, pinfo.non_nullable_type, expected_type)
     return expected_type
 end
 
