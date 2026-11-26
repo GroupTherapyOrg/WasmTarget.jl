@@ -160,7 +160,7 @@ precedent(rust: a crate's `use` of an external crate's type, one path naming it;
 Julia's differs: dart2wasm's Kernel is Julia's own compiler, so each Kernel type is a Julia type,
 a NIR kind, or none.
 """
-@quarantine "Julia's compiler is dart's Kernel: each Kernel type dart2wasm names has one Julia counterpart, or none" Base.Pair const KERNEL_TYPES = (
+@quarantine pin"pkg/kernel/lib/src/ast/misc.dart:8 Node" "Julia's compiler is dart's Kernel: each Kernel type dart2wasm names, a Node of Kernel's AST (pkg/kernel/lib/src/ast/misc.dart:8 Node), has one Julia counterpart, or none" Base.Pair const KERNEL_TYPES = (
     ("kernel/lib/ast.dart", "Class") => ("DataType", "a class is a Julia type, by identity (the lead's ruling)"),
     ("kernel/lib/ast.dart", "Library") => ("Module", "a library is a Julia module, its namespace"),
     ("kernel/lib/ast.dart", "Component") => ("NirWorld", "the program is the closed world in NIR, which build_nir alone makes from a ClosedWorld (the lead's ruling)"),
@@ -190,10 +190,10 @@ a NIR kind, or none.
     ("kernel/lib/ast.dart", "MetadataRepository") => ("NoCounterpart", "no counterpart: Kernel's serialization and side tables; Julia's inference results are the program"),
     ("kernel/lib/ast.dart", "BinarySink") => ("NoCounterpart", "no counterpart: Kernel's serialization and side tables; Julia's inference results are the program"),
     ("kernel/lib/ast.dart", "BinarySource") => ("NoCounterpart", "no counterpart: Kernel's serialization and side tables; Julia's inference results are the program"),
-    ("kernel/lib/ast.dart", "AsyncMarker") => ("NoCounterpart", "no counterpart: tasks are out of scope, Julia's verifier rejects them (1.F)"),
-    ("kernel/lib/ast.dart", "AwaitExpression") => ("NoCounterpart", "no counterpart: tasks are out of scope, Julia's verifier rejects them (1.F)"),
-    ("kernel/lib/ast.dart", "YieldStatement") => ("NoCounterpart", "no counterpart: tasks are out of scope, Julia's verifier rejects them (1.F)"),
-    ("kernel/lib/ast.dart", "FutureOrType") => ("NoCounterpart", "no counterpart: tasks are out of scope, Julia's verifier rejects them (1.F)"),
+    ("kernel/lib/ast.dart", "AsyncMarker") => ("NoCounterpart", "no counterpart: a Julia Task is a foreign call, ccall(:jl_new_task) (julia/base/boot.jl:578), which WasmTarget refuses at its foreign-call gap (nir_foreign_import), not Julia's verifier, whose ccall denylist is :jl_apply alone (Compiler/src/verifytrim.jl:44)"),
+    ("kernel/lib/ast.dart", "AwaitExpression") => ("NoCounterpart", "no counterpart: a Julia Task is a foreign call, ccall(:jl_new_task) (julia/base/boot.jl:578), which WasmTarget refuses at its foreign-call gap (nir_foreign_import), not Julia's verifier, whose ccall denylist is :jl_apply alone (Compiler/src/verifytrim.jl:44)"),
+    ("kernel/lib/ast.dart", "YieldStatement") => ("NoCounterpart", "no counterpart: a Julia Task is a foreign call, ccall(:jl_new_task) (julia/base/boot.jl:578), which WasmTarget refuses at its foreign-call gap (nir_foreign_import), not Julia's verifier, whose ccall denylist is :jl_apply alone (Compiler/src/verifytrim.jl:44)"),
+    ("kernel/lib/ast.dart", "FutureOrType") => ("NoCounterpart", "no counterpart: a Julia Task is a foreign call, ccall(:jl_new_task) (julia/base/boot.jl:578), which WasmTarget refuses at its foreign-call gap (nir_foreign_import), not Julia's verifier, whose ccall denylist is :jl_apply alone (Compiler/src/verifytrim.jl:44)"),
     ("kernel/lib/ast.dart", "LoadLibrary") => ("NoCounterpart", "no counterpart: deferred loading is out of scope (dev/PARITY_MASTER.md)"),
     ("kernel/lib/ast.dart", "CheckLibraryIsLoaded") => ("NoCounterpart", "no counterpart: deferred loading is out of scope (dev/PARITY_MASTER.md)"),
     ("kernel/lib/ast.dart", "DartType") => ("Union{Type,TypeVar}", "a dart type is a Julia type, or a type parameter's TypeVar (revised: TypeParameterType is TypeVar, the lead's ruling)"),

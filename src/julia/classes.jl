@@ -443,13 +443,11 @@ formal(dev/formal/TypeParamClasses.tla): where a type value is held, every liste
             # a binding read as a statement of its own (Kernel's StaticGet) starts at its value, the
             # constant its lazy initializer instantiates (StaticFieldInitializerCodeGenerator): its
             # object graph, as an operand's; the statement's type is met with b.types. A binding with no value
-            # has none: its initializer instantiates the binding's name and module, the UndefVarError it raises
+            # has none: its initializer instantiates the binding's name and module, the UndefVarError it
+            # raises (nir_binding_initializer, the one list)
             if st isa NirGlobalRead
-                if st.binding.defined
-                    _meet_constant!(out, seen, objs, nir_binding_value(st.binding, at).c.val, at)
-                else
-                    _meet_constant!(out, seen, objs, st.binding.ref.name, at)
-                    _meet_constant!(out, seen, objs, st.binding.ref.mod, at)
+                for c in nir_binding_initializer(st.binding, at)
+                    _meet_constant!(out, seen, objs, c, at)
                 end
             end
             # a tuple's class is its operands' (nir_tuple_type), which the statement's widened type

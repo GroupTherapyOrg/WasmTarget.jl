@@ -71,7 +71,6 @@ julia/interpreter.jl infer_closed_world
 julia/kernel.jl FieldReference
 julia/kernel.jl FieldReferenceKind,FieldReferenceKind_getter,FieldReferenceKind_setter,FieldReferenceKind_initializer
 julia/kernel.jl InstanceConstant
-julia/kernel.jl KERNEL_TYPES
 julia/kernel.jl NoCounterpart
 julia/kernel.jl no_counterpart_rejection
 julia/late.jl Late

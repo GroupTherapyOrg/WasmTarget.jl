@@ -862,6 +862,22 @@ juliac image holds it.
     return NirConst(Core.Const(value))
 end
 
+"""
+    nir_binding_initializer(binding, at) -> Vector{Any}
+
+The constants a binding's lazy initializer instantiates (src/code_generator.jl
+StaticFieldInitializerCodeGenerator), the one list of them, which the class meet of a binding read as a
+statement (src/julia/classes.jl) reads too: its session value (nir_binding_value) where it has one; for a
+binding declared with no value (`global x::T`), the name and the module of the UndefVarError its read
+raises before any write (julia/src/codegen.cpp:5587 emit_checked_var, julia/src/cgutils.cpp:1596
+undef_var_error_ifnot, the runtime's jl_undefined_var_error), in that order.
+"""
+@quarantine pin"julia/src/cgutils.cpp:1596 undef_var_error_ifnot" "a binding with no value is read as Julia's codegen reads it, raising UndefVarError of the GlobalRef's name in its module (julia/src/cgutils.cpp:1596 undef_var_error_ifnot); its initializer instantiates those two" Core.GlobalRef function nir_binding_initializer(binding::NirBinding, at::String)::Vector{Any}
+    binding.defined && return Any[nir_binding_value(binding, at).c.val]
+    local ref::GlobalRef = binding.ref
+    return Any[ref.name, ref.mod]
+end
+
 # One analysis of the runtime's initializers (runtime_init_bindings: the bindings they touch, the const objects among
 # them they pass to a call that may write, each with the first initializer whose closed world does so) and what Julia
 # says it rests on: the world it was inferred at, the initializers that world holds, every CodeInstance their closed

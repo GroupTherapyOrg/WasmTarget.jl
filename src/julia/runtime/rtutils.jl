@@ -30,6 +30,12 @@
 @quarantine "julia/src/rtutils.c:181 jl_atomic_error raises ConcurrencyViolationError with codegen's message" Core.ConcurrencyViolationError @noinline throw_atomic_error(msg::String)::Union{} =
     Runtime.Error__throw_with_current_stack_trace(ConcurrencyViolationError(msg))
 
+# jl_error (julia/src/rtutils.c:35), which the builtins raise where Julia's runtime refuses an operation
+# with a message (jl_errorf, :73; get_checked_fieldindex's refusals of a write, julia/src/builtins.c:999):
+# ErrorException of the message
+@quarantine pin"julia/src/rtutils.c:35 jl_error" "Julia's runtime raises ErrorException with the message of a refused operation" Core.ErrorException @noinline jl_error(msg::String)::Union{} =
+    Runtime.Error__throw_with_current_stack_trace(ErrorException(msg))
+
 # jl_undefref_exception, raised where an undefined field or array element is read (rtutils.c)
 @quarantine "Julia's runtime raises UndefRefError where an undefined reference is read" Core.UndefRefError @noinline throw_undef_ref_error()::Union{} =
     Runtime.Error__throw_with_current_stack_trace(UndefRefError())
