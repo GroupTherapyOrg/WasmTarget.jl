@@ -25,18 +25,7 @@ isop(n::Int64) = (c = Char(n);
 strip3(n::Int64) = ncodeunits(strip(n > 0 ? "  a　b ﻿ " : " x\t"))   # strip of Unicode space
 end
 
-# the pinned utf8proc_data.c's table `decl`, its entries in order, each token as it stands
-function pinned_entries(lines::Vector{String}, decl::String)::Vector{String}
-    local i = findfirst(==(decl), lines)
-    @test i !== nothing
-    local out = String[]
-    while true
-        i += 1
-        local l = lines[i]
-        append!(out, filter(!isempty, strip.(split(replace(l, "};" => ""), ','))))
-        endswith(rstrip(l), "};") && return out
-    end
-end
+include(joinpath(@__DIR__, "..", "pinned_tables.jl"))
 
 @testset "utf8proc's tables are the pinned file's, entry for entry" begin
     local dir = WasmTarget._c_pin_checkout(:utf8proc)

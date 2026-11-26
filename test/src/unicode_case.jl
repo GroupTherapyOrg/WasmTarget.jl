@@ -21,18 +21,7 @@ upstr(x::Int64) = (s = uppercase(x > 0 ? "straße λǆ ﬀ" : "x"); Int64(sum(co
 lowstr(x::Int64) = (s = lowercase(x > 0 ? "ΣΑΣ ǅ İ" : "X"); Int64(sum(codeunits(s))) * 1000 + ncodeunits(s))
 end
 
-# the pinned utf8proc_data.c's table `decl`, its entries in order, each token as it stands
-function pinned_entries(lines::Vector{String}, decl::String)::Vector{String}
-    local i = findfirst(==(decl), lines)
-    @test i !== nothing
-    local out = String[]
-    while true
-        i += 1
-        local l = lines[i]
-        append!(out, filter(!isempty, strip.(split(replace(l, "};" => ""), ','))))
-        endswith(rstrip(l), "};") && return out
-    end
-end
+include(joinpath(@__DIR__, "..", "pinned_tables.jl"))
 
 @testset "utf8proc's sequence table and property columns are the pinned file's, entry for entry" begin
     local dir = W._c_pin_checkout(:utf8proc)
