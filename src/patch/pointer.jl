@@ -11,7 +11,16 @@
 # - two of distinct data arrays, unequal: dart's two buffers are equal only when their data arrays are one
 #   object (sdk/lib/_internal/wasm/common/typed_data.dart:1243 _I8ByteBuffer.==), and Julia gives each memory
 #   its own storage, inline behind its own header or a block of its own (julia/src/genericmemory.c:30
-#   jl_alloc_genericmemory_unchecked), so no address within one is an address within another;
+#   jl_alloc_genericmemory_unchecked), so no address within one is an address within another. A pointer
+#   past one's end (`pointer(a) + sizeof(a)`, an offset of the array's length times its elsize) is within
+#   none, and whether its native address equals another object's address depends on where the allocator
+#   placed the two, which Julia's semantics do not define: Base's `==` of two pointers is the equality of
+#   their integers (julia/base/pointer.jl:310 `==(x::Ptr, y::Ptr) = UInt(x) == UInt(y)`) and its `+` adds
+#   bytes to the integer (:314 `+(x::Ptr, y::Integer) = add_ptr(x, (y % UInt) % UInt)`, whose intrinsic is
+#   julia/src/runtime_intrinsics.c:1742 jl_add_ptr, `(char*)jl_unbox_long(ptr) + jl_unbox_ulong(offset)`),
+#   each answering whatever addresses the allocator gave. So the differential oracle cannot decide that pair
+#   either (a native run answers by its heap's layout), and false across data owners is the one
+#   well-defined answer: Julia's own for every pair within the two, and dart's buffer identity's;
 # - C_NULL, address 0 (julia/base/pointer.jl:18 C_NULL), against a pointer into a data array: unequal and
 #   below it, as Julia's allocator throws rather than return a null block (jl_gc_managed_malloc,
 #   julia/src/gc-stock.c:3827), so no object's address is 0; and no unsigned address is below 0, Base's own
@@ -25,7 +34,7 @@
 # their buffers' data arrays). Julia's differs: Julia compares integer addresses; a pointer of no object is
 # an integer here too, compared as Base compares it.
 
-@quarantine pin"julia/base/boot.jl:968 UInt" "Base compares two pointers' integer addresses, UInt of each (julia/base/pointer.jl:310); a managed pointer into a data array has none, so two of one base compare their offsets, as dart's view reads at its offsetInBytes within one buffer, two of distinct data arrays are unequal, as dart's two buffers are equal only when their data arrays are identical and Julia gives each memory its own storage, and one into a data array is unequal to C_NULL, as no object's address is 0; any other pair reads the integer addresses, a located gap at run time where one has a base" Base.:(==) @consistent_overlay METHOD_TABLE function Base.:(==)(x::Ptr, y::Ptr)
+@quarantine pin"julia/base/boot.jl:968 UInt" "Base compares two pointers' integer addresses, UInt of each (julia/base/pointer.jl:310); a managed pointer into a data array has none, so two of one base compare their offsets, as dart's view reads at its offsetInBytes within one buffer, two of distinct data arrays are unequal, as dart's two buffers are equal only when their data arrays are identical and Julia gives each memory its own storage, the one well-defined answer (a pointer past one array's end equals another object's address natively only by the allocator's layout, which Julia's semantics, julia/base/pointer.jl:310 and :314's integer == and +, do not define, so the differential oracle cannot decide it either), and one into a data array is unequal to C_NULL, as no object's address is 0; any other pair reads the integer addresses, a located gap at run time where one has a base" Base.:(==) @consistent_overlay METHOD_TABLE function Base.:(==)(x::Ptr, y::Ptr)
     wasm_pointer_same_base(x, y) && return wasm_pointer_offset(x) == wasm_pointer_offset(y)
     # distinct bases: two data arrays, or one and an integer address
     wasm_pointer_based(x) && wasm_pointer_based(y) && return false
