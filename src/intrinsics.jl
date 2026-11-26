@@ -650,7 +650,8 @@ end
 # jl_type_unionall, the foreign call Julia's inliner makes of every UnionAll(v, t) whose v is a TypeVar
 # (Compiler/src/ssair/inlining.jl:1745, `Expr(:foreigncall, :jl_type_unionall, Any, svec(Any, Any), 0, :ccall, v, t)`),
 # which Julia's codegen emits as a call of its runtime's function (julia/src/ccall.cpp emit_ccall, a libjulia symbol):
-# here the call of the runtime's port (src/julia/runtime/rtutils.jl jl_type_unionall, a root of every closed world),
+# here the call of the runtime's port (src/julia/runtime/jltypes.jl jl_type_unionall, in the closed world where a
+# statement reaches it, src/julia/subset.jl reached_runtime_ports),
 # its operands the declaration's two, v as the port's TypeVar, as dart calls a static target. A declaration other
 # than the inliner's (Any of two Any arguments, C's convention) rejects, located
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:type_unionall}, node::NirForeignCall)::WasmBuilder.IR.ValueType
@@ -3092,10 +3093,10 @@ end
 # `nothing`) is egal only to null; values of two classes are not (the type tags); else the switch over
 # the closed world's concrete classes, each its class's arm of jl_egal__unboxed_ (julia.h:1874) and
 # jl_egal__bitstag (builtins.c:243): a class egal compares by identity (a mutable one but String,
-# SimpleVector and DataType: name->mutabl) answers no, as do the kinds but UnionAll, each type one canonical
-# constant (constants.jl _lowerTypeToConstant), whose references were already compared; two UnionAlls, which
-# jl_type_unionall makes at run time (src/julia/runtime/jltypes.jl jl_new_unionall), by Julia's structural
-# egal_types (builtins.c:167, the runtime's jl_egal_unionall); any other class compares its fields, builtins.c:100 compare_fields: a field of bits by its
+# SimpleVector and DataType: name->mutabl) answers no, as do the kinds, each type one canonical constant
+# (constants.jl _lowerTypeToConstant), whose references were already compared, but two UnionAlls where the program
+# makes one at run time (src/julia/runtime/jltypes.jl jl_new_unionall), by Julia's structural egal_types
+# (builtins.c:167, the runtime's jl_egal_unionall); any other class compares its fields, builtins.c:100 compare_fields: a field of bits by its
 # bits (a float's as an integer, bits_equal), a reference by jl_egal again (a null egal only to null),
 # and a field holding a wasm array (a String's bytes, a SimpleVector's elements) by its length and
 # elements, jl_string_tag's memcmp and compare_svec (builtins.c:87). Julia answers Bool's and Symbol's
@@ -3284,10 +3285,12 @@ end
     load_class_id(b, t, top_nn)
     class_id_search(b, ranges, WasmBuilder.IR.ValueType[i32], cls -> begin
             local info = t.class_info[cls]
-            if cls === UnionAll
-                # two UnionAlls, a made one among them (src/julia/runtime/jltypes.jl jl_new_unionall), by Julia's
-                # structural egal (jl_egal__bitstag's jl_unionall_tag arm, egal_types(a, b, NULL, 1): the runtime's
-                # jl_egal_unionall)
+            if cls === UnionAll && any(body -> body.ci.def.def in methods(jl_egal_unionall), t.component)
+                # two UnionAlls where the program makes one at run time (src/julia/runtime/jltypes.jl
+                # jl_new_unionall, its port in the closed world with jl_egal_unionall, src/julia/subset.jl
+                # reached_runtime_ports), by Julia's structural egal (jl_egal__bitstag's jl_unionall_tag arm,
+                # egal_types(a, b, NULL, 1): the runtime's jl_egal_unionall); elsewhere each UnionAll is one canonical
+                # constant, the kinds' reference compare below
                 WasmBuilder.local_get(b, x)
                 WasmBuilder.local_get(b, y)
                 call(code_gen, nir_runtime_member(t.component, jl_egal_unionall, at))

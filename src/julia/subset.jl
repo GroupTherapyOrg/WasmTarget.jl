@@ -141,6 +141,28 @@ end
     return out
 end
 
+# The runtime ports a closed world's foreign calls reach: Julia's codegen emits a foreign call of a libjulia
+# function as a call of its runtime (julia/src/ccall.cpp:1419 emit_ccall), linked whole into every process; a WasmTarget
+# module holds a port where its program reaches it, as dart compiles a runtime member its program reaches (TFA). A
+# statement `Expr(:foreigncall, :jl_type_unionall, ...)` (Julia's inliner's of UnionAll(v, t), Compiler/src/ssair/
+# inlining.jl:1745) reaches the port src/julia/runtime/jltypes.jl jl_type_unionall, which the code generator calls
+# for it (src/intrinsics.jl), and jl_egal_unionall, the egal of the UnionAlls it makes at run time, which the egal
+# arm calls (Julia's jl_egal's unionall arm, builtins.c:167 egal_types). Each port as its function, queued as a
+# runtime root is (_runtime_roots), its one method's specialization
+@quarantine pin"julia/src/ccall.cpp:1419 emit_ccall" "Julia's codegen calls its runtime's function for a foreign call of a libjulia symbol; a WasmTarget module holds the port where a statement reaches it, as dart compiles a runtime member its program reaches" Core.CodeInfo function reached_runtime_ports(codeinfos::Vector{Any})::Vector{Function}
+    local out = Function[]
+    for x in codeinfos
+        x isa Core.CodeInfo || continue
+        for st in x.code
+            Meta.isexpr(st, :foreigncall) || continue
+            local name = st.args[1]
+            name isa QuoteNode && (name = name.value)
+            name === :jl_type_unionall && !(jl_type_unionall in out) && append!(out, Function[jl_type_unionall, jl_egal_unionall])
+        end
+    end
+    return out
+end
+
 # A member's export name, or nothing: a @ccallable method's C name, the one Base.@ccallable records
 # (Method.ccallable's third entry, `Base.@ccallable "name" f(...)`) else its function's name, as
 # juliac's image exports it; the entry's, its function's name (dart's main). The one statement of the
@@ -340,6 +362,10 @@ formal(dev/formal/NirHandoff.tla): every reached ccallable's record queued and j
     # each declared signature and return (CCallableMissing); the inference's cache answers the rest
     local ccallables = _reached_ccallables(codeinfos)
     isempty(ccallables) || ((codeinfos, notes, parents) = _infer_verified(Any[roots; entry; ccallables], world, at))
+    # the runtime ports the program's foreign calls reach (reached_runtime_ports), queued after the entry as its
+    # ccallables are, so the closed world holds a port where, and only where, the program reaches it
+    local ports = Any[something(_entry_specialization(only(methods(f)).sig, world)) for f in reached_runtime_ports(codeinfos)]
+    isempty(ports) || ((codeinfos, notes, parents) = _infer_verified(Any[roots; entry; ccallables; ports], world, at))
     _check_export_names(entry, codeinfos, at)
     # each root queued is inferred into the closed world, Julia's answer for a queued item; one missing is
     # WasmTarget's own defect
