@@ -632,6 +632,7 @@ end
     libjulia === :jl_genericmemory_owner && return generate_static_intrinsic(self, Val(:genericmemory_owner), node)
     libjulia === :jl_types_equal && return generate_static_intrinsic(self, Val(:types_equal), node)
     libjulia === :jl_type_unionall && return generate_static_intrinsic(self, Val(:type_unionall), node)
+    libjulia === :jl_alloc_genericmemory && return generate_static_intrinsic(self, Val(:alloc_genericmemory), node)
     libjulia === :jl_get_tls_world_age || return nothing
     local at = "$(julia_text(self.code_gen.enclosing_member))"
     local rt, cc = node.args[2], node.args[5]
@@ -743,6 +744,55 @@ end
                          dart_type_of(self, a) for a in args]
     local cache = types_equal_cache(t, operands, at)
     return generate_static_intrinsic(self, Val(:bool_cases), args, operands, cache, at)
+end
+
+# jl_alloc_genericmemory (julia/src/genericmemory.c:75), a foreign call of libjulia's exported allocator: a
+# Memory of the type `mtype` and `nel` elements, the type's one empty instance where nel is 0, else
+# _new_genericmemory_ (genericmemory.c:55): ArgumentError where nel or its byte size passes the limit, the
+# allocation, zero filled where the type is zeroinit. That is the allocation Julia's codegen makes inline for the
+# memorynew builtin (julia/src/cgutils.cpp:4563 emit_memorynew, its empty instance and zero fill; its limit one
+# element larger, so the C's limit is checked first, here), so
+# the foreign call is lowered by memorynew's arm (Val(:memory)), one construction for both spellings: the
+# element class's array.new. Julia differs: Julia's codegen calls the C function (ccall.cpp declares its
+# TRANSFORMED_CCALL_STAT but no arm transforms it); a wasm module has no libjulia, so its body is emitted where
+# it is called. The C's signature (a jl_value_t* and a size_t, C's convention) and a result declared Any or
+# Ref of the allocated type are asserted, located; a type only run time knows rejects, located, a gap
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:alloc_genericmemory}, node::NirForeignCall)::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local at = "$(julia_text(self.code_gen.enclosing_member))"
+    local rt, argtypes, cc = node.args[2], node.args[3], node.args[5]
+    local conv = cc isa NirConst ? (cc.c.val isa Tuple ? cc.c.val[1] : cc.c.val) : nothing
+    conv === :ccall || conv === :cdecl ||
+        reject!(Internal("julia/src/genericmemory.c:75 jl_alloc_genericmemory called by the convention $(repr(conv)), not C's"), at)
+    argtypes isa NirConst && argtypes.c.val == Core.svec(Any, Csize_t) ||
+        reject!(Unquarantined("julia/src/genericmemory.c:75 jl_alloc_genericmemory declared to take $(argtypes isa NirConst ? argtypes.c.val : argtypes), not C's (jl_value_t*, size_t): (Any, Csize_t)"), at)
+    local ops = nir_foreign_operands(node)
+    local MT = dart_type_of(self, ops[1])
+    MT isa DataType && MT <: Type && MT.parameters[1] isa DataType && MT.parameters[1] <: GenericMemory ||
+        reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: jl_alloc_genericmemory of a memory type only run time knows ($MT), where memorynew's arm allocates a class known when compiling (julia/src/genericmemory.c:75)"), at)
+    local M = MT.parameters[1]
+    rt isa NirConst && (rt.c.val === Any || rt.c.val === Ref{M}) ||
+        reject!(Unquarantined("julia/src/genericmemory.c:75 jl_alloc_genericmemory of a $M declared to return $(rt isa NirConst ? rt.c.val : rt), neither Any nor Ref{$M}"), at)
+    # _new_genericmemory_'s limit, one less than emit_memorynew's: ArgumentError where nel >= MAXINTVAL-1 or its
+    # byte size nel * elsz (plus nel selector bytes of an isbits union) overflows or reaches MAXINTVAL-1, so where
+    # nel, unsigned, passes (MAXINTVAL-2) ÷ elsz (MAXINTVAL-2 for no bytes); checked before memorynew's arm,
+    # whose own limit then never fires
+    local elsz = generic_memory_elsize(M, true)
+    local c_limit = elsz == 0 ? typemax(Int) - 2 : div(typemax(Int) - 2, elsz)
+    local b = self.code_gen.b[]
+    translate_expression(self.code_gen, ops[2], WasmBuilder.IR.NumType_i64)
+    WasmBuilder.i64_const(b, c_limit)
+    WasmBuilder.i64_gt_u(b)
+    WasmBuilder.if_(b)
+    call(self.code_gen, nir_runtime_member(t.component, throw_invalid_memory_size, at))
+    WasmBuilder.unreachable(b)
+    WasmBuilder.var"end"(b)
+    local made = generate_static_intrinsic(self, Val(:memory), Core.memorynew, ops, nothing)
+    made === nothing &&
+        reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: jl_alloc_genericmemory of a $M, which memorynew's arm does not allocate"), at)
+    rt.c.val === Any || return made
+    convert_type(t, b, made, t.top_type[])
+    return t.top_type[]
 end
 
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, node::Union{NirCall,NirInvoke})::Union{WasmBuilder.IR.ValueType,Nothing}
