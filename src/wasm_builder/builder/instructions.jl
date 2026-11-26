@@ -1482,7 +1482,7 @@ end
     # dart's ByteData setters store each lane little-endian, modulo its width.
     bytes = UInt8[]
     for lane in (value0, value1)
-        bits = reinterpret(Unsigned, lane)
+        bits = lane % unsigned(typeof(lane))
         for k in 0:sizeof(lane)-1
             push!(bytes, (bits >> (8k)) % UInt8)
         end
@@ -1510,7 +1510,7 @@ end
     # dart's ByteData setters store each lane little-endian, modulo its width.
     bytes = UInt8[]
     for lane in (v0 % Int32, v1 % Int32, v2 % Int32, v3 % Int32)
-        bits = reinterpret(Unsigned, lane)
+        bits = lane % unsigned(typeof(lane))
         for k in 0:sizeof(lane)-1
             push!(bytes, (bits >> (8k)) % UInt8)
         end
@@ -1524,7 +1524,7 @@ end
     # dart's ByteData setters store each lane little-endian, modulo its width.
     bytes = UInt8[]
     for lane in map(v -> v % Int16, (v0, v1, v2, v3, v4, v5, v6, v7))
-        bits = reinterpret(Unsigned, lane)
+        bits = lane % unsigned(typeof(lane))
         for k in 0:sizeof(lane)-1
             push!(bytes, (bits >> (8k)) % UInt8)
         end
@@ -1538,7 +1538,7 @@ end
     # dart's ByteData setters store each lane little-endian, modulo its width.
     bytes = UInt8[]
     for lane in map(v -> v % Int8, (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15))
-        bits = reinterpret(Unsigned, lane)
+        bits = lane % unsigned(typeof(lane))
         for k in 0:sizeof(lane)-1
             push!(bytes, (bits >> (8k)) % UInt8)
         end
