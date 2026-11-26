@@ -3484,6 +3484,13 @@ const BOUNDED_BREAKS = (
      "            salvage_record(item[\"hold_id\"], branch, git(\"rev-parse\", branch), f\"{outcome}: {note[:200]}\")", "            pass", 50),
     ("the handoff silent on the driver having stopped the move", "dev/climb/slots.py",
      "    text = (f\"The driver, not the move, stopped this hold's last move", "    text = (f\"This hold's last move stopped", 50),
+    # a src record's row is one line whatever its why holds (2026-11-26 05:03Z: the lander landed nothing)
+    ("a legacy record's why continuation read as a row", "dev/climb/measure.py",
+     "        if len(f) < 4 or not re.fullmatch(r\"-?[0-9.]+\", f[3]):", "        if False:", 53),
+    ("a record's why read back escaped", "dev/climb/measure.py",
+     "why_unfield(f[4]) if len(f) > 4 else \"\")", "f[4] if len(f) > 4 else \"\")", 53),
+    ("a why written with its newlines raw", "dev/climb/measure.py",
+     "    return w.replace(\"\\\\\", \"\\\\\\\\\").replace(\"\\n\", \"\\\\n\")", "    return w", 53),
     # a measurement's own directory is its holder's (L1)
     ("measurements of one base sharing one directory (L1)", "dev/climb/measure.py",
      "    w = tempfile.mkdtemp(prefix=f\"{role}-{task}@{os.getpid()}-{door.BOOT}-\", dir=root)",

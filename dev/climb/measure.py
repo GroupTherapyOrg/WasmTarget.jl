@@ -3003,8 +3003,21 @@ SRC_RING = "src-ring.json"   # the ring's state since its score (round 14's T2):
 # starts from), "carry" (the files the last landing's fill could not take, tried first by the next), "commit"}, written when a
 # landing lands (lander.landed_item)
 
+def why_field(w):
+    """A row's why as one field of a src record: its lines (a red's identity is one `file:line kind` line a failure,
+    spec v18 Q1) joined by an escaped newline, `\\` escaped first, so a row is one line; src_record reads it back."""
+    return w.replace("\\", "\\\\").replace("\n", "\\n")
+
+def why_unfield(w):
+    """why_field's inverse."""
+    return re.sub(r"\\(\\|n)", lambda m: "\n" if m.group(1) == "n" else "\\", w)
+
 def src_record(head):
-    """The score's src record of `head`, STATE/src-<head>.tsv: (warm G or None, {file: (outcome, G, secs, why)}), or None."""
+    """The score's src record of `head`, STATE/src-<head>.tsv: (warm G or None, {file: (outcome, G, secs, why)}), or None.
+    A row is one line, its why escaped (why_field). A record written before that holds a red's why of several lines
+    raw, its rows broken across lines (2026-11-26 05:03Z: the score of 3c0c2b38, constants_objects.jl red twice, and
+    every landing's set failed on its line 14 with an IndexError, the lander landing nothing): a line that is no row
+    (fewer than four fields, or a seconds field that is no number) is the next line of the row above's why."""
     p = os.path.join(STATE, f"src-{head[:8]}.tsv")
     if not os.path.exists(p):
         return None
@@ -3012,10 +3025,17 @@ def src_record(head):
     h = ls[0].split("\t")
     if h[:2] != ["head", head]:
         return None
-    rows = {}
+    rows, last = {}, None
     for l in ls[1:]:
         f = l.split("\t", 4)
-        rows[f[0]] = (f[1], float(f[2]) if f[2] else None, float(f[3]), f[4] if len(f) > 4 else "")   # "" unmeasured
+        if len(f) < 4 or not re.fullmatch(r"-?[0-9.]+", f[3]):
+            if last is None:
+                raise ClimbError(f"the src record of {head[:10]}: a line before any row is no row: {l[:160]!r}")
+            o, g, s_, w = rows[last]
+            rows[last] = (o, g, s_, w + "\n" + l)   # a legacy record's raw continuation of the row above's why
+            continue
+        rows[f[0]] = (f[1], float(f[2]) if f[2] else None, float(f[3]), why_unfield(f[4]) if len(f) > 4 else "")   # "" unmeasured
+        last = f[0]
     return (float(h[3]) if len(h) > 3 and h[3] else None), rows
 
 def src_ran(commit, files, source):
@@ -3259,7 +3279,7 @@ def src_score(head, role="score"):
         return None
     rows = settle_costs(rows, head)
     write_atomic(os.path.join(STATE, f"src-{head[:8]}.tsv"), f"head\t{head}\twarm\t{'' if warm is None else warm}\n" +
-                 "".join(f"{f}\t{o}\t{'' if g is None else g}\t{s_}\t{w}\n" for f, (o, g, s_, w) in sorted(rows.items())))
+                 "".join(f"{f}\t{o}\t{'' if g is None else g}\t{s_}\t{why_field(w)}\n" for f, (o, g, s_, w) in sorted(rows.items())))
     green = sorted(f for f, r in rows.items() if r[0] == "passed")
     src_ran(head, green, "score")
     write_atomic(os.path.join(STATE, SRC_LATEST), json.dumps({"head": head}))

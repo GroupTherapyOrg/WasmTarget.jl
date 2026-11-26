@@ -2869,3 +2869,27 @@ finally:
     door.using = real50["using"]
     with contextlib.suppress(Exception):
         g("update-ref", "-d", "refs/climb/climb-1")
+
+# 53. a src record's row is one line whatever its why holds (measure.why_field, measure.src_record): a red's why of
+# several lines (its identity: one `file:line kind` line a failure) is written escaped and read back whole, and a record
+# written before that, its why raw across lines, still reads, the continuation lines the row's why. 2026-11-26 05:03Z:
+# the score of 3c0c2b38 (constants_objects.jl red twice) wrote line 14 of its record as a bare why line, src_record
+# raised IndexError on it, and every queued item's landing set failed: the lander landed nothing
+#: limit 30
+try:
+    w53 = "test/src/a.jl:64 test: x\\ny\ntest/src/a.jl:70 nontest_error: z"
+    if M.why_unfield(M.why_field(w53)) != w53 or "\n" in M.why_field(w53):
+        fault(f"a why of two lines through the record's field: {M.why_field(w53)!r}")
+    h53 = "5" * 40
+    open(f"{state}/src-{h53[:8]}.tsv", "w").write(
+        f"head\t{h53}\twarm\t390.0\n" + "a.jl\tfailed\t294.9\t25.4\ttest/src/a.jl:14 nontest_error: e\n"
+        "test/src/a.jl:64 test: all((r->begin r.ok end), results)\n" + "b.jl\tpassed\t10.0\t1.0\t\n")
+    w, rows53 = M.src_record(h53)
+    if w != 390.0 or set(rows53) != {"a.jl", "b.jl"} or rows53["a.jl"][3] != \
+            "test/src/a.jl:14 nontest_error: e\ntest/src/a.jl:64 test: all((r->begin r.ok end), results)" or rows53["b.jl"][:3] != ("passed", 10.0, 1.0):
+        fault(f"a record written before the escape, a red's why across two lines: {rows53}")
+    open(f"{state}/src-{h53[:8]}.tsv", "w").write(f"head\t{h53}\twarm\t390.0\n" + f"a.jl\tfailed\t294.9\t25.4\t{M.why_field(w53)}\n")
+    if M.src_record(h53)[1]["a.jl"][3] != w53:
+        fault(f"a record's escaped why read back: {M.src_record(h53)[1]['a.jl'][3]!r}")
+except Exception as e:
+    fault(f"a src record with a why of several lines raised {type(e).__name__}: {str(e)[:240]}")
