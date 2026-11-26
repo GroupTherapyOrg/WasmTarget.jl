@@ -28,6 +28,7 @@ printf '%s\n' llvm/lib/Target/WebAssembly/ \
   compiler-rt/lib/builtins/ashrti3.c compiler-rt/lib/builtins/udivmodti4.c compiler-rt/lib/builtins/udivti3.c \
   compiler-rt/lib/builtins/umodti3.c compiler-rt/lib/builtins/divti3.c compiler-rt/lib/builtins/modti3.c \
   compiler-rt/lib/builtins/int_div_impl.inc \
+  compiler-rt/lib/builtins/extendhfsf2.c compiler-rt/lib/builtins/fp_extend_impl.inc compiler-rt/lib/builtins/fp_extend.h \
   llvm/include/llvm/Analysis/DominanceFrontierImpl.h llvm/include/llvm/CodeGen/MachineDominanceFrontier.h \
   llvm/unittests/Target/WebAssembly/WebAssemblyExceptionInfoTest.cpp \
   llvm/lib/Support/APFloat.cpp llvm/include/llvm/ADT/APFloat.h \
