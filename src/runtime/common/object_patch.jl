@@ -22,8 +22,14 @@ hash field (getIdentityHashField); 0, dart's initialIdentityHash, means none was
 serial is stored in it (setIdentityHashField) and returned; any other value is returned as it is, an
 image constant's slot -k (zero-extended, src/julia/runtime/hashing.jl image_slot!) among them. Julia
 differs: the value is the next serial (Object__hash_code_rnd), never a random draw, and once the
-2^31 - 1 serials an i32 field holds positive are given it raises, naming the gap, and never wraps: a
-wrapped serial would give a live object's id to another (dev/formal/ObjectIdentity.tla NoWrap).
+2^31 - 1 serials an i32 field holds positive are given the module stops there, fatal, and never wraps: a
+wrapped serial would give a live object's id to another (dev/formal/ObjectIdentity.tla NoWrap). Native Julia's
+id is its address's, which never runs out (julia/src/builtins.c:484), so objectid cannot raise natively and no catch
+of the program may see the stop: it is Julia's own runtime fatal, jl_no_exc_handler (julia/src/task.c:727, an error
+no handler takes: its text, then the process ends), written inline at the statement, which the intrinsifier lowers to
+the fatal form (src/intrinsics.jl Val(:no_exc_handler): the text to the host, located, then the trap). Inline, never a
+@noinline call returning Union{}: that call's shape changes whether Julia specializes a caller of objectid on its
+closure's type (a88e4147's measurement), where this foreign call keeps the inline throw's.
 Specialized on the object's type, as Julia specializes a method on its arguments' types unless told
 not to (no @nospecialize), so the field's read and write see its class (src/intrinsics.jl refuses a
 class Julia boxes fresh). Natively no object carries the field and the read raises: natively
@@ -42,7 +48,7 @@ set_identity_hash_field, dataids names the other.
     if result == 0
         local last = Object__hash_code_rnd[]
         last == typemax(Int32) &&
-            Error__throw_with_current_stack_trace(ErrorException("WasmTarget: an object's identity: the module's 2147483647 identity serials are given, and a serial never wraps (src/runtime/common/object_patch.jl Object__object_hash_code)"))
+            ccall(:jl_no_exc_handler, Union{}, (Any, Ptr{Cvoid}), "WasmTarget: an object's identity: the module's 2147483647 identity serials are given, and a serial never wraps (src/runtime/common/object_patch.jl Object__object_hash_code)", C_NULL)
         result = Int64(last) + 1
         Object__hash_code_rnd[] = Int32(result)
         set(obj, result)

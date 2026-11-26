@@ -630,6 +630,7 @@ end
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, node::NirForeignCall)::Union{WasmBuilder.IR.ValueType,Nothing}
     local libjulia = nir_libjulia_func(node)
     libjulia === :jl_genericmemory_owner && return generate_static_intrinsic(self, Val(:genericmemory_owner), node)
+    libjulia === :jl_no_exc_handler && return generate_static_intrinsic(self, Val(:no_exc_handler), node)
     libjulia === :jl_types_equal && return generate_static_intrinsic(self, Val(:types_equal), node)
     libjulia === :jl_type_unionall && return generate_static_intrinsic(self, Val(:type_unionall), node)
     libjulia === :jl_type_hash && return generate_static_intrinsic(self, Val(:type_hash), node)
@@ -692,6 +693,22 @@ end
         translate_expression(self.code_gen, op, w)
     end
     return output_or_void(t, call(self.code_gen, target))
+end
+
+# jl_no_exc_handler (julia/src/task.c:727), Julia's runtime fatal: an error no handler takes, its text to stderr, then the
+# process ends (jl_exit, or jl_raise(6) with no task), so no catch of the program observes it. Lowered inline, at the
+# statement, as WasmTarget's one fatal form (Val(:fatal)): the text, the String constant the call passes, to the host,
+# located at this statement, then the trap; the stack after it is unreachable, read as the top type. An error that is
+# no String constant rejects, located
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:no_exc_handler}, node::NirForeignCall)::WasmBuilder.IR.ValueType
+    local at = "$(julia_text(self.code_gen.enclosing_member))"
+    local operands = nir_foreign_operands(node)
+    local e = isempty(operands) ? nothing : operands[1]
+    e isa NirConst && e.c.val isa String ||
+        reject!(Internal("julia/src/task.c:727 jl_no_exc_handler: its error $e, no String constant"), at)
+    generate_static_intrinsic(self, Val(:fatal), Unquarantined("julia/src/task.c:727 jl_no_exc_handler: $(e.c.val)"),
+        "$at (at run time, $(generate_static_intrinsic(self, Val(:statement_location), node)))")
+    return translator(self).top_type[]
 end
 
 # jl_genericmemory_owner, one of emit_ccall's special functions (julia/src/ccall.cpp:1872): codegen's reader of a
@@ -1988,7 +2005,7 @@ end
 # <file>:<line>` on one line, then its position in the body (`%k`); the position alone where Julia keeps no line.
 # dart's statements carry their file offsets (TreeNode.fileOffset); Julia's are its body's debuginfo. One line, as
 # the fatal report is one line the host prints
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:statement_location}, node::NirCall)::String
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:statement_location}, node::Union{NirCall,NirForeignCall})::String
     local body = self.code_gen.body
     local k = something(findfirst(st -> st === node, body.stmts), 0)
     k == 0 && return "an unnumbered statement"
