@@ -3366,7 +3366,7 @@ const BOUNDED_BREAKS = (
     ("a cost a check measured left unused", "dev/climb/measure.py", "        if f in measured:", "        if False:", 33),
     ("a shard's first file charged the warm-up twice", "dev/climb/lander.py", "(pays if first else 0.0)", "0.0", 33),
     ("a move refused on an estimate", "dev/climb/measure.py",
-     "    pk, _ = predict({f: c_all[f] for f in base_set if f not in set(est)}, warm, src_change, shards, checks, warm2=warm2, harness=harness)",
+     "    pk, _ = predict({f: c_all[f] for f in base_set if f not in unmeasured}, warm, src_change, shards, checks, warm2=warm2, harness=harness)",
      "    pk, _ = predict({f: c_all[f] for f in base_set}, warm, src_change, shards, checks, warm2=warm2, harness=harness)", 32),
     # a check's ratchet predicted from its own class's checks, an item's class and red line, a refusal no file makes held
     # (2026-11-14 23:15:34Z: the ratchet term mixed a harness check into every prediction, and an item with an empty own

@@ -3649,14 +3649,19 @@ def src_set(h, sha, hold_id):
     rs = state_json(SRC_RING, {})
     pos = rs.get("pos", 0) % max(1, len(names)) if rs.get("hs") == hs[:10] else 0   # a new score's ring starts at 0
     base_set = sorted(own | unscored | flaky)   # a flaky known red runs in every landing until it resolves (red 7)
-    c_all, _ = src_costs(rows, sorted(set(base_set) | (set(names) & t_sha) | set(rs.get("carry", [])) & t_sha), sha, hs, deleted, measured)
+    c_all, est_all = src_costs(rows, sorted(set(base_set) | (set(names) & t_sha) | set(rs.get("carry", [])) & t_sha), sha, hs, deleted, measured)
     pb, why = predict({f: c_all[f] for f in base_set}, warm, src_change, shards, checks, warm2=warm2, harness=harness)
     if pb is None:
         out["why"] = why; return out
     # the refusal reads costs a score or a check measured, never an estimate: a file no score or check has costed is
     # left out of it (an estimate is set high on purpose, src_costs, and a high one only carries less: the check runs
-    # its set with nothing packed around it, and held_measured records what it measures)
-    pk, _ = predict({f: c_all[f] for f in base_set if f not in set(est)}, warm, src_change, shards, checks, warm2=warm2, harness=harness)
+    # its set with nothing packed around it, and held_measured records what it measures). `est_all` holds what THIS read
+    # estimated: a known red's own file has no passed row, so src_costs estimates it at its directory's highest G per byte,
+    # and `est` (the read of every file less the reds) never names it; 2026-11-26 16:52Z the fix of the wasm_array.jl red
+    # was held for that estimate (3003.1 G against the 138.1 G its red row measured) while the overdue red let nothing
+    # else land, a deadlock no landing could clear
+    unmeasured = set(est) | set(est_all)
+    pk, _ = predict({f: c_all[f] for f in base_set if f not in unmeasured}, warm, src_change, shards, checks, warm2=warm2, harness=harness)
     out["refuse"] = pk["path"] > int(band.group(1))
     # what the check costs with no test file at all (the load, the ratchet, each shard's start): past the line, no file of
     # the commit's makes the refusal, so it is the predictor's or the machine's, never the commit's (lander.src_refused
@@ -3667,8 +3672,9 @@ def src_set(h, sha, hold_id):
     # an own file that ALONE predicts past the band as it stands at origin (its recorded cost scaled to its size at h):
     # origin's state, never the commit's (lander.src_refused holds the item and names the file to split); only when
     # every own file fits at origin is a refusal the commit's own (its additions, or its edits, push the set past it)
-    at_h, _ = src_costs(rows, sorted(own & set(t_h)), h, hs)
-    out["origin_heavy"] = [[f, round(g_, 1), p_["path"]] for f, g_ in sorted(at_h.items())
+    # (a measured cost only, as the refusal: an estimate never names a file to split)
+    at_h, est_h = src_costs(rows, sorted(own & set(t_h)), h, hs)
+    out["origin_heavy"] = [[f, round(g_, 1), p_["path"]] for f, g_ in sorted(at_h.items()) if f not in set(est_h)
                            for p_ in [predict({f: g_}, warm, src_change, shards, checks, warm2=warm2, harness=harness)[0]]
                            if p_["path"] > int(band.group(1))] if out["refuse"] else []
     # the share (round 14's T2): the files the last landing could not take first (deficit round robin, A13-6), then the
