@@ -894,15 +894,27 @@ end
 
 dart's Kernel `Field`, an instance field of a class: Julia's field `index` (from 1) of the concrete
 class `cls`, its `name`, its declared `type` and whether it is `mutable` (a mutable struct's field
-not declared `const`); for a primitive class, index 0, its one `value`, the class itself.
+not declared `const`), Julia's answer, which a setter (dispatch_table.jl) reads, a program's write of a const
+field raising Julia's own ErrorException (visitInstanceSet, by isconst); for a primitive class, index 0, its one
+`value`, the class itself.
+`runtime_written`: Julia's runtime writes the field although Julia's own answer is const (a byte
+memory's `length`, which jl_genericmemory_to_string sets to 0, julia/src/genericmemory.c:200), so its
+wasm struct field is mutable (class_info.jl's FieldType, dart's `mutable: !field.isFinal`,
+class_info.dart:599), while `mutable` stays false: no setter is registered, and a program's write raises Julia's
+const-field ErrorException.
 """
-@quarantine "Julia's fields are a struct's fieldnames and fieldtypes, its primitive types a value with no field" Core.Type struct ClassField
+@quarantine pin"julia/src/julia.h:1629 jl_field_isconst" "Julia's fields are a struct's fieldnames and fieldtypes, its primitive types a value with no field" Core.Type struct ClassField
     cls::DataType
     index::Int
     name::String
     type::Type
     mutable::Bool
+    runtime_written::Bool
 end
+
+# a field no runtime of Julia's writes past its mutability, every field but a byte memory's `length`
+@quarantine pin"julia/src/genericmemory.c:189 jl_genericmemory_to_string" "dart's Kernel Field carries its finality alone; a field Julia's runtime writes past a const is Julia's own (julia/src/genericmemory.c:200 `m->length = 0`)" Core.Type ClassField(cls::DataType, index::Int, name::String, @nospecialize(type::Type), mutable::Bool) =
+    ClassField(cls, index, name, type, mutable, false)
 
 """    type_expand_integer(T) -> Bool
 
@@ -1427,9 +1439,10 @@ address of the elements stored inline after it. `ptr` is left out: a host addres
 `pointer` and `unsafe_load`, foreigncalls the strict subset rejects; the elements are the array.
 Only `memorynew` writes `data` and `length`, `length` the array's length, and no setter exists for
 either, so the two cannot diverge (D6), with one exception Julia makes: a byte memory a String takes
-(jl_genericmemory_to_string, julia/src/genericmemory.c:198 `m->length = 0`) is left of length 0, its
-array kept, so its `length` is mutable (`Memory{UInt8}`'s alone) and that take is its one writer
-(src/intrinsics.jl); every element access is bounded by `length`, never by the array's. Julia leaves an undefined bits element's contents
+(jl_genericmemory_to_string, julia/src/genericmemory.c:200 `m->length = 0`) is left of length 0, its
+array kept, so its `length`'s wasm field is mutable (`Memory{UInt8}`'s alone, `runtime_written`) and that
+take is its one writer (src/intrinsics.jl), Julia's field staying const: no setter, and a program's write raises
+Julia's const-field ErrorException; every element access is bounded by `length`, never by the array's. Julia leaves an undefined bits element's contents
 unspecified, so the zero a new wasm array holds is one of Julia's own values, never a default past
 a gap (D9). An atomic memory (`AtomicMemory`) or another address space rejects, located: threads lie
 outside the strict subset.
@@ -1459,8 +1472,9 @@ SimpleVector's does (`_svec_instance_fields`).
         reject!(Unquarantined("src/julia/classes.jl _memory_instance_fields: $c, an atomic memory or one of another address space"), at)
     local T = c.parameters[2]
     local data = ClassField(c, 0, "data", WasmArray{_memory_element_storage(T, at)}, false)
-    # a byte memory's length is written once more, to 0, by the String that takes it (jl_genericmemory_to_string)
-    local length = ClassField(c, Base.fieldindex(c, :length), "length", fieldtype(c, :length), c === Memory{UInt8})
+    # Julia's `length` is const (jltypes.c:3334 memory_constfields), and a byte memory's is written once
+    # more, to 0, by Julia's runtime when a String takes it (jl_genericmemory_to_string, genericmemory.c:200)
+    local length = ClassField(c, Base.fieldindex(c, :length), "length", fieldtype(c, :length), false, c === Memory{UInt8})
     # elements that may hold nothing, each its set flag (_needs_is_set), as one array beside the data
     local fields = _needs_is_set(T) ? ClassField[data, ClassField(c, 0, "data#isSet", WasmArray{WasmI8}, false), length] :
                    ClassField[data, length]

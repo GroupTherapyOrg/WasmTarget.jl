@@ -8,7 +8,6 @@
 # that resolves at its pin (a dart file, an LLVM unit, a unit of JULIA_FILES, a runtime file) or a
 # `precedent(<ecosystem>: <file>:<line> <symbol>)` resolving the same way in its ecosystem's pinned checkout
 # (dart, llvm, julia or utf8proc; any other ecosystem has no pin table and is refused); its owner pins it and deletes its line in the same commit.
-julia/classes.jl ClassField
 julia/classes.jl _KINDS
 julia/classes.jl _kind_instance_fields
 julia/classes.jl _memoryref_instance_fields

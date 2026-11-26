@@ -2577,7 +2577,6 @@ end
         written = type_checked()
         written === nothing && return after
     end
-    f.mutable || reject!(Unquarantined("src/julia: a write of $cls's field $(f.name), which Julia does not let change"), where_)
     return _direct_set(self, f, receiver, written; preserved = preserved, use_unchecked_entry = false)
 end
 

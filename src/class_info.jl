@@ -490,7 +490,7 @@ end
     for field in class_instance_fields(cls, at)
         local wasm_type = translate_type_of_field(translator, field)
         translator.field_index[field] = length(info.struct_.fields)
-        _add_field(info, WasmBuilder.IR.FieldType(wasm_type; mutable = field.mutable); field_name = field.name)
+        _add_field(info, WasmBuilder.IR.FieldType(wasm_type; mutable = field.mutable || field.runtime_written); field_name = field.name)
     end
     return nothing
 end
