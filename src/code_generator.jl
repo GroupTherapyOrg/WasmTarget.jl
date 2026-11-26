@@ -80,7 +80,7 @@ SSAValue, so a used statement is a variable declaration and an unused one an exp
             false, Dict{Union{NirSSA,NirArgument},WasmBuilder.IR.Local}(), nothing, nothing, nothing,
             Dict{TypeVar,WasmBuilder.IR.Local}(), TryBlockFinalizer[],
             NamedTuple{(:exception_local, :stack_trace_local),Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}[],
-            nothing, TreeNode_no_offset, member, member, body, nir_used_statements(body))
+            nothing, TreeNode_no_offset, member, member, body, nir_used_statements(body.stmts))
         return self
     end
 end
@@ -1135,11 +1135,9 @@ end
 # each PhiC naming it, which the PhiC reads, as Julia's codegen does; UNREACHABLE is wasm's. A nested
 # try_table fixing an unwind mismatch catches every exception's exnref to a trampoline, a BLOCK of
 # type exnref, whose end THROW_REF follows
-@parity "dart2wasm/lib/code_generator.dart:768 AstCodeGenerator.visitBlock" function visit_block(self::AstCodeGenerator, node::NirBody)::Nothing
+@parity "dart2wasm/lib/code_generator.dart:768 AstCodeGenerator.visitBlock" function visit_block(self::AstCodeGenerator, node::NirBody)::Bool
     local at = "$(julia_text(self.enclosing_member))"
     local mf = LLVM.add_pre_emit_pass(node.stmts, node.cfg, node.handlers, at, !isempty(outputs(self)))
-    mf.implicit_defs && reject!(Unported("llvm/lib/Target/WebAssembly/WebAssemblyFixIrreducibleControlFlow.cpp:521 addImplicitDefs"),
-                                "$at: a value defined at entry for every path an irreducible loop's dispatch adds")
     local b = self.b[]
     local labels = WasmBuilder.Label[]
     local incoming = Dict{Int,WasmBuilder.IR.Local}()
@@ -1206,6 +1204,14 @@ end
             end
         end
     end
+    # a value FixIrreducibleControlFlow's addImplicitDefs defined at the entry (an IMPLICIT_DEF, which
+    # ExplicitLocals erases, the register's local holding wasm's default there): wasm defines every local
+    # at the entry with its default, which a non-nullable reference has none of, so its local is
+    # defaultable, as a phi's register is (Binaryen's handleNonDefaultableLocals, above); a PHI's
+    # IncomingReg is defaultable already and a label register an i32
+    for mi in mf.blocks[mf.layout[1]].instrs
+        mi.opcode == IMPLICIT_DEF && imm(mi, 1) == REGISTER_VALUE && push!(escaping, imm(mi, 2))
+    end
     for k in escaping
         local t = translate_type_of_local_variable(self.translator, node.types[k])
         node.stmts[k] isa Union{NirPhi,NirPhiC} && continue
@@ -1245,6 +1251,9 @@ end
                 (exception_local = thrown, stack_trace_local = thrown_stack_trace)
         elseif op == UNREACHABLE
             WasmBuilder.unreachable(b)
+        elseif op == IMPLICIT_DEF
+            # ExplicitLocals erases it: the register's local holds wasm's default value at the entry,
+            # its local defaultable (above)
         elseif op == CATCH_ALL_REF
             # the trampoline's exnref, on the stack from its block's end, where THROW_REF takes it (a
             # pseudo-instruction, which MCInstLower drops)
@@ -1321,7 +1330,15 @@ end
         end
     end
     isempty(labels) || reject!(Internal("src/code_generator.jl visit_block: $(length(labels)) labels left open"), at)
-    return nothing
+    # the body's last instruction, past empty blocks, as fixEndsAtEndOfFunction walks back to it: an END
+    # it typed by the function's results leaves them on the stack, where LLVM's function end follows
+    # (WebAssemblyCFGStackify.cpp:2459 appendEndToFunction); visit_block answers whether it did
+    for mbb in Iterators.reverse(mf.layout)
+        local instrs = mf.blocks[mbb].instrs
+        isempty(instrs) && continue
+        return !isempty(outputs(self)) && instrs[end].opcode in (END_BLOCK, END_LOOP, END_TRY_TABLE)
+    end
+    return false
 end
 
 @parity "dart2wasm/lib/code_generator.dart:775 AstCodeGenerator.visitLabeledStatement" visit_labeled_statement(self::AstCodeGenerator, node::NoCounterpart)::Union{} =
@@ -2917,8 +2934,10 @@ end
 @parity "dart2wasm/lib/code_generator.dart:3735 SynchronousProcedureCodeGenerator._makeNonMultiEntryPointFunction" function _make_non_multi_entry_point_function(self::SynchronousProcedureCodeGenerator)::Nothing
     setup_parameters_for_normal_entry(self, self.member)
     setup_contexts(self, self.member)
-    visit_block(self, self.body)
-    _implicit_return(self)
+    # dart's body may complete, so dart writes its implicit return; Julia differs: a body whose last END
+    # CFGStackify typed by the function's results (fixEndsAtEndOfFunction) ends with them on the stack, and
+    # the function's end follows it as LLVM's appendEndToFunction puts it, no implicit return written
+    visit_block(self, self.body) || _implicit_return(self)
     WasmBuilder.var"end"(self.b[])
     return nothing
 end

@@ -635,16 +635,17 @@ debuginfo.
 @quarantine "dart's Kernel TreeNode.noOffset; a NIR statement has no position until NIR reads Julia's debuginfo" Core.Int const TreeNode_no_offset = Int(-1)
 
 """
-    nir_used_statements(body) -> BitSet
+    nir_used_statements(stmts) -> BitSet
 
-The statements of `body` whose value some operand reads, by SSAValue: Julia's SSA form names a value
-where dart's Kernel nests it in its one use, so the code generator declares a used statement's value
-as a variable and translates an unused one as an expression statement.
+The statements of a body, `stmts`, whose value some operand reads, by SSAValue: Julia's SSA form names
+a value where dart's Kernel nests it in its one use, so the code generator declares a used statement's
+value as a variable and translates an unused one as an expression statement, and the registers
+FixIrreducibleControlFlow's addImplicitDefs defines are those with a use.
 """
-@quarantine "Julia's SSA form names a statement's value by SSAValue; dart's Kernel nests an expression in its use" Base.BitSet function nir_used_statements(body::NirBody)::BitSet
+@quarantine pin"precedent(julia: Compiler/src/ssair/ir.jl:668 scan_ssa_use!)" "Julia's SSA form names a statement's value by SSAValue, its uses the SSAValues each statement reads, as Julia's compiler collects them; dart's Kernel nests an expression in its use" Base.BitSet function nir_used_statements(stmts::Vector{NirStmt})::BitSet
     local used = BitSet()
     local use!(v) = v isa NirSSA && push!(used, v.id)
-    for st in body.stmts
+    for st in stmts
         if st isa Union{NirCall, NirInvoke, NirNew, NirForeignCall, NirBoundscheck, NirGCPreserveBegin, NirGCPreserveEnd,
                         NirLeave, NirPopException, NirTheException, NirLoopInfo, NirThrowUndefIfNot, NirCFunction, NirInvokeModify}
             foreach(use!, st.args)

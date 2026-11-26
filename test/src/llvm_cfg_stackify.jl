@@ -122,13 +122,13 @@ function open_at(prog, k)
     return stk
 end
 
-# the block whose code comes first from instruction j on, markers skipped; nothing past the end or at
-# a branch
+# the block whose code comes first from instruction j on, markers and IMPLICIT_DEFs (which
+# ExplicitLocals erases) skipped; nothing past the end or at a branch
 function next_body(prog, j)
     while j <= length(prog)
         local mi = prog[j][2]
         mi.opcode in (W.STMTS, W.CONST_I32, W.BR_TABLE) && return prog[j][1]
-        mi.opcode in (W.BLOCK, W.LOOP, W.END_BLOCK, W.END_LOOP) || return nothing
+        mi.opcode in (W.BLOCK, W.LOOP, W.END_BLOCK, W.END_LOOP, W.IMPLICIT_DEF) || return nothing
         j += 1
     end
     return nothing
@@ -242,10 +242,15 @@ end
 @testset "addPreEmitPass's order; FixIrreducibleControlFlow" begin
     local mf = L.add_pre_emit_pass(nir_of(StackifyCases.whileloop, (Int,))..., "whileloop", true)
     @test count(i -> i.opcode == W.LOOP, (i for b in mf.layout for i in mf.blocks[b].instrs)) == 1
-    @test !mf.implicit_defs
-    # an @goto-made loop with two entries gets a dispatch block, a BR_TABLE over its entries
+    # a reducible CFG gets no IMPLICIT_DEF
+    @test !any(i -> i.opcode == W.IMPLICIT_DEF, (i for b in mf.layout for i in mf.blocks[b].instrs))
+    # an @goto-made loop with two entries gets a dispatch block, a BR_TABLE over its entries, and
+    # addImplicitDefs's IMPLICIT_DEFs at the entry's start, its label register among them
     local mfi = L.add_pre_emit_pass(nir_of(StackifyCases.irreducible, (Int,))..., "irreducible", true)
-    @test mfi.implicit_defs && mfi.label_registers == 1
+    @test mfi.label_registers == 1
+    local defs = [((i.operands[1]::W.MOImm).imm, (i.operands[2]::W.MOImm).imm) for i in mfi.blocks[mfi.layout[1]].instrs if i.opcode == W.IMPLICIT_DEF]
+    @test (W.REGISTER_LABEL, 1) in defs
+    @test all(i -> i.opcode == W.IMPLICIT_DEF, mfi.blocks[mfi.layout[1]].instrs[1:length(defs)])
     @test count(i -> i.opcode == W.BR_TABLE, (i for b in mfi.layout for i in mfi.blocks[b].instrs)) == 1
     # a reducible CFG is left as it was
     local mfg = W.machine_function(nir_of(StackifyCases.gotos, (Int,))..., "gotos")

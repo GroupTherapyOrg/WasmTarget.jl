@@ -99,10 +99,8 @@ julia/machine.jl BLOCK_TYPE_VOID
 julia/machine.jl MOBlock
 julia/machine.jl MOImm
 julia/machine.jl MachineBasicBlock
-julia/machine.jl MachineFunction
 julia/machine.jl MachineInstr
 julia/machine.jl MachineOperand
-julia/machine.jl Opcode,BLOCK,LOOP,END_BLOCK,END_LOOP,BR,BR_IF,BR_UNLESS,BR_TABLE,CONST_I32,COPY,STMTS,TRY_TABLE,END_TRY_TABLE,CATCH,UNREACHABLE,CATCH_ALL_REF,THROW_REF
 julia/machine.jl PriorityQueue
 julia/machine.jl WASM_OPCODE_CATCH
 julia/machine.jl WASM_OPCODE_CATCH_ALL_REF
@@ -112,7 +110,6 @@ julia/machine.jl get_block_numbered
 julia/machine.jl get_prev_node
 julia/machine.jl is_barrier
 julia/machine.jl is_terminator
-julia/machine.jl machine_function
 julia/machine.jl post_order
 julia/machine.jl pq_empty
 julia/machine.jl pq_pop!
@@ -171,7 +168,6 @@ julia/nir.jl nir_intrinsified
 julia/nir.jl nir_invoke_target
 julia/nir.jl nir_operands
 julia/nir.jl nir_tuple_type
-julia/nir.jl nir_used_statements
 julia/nir.jl runtime_module
 julia/nir.jl stmt_form
 julia/nir.jl value_form

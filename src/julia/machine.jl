@@ -33,10 +33,11 @@ writes a PHI's incoming value with; WebAssemblyInstrControl.td's TRY_TABLE and E
 CFGStackify places for an EH pad, and UNREACHABLE, which it adds after an END_TRY_TABLE; CATCH, the
 pseudo-instruction an EH pad begins with, which receives the caught exception; CATCH_ALL_REF and
 THROW_REF, the pseudo-instruction a trampoline block takes the caught exnref with and the rethrow of
-it, which CFGStackify adds to fix an unwind mismatch) and STMTS, the place of the block's Julia
-statements, which LLVM holds as the block's other instructions.
+it, which CFGStackify adds to fix an unwind mismatch), TargetOpcode's IMPLICIT_DEF, which
+FixIrreducibleControlFlow's addImplicitDefs defines a register at the entry with, and STMTS, the
+place of the block's Julia statements, which LLVM holds as the block's other instructions.
 """
-@quarantine "LLVM's WebAssembly control opcodes, TableGen's records, where Julia's statements are one pseudo-instruction" Core.UInt8 @enum Opcode::UInt8 BLOCK LOOP END_BLOCK END_LOOP BR BR_IF BR_UNLESS BR_TABLE CONST_I32 COPY STMTS TRY_TABLE END_TRY_TABLE CATCH UNREACHABLE CATCH_ALL_REF THROW_REF
+@quarantine pin"precedent(llvm: llvm/lib/Target/WebAssembly/WebAssemblyInstrInfo.h:32 WebAssemblyInstrInfo)" "LLVM's WebAssembly opcodes, the TableGen records WebAssemblyInstrInfo describes; Julia differs: the passes' opcodes alone, an @enum, where Julia's statements are one pseudo-instruction" Core.UInt8 @enum Opcode::UInt8 BLOCK LOOP END_BLOCK END_LOOP BR BR_IF BR_UNLESS BR_TABLE CONST_I32 COPY STMTS TRY_TABLE END_TRY_TABLE CATCH UNREACHABLE CATCH_ALL_REF THROW_REF IMPLICIT_DEF
 
 """    BLOCK_TYPE_VOID
 
@@ -62,6 +63,22 @@ A TRY_TABLE's catch clause of a tag, its payload to the label (BinaryFormat/Wasm
 
 A TRY_TABLE's catch clause of every exception, its exnref to the label (BinaryFormat/Wasm.h)."""
 @quarantine "LLVM's wasm::WASM_OPCODE_CATCH_ALL_REF, the binary format's catch clause kind" Core.Int const WASM_OPCODE_CATCH_ALL_REF::Int = 0x03
+
+"""    REGISTER_VALUE
+
+An IMPLICIT_DEF's register kind: the value of the statement its index names, the register LLVM's
+instruction selection gives an instruction's result."""
+@quarantine pin"precedent(llvm: llvm/lib/Target/WebAssembly/WebAssemblyFixIrreducibleControlFlow.cpp:521 addImplicitDefs)" "LLVM's virtual registers are one index space, Register::index2VirtReg, the space addImplicitDefs walks; Julia differs: a statement's value, a PHI's IncomingReg and a label register are each indexed in a space of their own, so a register names its kind" Core.Int const REGISTER_VALUE::Int = 0
+"""    REGISTER_INCOMING
+
+An IMPLICIT_DEF's register kind: the IncomingReg of the PhiNode its index names, which PHIElimination
+gives the PHI and its COPYs write."""
+@quarantine pin"precedent(llvm: llvm/lib/Target/WebAssembly/WebAssemblyFixIrreducibleControlFlow.cpp:521 addImplicitDefs)" "LLVM's virtual registers are one index space, Register::index2VirtReg, the space addImplicitDefs walks; Julia differs: a statement's value, a PHI's IncomingReg and a label register are each indexed in a space of their own, so a register names its kind" Core.Int const REGISTER_INCOMING::Int = 1
+"""    REGISTER_LABEL
+
+An IMPLICIT_DEF's register kind: the label register its index names, which FixIrreducibleControlFlow
+made (create_label_register!)."""
+@quarantine pin"precedent(llvm: llvm/lib/Target/WebAssembly/WebAssemblyFixIrreducibleControlFlow.cpp:521 addImplicitDefs)" "LLVM's virtual registers are one index space, Register::index2VirtReg, the space addImplicitDefs walks; Julia differs: a statement's value, a PHI's IncomingReg and a label register are each indexed in a space of their own, so a register names its kind" Core.Int const REGISTER_LABEL::Int = 2
 
 """    BLOCK_TYPE_RESULTS
 
@@ -97,7 +114,9 @@ BLOCK and LOOP take their block type (MOImm, 0x40 for none); BR a target block; 
 a target block and the statement index of Julia's GotoIfNot whose condition they test; STMTS the
 first and last index of the block's Julia statements; BR_TABLE a label register then its target
 blocks, the last the default; CONST_I32 a label register and the value it sets; COPY the statement
-index of a PhiNode and the index of its edge whose value goes into the PHI's incoming register.
+index of a PhiNode and the index of its edge whose value goes into the PHI's incoming register;
+IMPLICIT_DEF the register it defines, its kind (REGISTER_VALUE, REGISTER_INCOMING, REGISTER_LABEL)
+then its index in that kind.
 """
 @quarantine "LLVM's MachineInstr: an opcode with operands, its parent block a number in Julia's CFG" Base.Vector mutable struct MachineInstr
     opcode::Opcode
@@ -127,17 +146,15 @@ One body's machine code over Julia's CFG with codegen's top block as block 1 (Ju
 block k + 1): `domtree`, Julia's dominator tree of it, `stmts`, the statements the CFG was computed
 from, `blocks`, each block's state by its number in the CFG (a block a pass adds, after them), and
 `layout`, the blocks in order. `label_registers` counts the i32 registers FixIrreducibleControlFlow
-made (LLVM's virtual registers of its dispatch blocks), numbered from 1; `implicit_defs` says every
-value needs a definition at entry (its addImplicitDefs); `handlers`, Julia's try handler of each
+made (LLVM's virtual registers of its dispatch blocks), numbered from 1; `handlers`, Julia's try handler of each
 statement and whether it may throw, which WebAssembly::mayThrow reads.
 """
-@quarantine "LLVM's MachineFunction, its CFG and dominator tree Julia's own" Core.Compiler.DomTree mutable struct MachineFunction
+@quarantine pin"precedent(julia: Compiler/src/ssair/ir.jl:427 IRCode)" "LLVM's MachineFunction, its CFG and dominator tree Julia's own, as Julia's IRCode holds a body's statements with its CFG; Julia differs: the blocks' instructions and layout are the passes', held beside Julia's CFG" Core.Compiler.DomTree mutable struct MachineFunction
     domtree::Core.Compiler.DomTree
     stmts::Vector{NirStmt}
     blocks::Vector{MachineBasicBlock}
     layout::Vector{Int}
     label_registers::Int
-    implicit_defs::Bool
     handlers::NirHandlers
 end
 
@@ -167,7 +184,7 @@ statement throws along, is dropped. Julia's CFG marks a catch block and the entr
 
 formal(dev/formal/CFGStackifyEH.tla): an EH pad's predecessors are exactly the blocks unwinding to it, as Julia's inference sends them
 """
-@quarantine "Julia's IR is a CFG of its statements; codegen puts a top block before it" Core.Compiler.construct_domtree function machine_function(stmts::Vector{NirStmt}, jcfg::Core.Compiler.CFG, handlers::NirHandlers, at::String)::MachineFunction
+@quarantine pin"precedent(julia: Compiler/src/ssair/ir.jl:94 compute_basic_blocks)" "Julia's IR is a CFG of its statements, the one compute_basic_blocks computes; Julia differs: codegen puts a top block before it, and the machine blocks hold the passes' instructions" Core.Compiler.construct_domtree function machine_function(stmts::Vector{NirStmt}, jcfg::Core.Compiler.CFG, handlers::NirHandlers, at::String)::MachineFunction
     local jb = jcfg.blocks
     local n = length(jb) + 1
     # block 1 is codegen's top, its one successor Julia's first block; Julia's block k is k + 1
@@ -228,7 +245,7 @@ formal(dev/formal/CFGStackifyEH.tla): an EH pad's predecessors are exactly the b
         end
         push!(blocks, MachineBasicBlock(b, unique(Int[p for p in bb.preds if reachable(p)]), unique(bb.succs), instrs, b in eh_pads))
     end
-    return MachineFunction(domtree, stmts, blocks, Int[b for b in 1:n if reachable(b)], 0, false, handlers)
+    return MachineFunction(domtree, stmts, blocks, Int[b for b in 1:n if reachable(b)], 0, handlers)
 end
 
 """    renumber_blocks!(mf) -> Nothing
