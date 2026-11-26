@@ -254,11 +254,13 @@ end
     DD.build(t3.dispatch_table[])
     local s3 = DD.selector_for_target(t3.dispatch_table[], getter(F.B, "side"))
     @test s3.name == "side" && t3.dispatch_table[]._table[][t3.class_id_numbering[].class_ids[F.B] + DD.targets(s3; unchecked = false).offset + 1] === getter(F.B, "side")
-    # a position naming different fields in different classes, or past a class's fields: located
+    # a position naming different fields in different classes: located
     local em = try; (tm = numbered(F.first_mixed); W.field_selector_calls(tm.component, admitted(tm))); nothing; catch x; x; end
     @test em isa W.RejectionError && em.rejection isa W.Unquarantined && occursin("side, tag", em.rejection.row)
-    local eb = try; (ts = numbered(F.second_short); W.field_selector_calls(ts.component, admitted(ts))); nothing; catch x; x; end
-    @test eb isa W.RejectionError && eb.rejection isa W.Unquarantined && occursin("BoundsError", eb.rejection.row)
+    # a position past a class's fields: that class raises Julia's BoundsError at the site (classes_past_position),
+    # so the selector admits only the classes holding the field (test/src/field_bounds.jl runs it)
+    local ts = numbered(F.second_short)
+    @test [(c.name, c.is_setter, c.call_count, Set(c.classes)) for c in W.field_selector_calls(ts.component, admitted(ts))] == [("tag", false, 1, Set([F.A]))]
     # a MemoryRef's ptr_or_offset on a union of reference classes is no selector's: the read builds each class's
     # element address by its own switch (src/julia/classes.jl memoryref_union_classes, src/intrinsics.jl
     # memoryref_union_address), the address form and the offset form alike

@@ -388,8 +388,9 @@ formal(dev/formal/FieldSelectorTable.tla): no slot taken twice, a class with the
     local at = "dart2wasm/lib/dispatch_table.dart:501 DispatchTable.build"
     local translator = self.translator
     # the selectors, from the field calls Julia's IR holds (TFA's selector metadata in dart)
-    # a receiver's admitted classes: its type's concrete classes, getConcreteClassIdRange's one reading
-    local calls = field_selector_calls(translator.component, receiver -> concrete_classes(translator, receiver))
+    # a receiver's admitted classes: the classes it holds, its type's concrete classes (getConcreteClassIdRange's
+    # one reading), a tuple held as its record (field_receiver_classes)
+    local calls = field_selector_calls(translator.component, receiver -> field_receiver_classes(translator, receiver))
     # each selector's id, assigned once here and recorded for its field's name and kind, the key its
     # accessors are matched by (TFA's one assignment of selector ids)
     local selector_id = Dict{Tuple{String,Bool},Int}()

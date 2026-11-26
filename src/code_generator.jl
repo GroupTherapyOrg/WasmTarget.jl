@@ -2012,6 +2012,46 @@ end
     union_refs === nothing || return generate_static_intrinsic(self.intrinsifier[], Val(:memoryref_union_address), union_refs, receiver)
     if !(cls isa DataType && isconcretetype(cls))
         statement === nothing && reject!(Internal("$at: a field access on $cls reached with no statement index, its call site unnamed"), "$(julia_text(self.enclosing_member))")
+        # a class the receiver holds that a read at a position reaches past its fields: Julia's getfield
+        # checks the position against the value's own type before it reads (julia/src/builtins.c:994
+        # get_checked_fieldindex) and raises BoundsError of the value and the position (:1006
+        # jl_bounds_error), so the receiver's class id is tested against those classes'
+        # (emitClassIdRangeCheck), Nothing's value the null, before the selector's call, whose classes are
+        # the rest (field_selector_calls)
+        local past = classes_past_position(field_receiver_classes(self.translator, cls), key, at)
+        if !isempty(past)
+            local t = self.translator
+            local b = self.b[]
+            local rt = translate_type(t, cls)
+            rt isa WasmBuilder.IR.RefType || reject!(Internal("$at: a field access on $cls, held as $rt, no reference"), "$(julia_text(self.enclosing_member))")
+            local held = add_local(self, rt)
+            translate_expression(self, receiver, rt)
+            WasmBuilder.local_set(b, held)
+            # the class ids of the classes past the position; Nothing's value is the null, no object
+            local ids = sort!(Int[class_id(t.class_info[c]) for c in past if c !== Nothing])
+            local reads = WasmBuilder.block(b)
+            local raises = WasmBuilder.block(b)
+            WasmBuilder.local_get(b, held)
+            if WasmBuilder.nullable(rt)
+                Nothing in past ? WasmBuilder.br_on_null(b, raises) : WasmBuilder.ref_as_non_null(b)
+            end
+            if isempty(ids)
+                WasmBuilder.drop(b)
+            else
+                convert_type(t, b, WasmBuilder.with_nullability(rt, false), t.top_type_non_nullable[])
+                load_class_id(b, t, t.top_type_non_nullable[])
+                emit_class_id_range_check(b, Range[Range(Val(:_), id, id) for id in ids])
+                WasmBuilder.br_if(b, raises)
+            end
+            WasmBuilder.br(b, reads)
+            WasmBuilder.var"end"(b)
+            WasmBuilder.local_get(b, held)
+            convert_type(t, b, rt, t.top_type[])
+            WasmBuilder.i64_const(b, key::Int)
+            call(self, nir_runtime_member(t.component, throw_bounds_error, "$(julia_text(self.enclosing_member)): a field of $cls at position $key"))
+            WasmBuilder.unreachable(b)
+            WasmBuilder.var"end"(b)
+        end
         local reference = SelectorReference(FieldAccessSite(self.enclosing_member::Core.MethodInstance, statement), FieldReferenceKind_getter)
         local result = _virtual_call(self, node, reference, _VirtualCallKind_Get,
             signature -> (translate_expression(self, receiver, signature.inputs[1]); nothing), (signature, param_info) -> nothing;
