@@ -432,7 +432,11 @@ end
         local h = st.head
         local ops(xs) = NirValue[_nir_operand(a, bindings, at) for a in xs]
         if h === :call
-            local c = NirCall(ops(st.args))
+            # cglobal's name is read as a foreigncall's, by static_eval (julia/src/ccall.cpp:690 emit_cglobal calls
+            # interpret_symbol_arg): a `(name, library)` whose library is a constant binding is that tuple
+            local c = length(st.args) >= 2 && _nir_static_eval(st.args[1], bindings) == Some{Any}(Core.Intrinsics.cglobal) ?
+                NirCall(NirValue[_nir_operand(st.args[1], bindings, at); _nir_ccall_name(st.args[2], bindings, at); ops(st.args[3:end])]) :
+                NirCall(ops(st.args))
             # a getglobal of a constant module and name is the read of the binding it names (nir_getglobal_ref):
             # a GlobalRef statement's form, so every reader of a binding meets it as one
             local ref = nir_getglobal_ref(c)
