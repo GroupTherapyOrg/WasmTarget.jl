@@ -3744,8 +3744,10 @@ end
 #     (the fatal arm), never an invented address
 #   add_ptr, sub_ptr (intrinsics.cpp:1503 emit_untyped_intrinsic's add_ptr, a GEP of i8 by the byte count; sub_ptr
 #     its negation): the base kept, the offset moved by the bytes, wrapping as Julia's i64 arithmetic does
-#   a load or a store through a pointer (pointerref, pointerset, and their atomic forms): not yet ported,
-#     rejected, located
+#   a load or a store through a pointer (pointerref, pointerset; atomic_pointerref, atomic_pointerset of the
+#     order :not_atomic): over the data array the base is, src/intrinsics.jl's pointer_load and pointer_store
+#     arms; an atomic order, as an atomic field's or memory's (the isdefined and memory arms), a gap, located:
+#     threads lie outside the strict subset; atomic_pointerswap, modify and replace not yet ported, rejected
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:pointer}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
     local code_gen = self.code_gen
     local b = code_gen.b[]
@@ -3786,10 +3788,354 @@ end
             f === I.add_ptr ? WasmBuilder.i64_add(b) : WasmBuilder.i64_sub(b)
         end, at)
     end
-    (f === I.pointerref || f === I.pointerset || f === I.atomic_pointerref || f === I.atomic_pointerset ||
-     f === I.atomic_pointerswap || f === I.atomic_pointermodify || f === I.atomic_pointerreplace) &&
-        reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: Julia's $f, a load or store through a managed pointer (src/julia/classes.jl managed_pointer), not yet ported"), at)
+    f === I.pointerref && length(args) == 3 && return generate_static_intrinsic(self, Val(:pointer_load), args[1], args[2], at)
+    f === I.pointerset && length(args) == 4 && return generate_static_intrinsic(self, Val(:pointer_store), args[1], args[2], args[3], at)
+    if (f === I.atomic_pointerref && length(args) == 2) || (f === I.atomic_pointerset && length(args) == 3)
+        # the order, jl_get_atomic_order's (julia/src/builtins.c:967) for a load (loading, not storing) or a
+        # store (storing, not loading): an order of neither kind is emit_atomic_error's ConcurrencyViolationError
+        # (intrinsics.cpp:961, :1031), raised through the runtime's thrower; :not_atomic the plain access
+        # (typed_load and typed_store with NotAtomic); an atomic one a gap, as the isdefined arm's atomic field
+        local loading = f === I.atomic_pointerref
+        local ord = args[end]
+        ord isa NirConst && ord.c.val isa Symbol ||
+            reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: Julia's $f with an order known only at run time"), at)
+        local o = ord.c.val
+        if !(o === :not_atomic || o === :unordered || o === :monotonic || o === :sequentially_consistent ||
+             (loading && o === :acquire) || (!loading && o === :release))
+            translate_expression(code_gen, NirConst(Core.Const("invalid atomic ordering")), translate_type(translator(self), String))
+            call(code_gen, nir_runtime_member(translator(self).component, throw_atomic_error, at))
+            WasmBuilder.unreachable(b)
+            return i64
+        end
+        o === :not_atomic ||
+            reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: Julia's $f with the atomic order $o: threads lie outside the strict subset, as an atomic field's or memory's access"), at)
+        return loading ? generate_static_intrinsic(self, Val(:pointer_load), args[1], nothing, at) :
+            generate_static_intrinsic(self, Val(:pointer_store), args[1], args[2], nothing, at)
+    end
+    (f === I.atomic_pointerswap || f === I.atomic_pointermodify || f === I.atomic_pointerreplace) &&
+        reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: Julia's $f, a read-modify-write through a managed pointer (src/julia/classes.jl managed_pointer), not yet ported"), at)
     return nothing
+end
+
+# Julia's load and store of an element through a pointer (julia/src/intrinsics.cpp:742 emit_pointerref, :817
+# emit_pointerset; :947 emit_atomic_pointerref and :1008 emit_atomic_pointerop's set of the order :not_atomic):
+# the element of type T at the address p + (i - 1) * sizeof(T), or at p itself for the atomic forms, loaded or
+# stored as T's LLVM type (typed_load, typed_store). Over the managed pointer (src/julia/classes.jl
+# managed_pointer) the address is its base, a data array, and its byte offset, so the access is dart's ByteData
+# over a typed list's buffer (sdk/lib/_internal/wasm/common/typed_data.dart): a value read at a byte offset of
+# the array, from the array's own element where the array's storage is the value's and the offset falls on an
+# element (_I32ByteData._getUint32Unchecked, typed_data.dart:655, `totalOffset & 3 == 0`: `_data.readUnsigned(
+# totalOffset ~/ bytesPerElement)`; _F32ByteData's float, :848), else assembled from its bytes in little-endian
+# order (ByteDataBase._getUint32Unchecked, :244, `(b4 << 24) | (b3 << 16) | (b2 << 8) | b1`; a float through its
+# bits, intBitsToFloat, :392; the store's split, _setUint32Unchecked, :257) over a byte array (I8ByteData, :486).
+# wasm and every host Julia runs on are little-endian, so the bytes' order is Julia's own. A Ptr-typed element
+# (a pointer stored in a memory of boxed elements, the C_NULL _unsetindex! writes, base/genericmemory.jl:78) is
+# the array's reference: the null C_NULL, which reads back as C_NULL. Anything else is no element WasmTarget
+# holds at that address: no base (an integer address), a data array of another storage, a misaligned offset, an
+# offset past the array (Julia's load does not check; wasm's array.get traps), an object's own address read from
+# a boxed element, or an element's #undef in a memory that keeps set flags (useIsSetField, which a pointer to
+# the data array does not reach): the fatal arm at run time, located, never a value guessed. A T that is no
+# primitive type of 1, 2, 4 or 8 bytes, nor a pointer, rejects at compile time, located.
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:pointer_access}, P::Type, at::String)::NamedTuple
+    local t = translator(self)
+    P isa DataType && managed_pointer(P) || reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: a load or store through a $P, no pointer class"), at)
+    local T = P.parameters[1]
+    # the data array of a Memory{E}, Julia's layout of E (src/julia/classes.jl _memory_element_storage), and
+    # whether that memory keeps set flags beside it (data#isSet)
+    local data_array(M::DataType) = begin
+        local fs = class_instance_fields(M, at)
+        local data = fs[findfirst(f -> f.name == "data", fs)]
+        ((translate_type_of_field(t, data)::WasmBuilder.IR.RefType).heap_type::WasmBuilder.IR.ArrayType,
+         any(f -> f.name == "data#isSet", fs))
+    end
+    if managed_pointer(T)
+        # every memory class of the program whose elements are boxed (a reference each, Julia's pointer-size
+        # element), its data array once (one array type may serve several), flagged where any keeps set flags
+        local arrays = Pair{WasmBuilder.IR.ArrayType,Bool}[]
+        for M in sort!([M for M in keys(t.class_info) if M <: GenericMemory && M.parameters[1] === :not_atomic &&
+                        M.parameters[3] === Core.CPU && !Base.allocatedinline(M.parameters[2])]; by = string)
+            local (a, flagged) = data_array(M)
+            local k = findfirst(x -> x.first === a, arrays)
+            k === nothing ? push!(arrays, a => flagged) : (arrays[k] = a => (arrays[k].second || flagged))
+        end
+        # a memory of pointers of T's class holds each by reference (_memory_element_storage), its own array
+        local (own, _) = data_array(Memory{T})
+        return (kind = :pointer, T = T, size = sizeof(Ptr{Cvoid}), own = own, arrays = arrays)
+    end
+    T isa DataType && isprimitivetype(T) && !type_expand_integer(T) && sizeof(T) in (1, 2, 4, 8) ||
+        reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: a load or store of a $(julia_text(T)) through a pointer, an element that is no primitive type of 1, 2, 4 or 8 bytes nor a pointer, not yet ported"), at)
+    local (own, _) = data_array(Memory{T})
+    local (bytes, _) = data_array(Memory{UInt8})
+    return (kind = :bits, T = T, size = sizeof(T), own = own, bytes = bytes,
+            value = WasmBuilder.unpacked(own.element_type[].type))
+end
+
+# the byte offset of the element a pointerref or pointerset names, p's offset plus (i - 1) * sizeof(T) in
+# Julia's wrapping i64 arithmetic (emit_pointerref's im1, its GEP of T), or p's own for the atomic forms (`index`
+# nothing), into a new local
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:pointer_byte_offset}, offset::WasmBuilder.IR.Local, index::Union{NirValue,Nothing}, size::Int)::WasmBuilder.IR.Local
+    local code_gen = self.code_gen
+    local b = code_gen.b[]
+    local i64 = WasmBuilder.IR.NumType_i64
+    local o = add_local(code_gen, i64)
+    WasmBuilder.local_get(b, offset)
+    if index !== nothing
+        translate_expression(code_gen, index, i64)
+        WasmBuilder.i64_const(b, 1)
+        WasmBuilder.i64_sub(b)
+        WasmBuilder.i64_const(b, Int64(size))
+        WasmBuilder.i64_mul(b)
+        WasmBuilder.i64_add(b)
+    end
+    WasmBuilder.local_set(b, o)
+    return o
+end
+
+# the access over the base's data array: each arm a data array type and the code reading or writing through
+# the base cast to it, tested in turn (ref.test, as dart's DynamicGet switches over the classes, code_generator.
+# dart:2317 visitDynamicGet), any other base the fatal arm; `guards` of an arm: its element index or byte range
+# within the array, misaligned or out of range the fatal arm
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:pointer_dispatch}, base::WasmBuilder.IR.Local, arms::Vector{Pair{WasmBuilder.IR.ArrayType,Function}}, what::String, at::String)::Nothing
+    local b = self.code_gen.b[]
+    for (a, body) in arms
+        WasmBuilder.local_get(b, base)
+        WasmBuilder.ref_test(b, WasmBuilder.IR.RefType_def(a; nullable = false))
+        WasmBuilder.if_(b)
+        body(() -> (WasmBuilder.local_get(b, base); WasmBuilder.ref_cast(b, WasmBuilder.IR.RefType_def(a; nullable = false))))
+        WasmBuilder.else_(b)
+    end
+    generate_static_intrinsic(self, Val(:fatal), Unquarantined("src/intrinsics.jl generateStaticIntrinsic: $what through a managed pointer with no base or into a data array of no storage it reads (src/julia/classes.jl managed_pointer)"), at)
+    for _ in arms
+        WasmBuilder.var"end"(b)
+    end
+    return nothing
+end
+
+# the fatal arm where the condition on the stack holds
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:pointer_fatal_if}, why::String, at::String)::Nothing
+    local b = self.code_gen.b[]
+    WasmBuilder.if_(b)
+    generate_static_intrinsic(self, Val(:fatal), Unquarantined("src/intrinsics.jl generateStaticIntrinsic: $why (src/julia/classes.jl managed_pointer)"), at)
+    WasmBuilder.var"end"(b)
+    return nothing
+end
+
+# an element's index in an array of `size`-byte elements from the byte offset `o`: the fatal arm where `o` falls
+# between elements or the index passes the array's length (the array, cast, pushed by `array`); the index left
+# on the stack as an i32
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:pointer_element_index}, o::WasmBuilder.IR.Local, size::Int, array::Function, what::String, at::String)::Nothing
+    local b = self.code_gen.b[]
+    WasmBuilder.local_get(b, o)
+    WasmBuilder.i64_const(b, Int64(size))
+    WasmBuilder.i64_rem_u(b)
+    WasmBuilder.i64_const(b, 0)
+    WasmBuilder.i64_ne(b)
+    generate_static_intrinsic(self, Val(:pointer_fatal_if), "$what at a byte offset between two of the data array's elements", at)
+    WasmBuilder.local_get(b, o)
+    WasmBuilder.i64_const(b, Int64(size))
+    WasmBuilder.i64_div_u(b)
+    array()
+    WasmBuilder.array_len(b)
+    WasmBuilder.i64_extend_i32_u(b)
+    WasmBuilder.i64_ge_u(b)
+    generate_static_intrinsic(self, Val(:pointer_fatal_if), "$what past the end of the data array", at)
+    WasmBuilder.local_get(b, o)
+    WasmBuilder.i64_const(b, Int64(size))
+    WasmBuilder.i64_div_u(b)
+    WasmBuilder.i32_wrap_i64(b)
+    return nothing
+end
+
+# the fatal arm where the `size` bytes from the byte offset `o` pass a byte array's end (the array pushed by
+# `array`): o >= length, or length - o < size, unsigned
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:pointer_byte_range}, o::WasmBuilder.IR.Local, size::Int, array::Function, what::String, at::String)::Nothing
+    local code_gen = self.code_gen
+    local b = code_gen.b[]
+    local len = add_local(code_gen, WasmBuilder.IR.NumType_i64)
+    array()
+    WasmBuilder.array_len(b)
+    WasmBuilder.i64_extend_i32_u(b)
+    WasmBuilder.local_set(b, len)
+    WasmBuilder.local_get(b, o)
+    WasmBuilder.local_get(b, len)
+    WasmBuilder.i64_ge_u(b)
+    WasmBuilder.local_get(b, len)
+    WasmBuilder.local_get(b, o)
+    WasmBuilder.i64_sub(b)
+    WasmBuilder.i64_const(b, Int64(size))
+    WasmBuilder.i64_lt_u(b)
+    WasmBuilder.i32_or(b)
+    generate_static_intrinsic(self, Val(:pointer_fatal_if), "$what past the end of the byte array", at)
+    return nothing
+end
+
+# Julia's pointerref (`index` its i) and atomic_pointerref of :not_atomic (`index` nothing): the element's value
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:pointer_load}, p::NirValue, index::Union{NirValue,Nothing}, at::String)::WasmBuilder.IR.ValueType
+    local code_gen = self.code_gen
+    local b = code_gen.b[]
+    local acc = generate_static_intrinsic(self, Val(:pointer_access), dart_type_of(self, p), at)
+    local (base, offset) = generate_static_intrinsic(self, Val(:pointer_parts), p, at)
+    local o = generate_static_intrinsic(self, Val(:pointer_byte_offset), offset, index, acc.size)
+    local what = "a load of a $(julia_text(acc.T))"
+    if acc.kind === :pointer
+        local pinfo, _ = generate_static_intrinsic(self, Val(:fields_of), acc.T, at)
+        # nullable, as a local set inside a block is unset again past its end (wasm's local initialization)
+        local r = add_local(code_gen, WasmBuilder.with_nullability(pinfo.non_nullable_type, true))
+        local arms = Pair{WasmBuilder.IR.ArrayType,Function}[]
+        push!(arms, acc.own => ((array::Function) -> begin
+            # a memory of pointers: its element, the pointer itself (its null no pointer a memory holds)
+            array()
+            generate_static_intrinsic(self, Val(:pointer_element_index), o, acc.size, array, what, at)
+            WasmBuilder.array_get(b, acc.own)
+            WasmBuilder.local_tee(b, r)
+            WasmBuilder.ref_is_null(b)
+            generate_static_intrinsic(self, Val(:pointer_fatal_if), "$what from an element of a memory of pointers holding none", at)
+        end))
+        for (a, flagged) in acc.arrays
+        push!(arms, a => ((array::Function) -> begin
+            # Julia's word: NULL, an #undef element, is C_NULL; another is the object's own address, which no
+            # managed pointer holds (its base a data array); in a flagged memory the null is no #undef (its
+            # flag is), so no word is known
+            flagged && (WasmBuilder.i32_const(b, 1); generate_static_intrinsic(self, Val(:pointer_fatal_if), "$what from an element of a memory that keeps its #undef in set flags, which a pointer to its data array does not reach", at))
+            array()
+            generate_static_intrinsic(self, Val(:pointer_element_index), o, acc.size, array, what, at)
+            WasmBuilder.array_get(b, a)
+            WasmBuilder.ref_is_null(b)
+            WasmBuilder.i32_eqz(b)
+            generate_static_intrinsic(self, Val(:pointer_fatal_if), "$what from a boxed element holding an object, whose address no managed pointer holds", at)
+            generate_static_intrinsic(self, Val(:new_pointer), acc.T, () -> WasmBuilder.ref_null(b, WasmBuilder.IR.HeapType_none), () -> WasmBuilder.i64_const(b, 0), at)
+            WasmBuilder.local_set(b, r)
+        end))
+        end
+        generate_static_intrinsic(self, Val(:pointer_dispatch), base, arms, what, at)
+        WasmBuilder.local_get(b, r)
+        WasmBuilder.ref_as_non_null(b)
+        return pinfo.non_nullable_type
+    end
+    local T = acc.T
+    local r = add_local(code_gen, acc.value)
+    local arms = Pair{WasmBuilder.IR.ArrayType,Function}[]
+    push!(arms, acc.own => ((array::Function) -> begin
+        # the array's own element (dart's aligned fast path), sign-extended for a signed T (readIntArray)
+        array()
+        generate_static_intrinsic(self, Val(:pointer_element_index), o, acc.size, array, what, at)
+        read_int_array(self, acc.own; unsigned = !(T <: Signed))
+        WasmBuilder.local_set(b, r)
+    end))
+    acc.own === acc.bytes || push!(arms, acc.bytes => ((array::Function) -> begin
+        # the bytes, little-endian, in the i32 or i64 T's bits fill (ByteDataBase's _getUint16/32/64Unchecked)
+        generate_static_intrinsic(self, Val(:pointer_byte_range), o, acc.size, array, what, at)
+        local wide = acc.size == 8
+        for j in 0:acc.size - 1
+            array()
+            WasmBuilder.local_get(b, o)
+            WasmBuilder.i32_wrap_i64(b)
+            j == 0 || (WasmBuilder.i32_const(b, Int64(j)); WasmBuilder.i32_add(b))
+            WasmBuilder.array_get_u(b, acc.bytes)
+            wide && WasmBuilder.i64_extend_i32_u(b)
+            if j > 0
+                wide ? (WasmBuilder.i64_const(b, Int64(8j)); WasmBuilder.i64_shl(b); WasmBuilder.i64_or(b)) :
+                       (WasmBuilder.i32_const(b, Int64(8j)); WasmBuilder.i32_shl(b); WasmBuilder.i32_or(b))
+            end
+        end
+        # a float its bits' (intBitsToFloat), a signed 16-bit value sign-extended as readIntArray reads it
+        T <: AbstractFloat ? (wide ? WasmBuilder.f64_reinterpret_i64(b) : WasmBuilder.f32_reinterpret_i32(b)) :
+            T <: Signed && acc.size == 2 && WasmBuilder.i32_extend16_s(b)
+        WasmBuilder.local_set(b, r)
+    end))
+    generate_static_intrinsic(self, Val(:pointer_dispatch), base, arms, what, at)
+    WasmBuilder.local_get(b, r)
+    # a Bool, typed_load's trunc to i1 (julia/src/cgutils.cpp:2282, its "freeze" of undef memory): the byte's
+    # low bit
+    T === Bool && (WasmBuilder.i32_const(b, 1); WasmBuilder.i32_and(b))
+    return r.type
+end
+
+# Julia's pointerset (`index` its i) and atomic_pointerset of :not_atomic (`index` nothing): the value `x` stored
+# at the element; the answer the pointer p (emit_pointerset's `return e`)
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:pointer_store}, p::NirValue, x::NirValue, index::Union{NirValue,Nothing}, at::String)::WasmBuilder.IR.ValueType
+    local code_gen = self.code_gen
+    local b = code_gen.b[]
+    local P = dart_type_of(self, p)
+    local acc = generate_static_intrinsic(self, Val(:pointer_access), P, at)
+    local (base, offset) = generate_static_intrinsic(self, Val(:pointer_parts), p, at)
+    local o = generate_static_intrinsic(self, Val(:pointer_byte_offset), offset, index, acc.size)
+    local what = "a store of a $(julia_text(acc.T))"
+    if acc.kind === :pointer
+        local xinfo, _ = generate_static_intrinsic(self, Val(:fields_of), acc.T, at)
+        local xv = add_local(code_gen, xinfo.non_nullable_type)
+        translate_expression(code_gen, x, xinfo.non_nullable_type)
+        WasmBuilder.local_set(b, xv)
+        local (xb, xo) = generate_static_intrinsic(self, Val(:pointer_parts), x, at)
+        local arms = Pair{WasmBuilder.IR.ArrayType,Function}[]
+        push!(arms, acc.own => ((array::Function) -> begin
+            # a memory of pointers: the pointer itself its element
+            array()
+            generate_static_intrinsic(self, Val(:pointer_element_index), o, acc.size, array, what, at)
+            WasmBuilder.local_get(b, xv)
+            WasmBuilder.array_set(b, acc.own)
+        end))
+        for (a, flagged) in acc.arrays
+        push!(arms, a => ((array::Function) -> begin
+            # a boxed element: the stored word C_NULL (no base, offset 0) is its #undef, the null; any other an
+            # object's address, which no boxed element holds as a managed pointer
+            WasmBuilder.local_get(b, xb)
+            WasmBuilder.ref_is_null(b)
+            WasmBuilder.i32_eqz(b)
+            WasmBuilder.local_get(b, xo)
+            WasmBuilder.i64_const(b, 0)
+            WasmBuilder.i64_ne(b)
+            WasmBuilder.i32_or(b)
+            generate_static_intrinsic(self, Val(:pointer_fatal_if), "$what other than C_NULL into a boxed element, an object's address no managed pointer holds", at)
+            flagged && (WasmBuilder.i32_const(b, 1); generate_static_intrinsic(self, Val(:pointer_fatal_if), "$what into an element of a memory that keeps its #undef in set flags, which a pointer to its data array does not reach", at))
+            array()
+            generate_static_intrinsic(self, Val(:pointer_element_index), o, acc.size, array, what, at)
+            WasmBuilder.ref_null(b, WasmBuilder.IR.HeapType_none)
+            WasmBuilder.array_set(b, a)
+        end))
+        end
+        generate_static_intrinsic(self, Val(:pointer_dispatch), base, arms, what, at)
+    else
+        local T = acc.T
+        local v = add_local(code_gen, acc.value)
+        translate_expression(code_gen, x, acc.value)
+        WasmBuilder.local_set(b, v)
+        local arms = Pair{WasmBuilder.IR.ArrayType,Function}[]
+        push!(arms, acc.own => ((array::Function) -> begin
+            array()
+            generate_static_intrinsic(self, Val(:pointer_element_index), o, acc.size, array, what, at)
+            WasmBuilder.local_get(b, v)
+            WasmBuilder.array_set(b, acc.own)
+        end))
+        acc.own === acc.bytes || push!(arms, acc.bytes => ((array::Function) -> begin
+            # the bytes, little-endian, of T's bits (floatToIntBits; ByteDataBase's _setUint16/32/64Unchecked)
+            generate_static_intrinsic(self, Val(:pointer_byte_range), o, acc.size, array, what, at)
+            local wide = acc.size == 8
+            local bits = add_local(code_gen, wide ? WasmBuilder.IR.NumType_i64 : WasmBuilder.IR.NumType_i32)
+            WasmBuilder.local_get(b, v)
+            T <: AbstractFloat && (wide ? WasmBuilder.i64_reinterpret_f64(b) : WasmBuilder.i32_reinterpret_f32(b))
+            WasmBuilder.local_set(b, bits)
+            for j in 0:acc.size - 1
+                array()
+                WasmBuilder.local_get(b, o)
+                WasmBuilder.i32_wrap_i64(b)
+                j == 0 || (WasmBuilder.i32_const(b, Int64(j)); WasmBuilder.i32_add(b))
+                WasmBuilder.local_get(b, bits)
+                if wide
+                    j == 0 || (WasmBuilder.i64_const(b, Int64(8j)); WasmBuilder.i64_shr_u(b))
+                    WasmBuilder.i32_wrap_i64(b)
+                else
+                    j == 0 || (WasmBuilder.i32_const(b, Int64(8j)); WasmBuilder.i32_shr_u(b))
+                end
+                # array.set of an i8 array keeps the value's low byte
+                WasmBuilder.array_set(b, acc.bytes)
+            end
+        end))
+        generate_static_intrinsic(self, Val(:pointer_dispatch), base, arms, what, at)
+    end
+    local pinfo, _ = generate_static_intrinsic(self, Val(:fields_of), P, at)
+    translate_expression(code_gen, p, pinfo.non_nullable_type)
+    return pinfo.non_nullable_type
 end
 
 # a pointer's two parts (src/julia/classes.jl _pointer_instance_fields), each read once into a local: its base
