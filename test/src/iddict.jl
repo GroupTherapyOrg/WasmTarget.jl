@@ -10,12 +10,16 @@ isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "..", "run_ch
 
 module IdDictCases
 # an image constant keyed by identities and contents: its table laid out by the compiling process's ids, read by
-# jl_eqtable_get (get, getindex, haskey) and its count read (length)
+# jl_eqtable_get (get, getindex, haskey) and its count read (length), and walked (jl_eqtable_nextind)
 const KR = Base.RefValue{Int64}(5)
 const CR = IdDict{Base.RefValue{Int64},Int64}(KR => 9)
 image_identity(x::Int64)::Int64 = get(CR, KR, -1) * 10 + get(CR, Base.RefValue{Int64}(x), -1)
 image_reads(x::Int64)::Int64 = get(CR, KR, -1) + (haskey(CR, KR) ? 100 : 0) + length(CR) * 1000 +
     (try; CR[Base.RefValue{Int64}(x)]; catch e; e isa KeyError ? -10000 : -20000; end)
+# the walk: Base.iterate over _oidd_nextind, jl_eqtable_nextind's port, each pair read by identity
+const KQ = Base.RefValue{Int64}(7)
+const CW = IdDict{Base.RefValue{Int64},Int64}(KR => 9, KQ => 4)
+walk(x::Int64)::Int64 = (local s = 0; for (k, v) in CW; s += k[] * v; end; s + x)
 # a write: Base's setindex!(d, @nospecialize(val), key) converts a value it left Any (julia/base/iddict.jl:77
 # `convert(V, val)::V`), a call Julia's verifier leaves unresolved: outside the strict subset
 function string_key(x::Int64)::Int64
@@ -29,7 +33,7 @@ const IC = IdDictCases
 
 @testset "IdDict over Julia's identity table, iddict.c ported" begin
     local cases = Main.WTChild.RunCase[]
-    for (f, xs) in ((IC.image_identity, (5,)), (IC.image_reads, (5, 6)))
+    for (f, xs) in ((IC.image_identity, (5,)), (IC.image_reads, (5, 6)), (IC.walk, (3,)))
         local (p, o) = Main.WTVerdict._modules(WasmTarget.compile, f, (Int64(1),))
         for x in xs
             push!(cases, Main.WTChild.RunCase("iddict/$(nameof(f))($x)", p, (Int64(x),), Main.WTChild.native_answer(f, (Int64(x),)); optimized = o))
