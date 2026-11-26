@@ -35,14 +35,15 @@ function rewrapped(k::Int64)::Int64
     t isa UnionAll || return 0
     return ua(t.var, t.body) === Vector ? 1 : 2
 end
-# the new UnionAll's parts, its kind and its fields (each body taken from an Any vector: a type literal with a free
-# variable as an operand of === is makeType's own gap, src/types.jl)
+# the new UnionAll's parts, its kind and its fields
 function made_parts(k::Int64)::Int64
     local b = Any[Vector{TV}, Int64][k]
     local u = ua(TV, b)
     u isa UnionAll || return 0
     return Int64(u.var === TV) + 2 * Int64(u.body === b) + 4 * Int64(typeof(u) === UnionAll)
 end
+# a type literal holding a TypeVar value (Vector{TV}), an object the program holds, compared with the made body
+literal_body(k::Int64)::Int64 = (u = ua(TV, Any[Vector{TV}, Int64][k]); u isa UnionAll ? (u.body === Vector{TV} ? 1 : 2) : 0)
 # two new UnionAlls over distinct variables: egal where the variables' names agree (renaming, the bodies two
 # DataTypes of one TypeName whose parameters are the paired variables), not where they differ
 const TV_T2 = TypeVar(:T)
@@ -68,7 +69,7 @@ const JC = JlTypesCases
     end
     # the new object: a UnionAll egal to Vector, its parts, and egal by renaming
     local made = Main.WTChild.RunCase[]
-    for (f, ks) in ((JC.rewrapped, 1:2), (JC.made_parts, 1:2), (JC.made_egal, 1:3))
+    for (f, ks) in ((JC.rewrapped, 1:2), (JC.made_parts, 1:2), (JC.made_egal, 1:3), (JC.literal_body, 1:2))
         local (p, o) = both(f, (Int64(1),))
         append!(made, [Main.WTChild.RunCase("jltypes/$(nameof(f))$k", p, (Int64(k),), Main.WTChild.native_answer(f, (Int64(k),)); optimized = o) for k in ks])
     end
