@@ -997,6 +997,10 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
             # holds that type, so no constant of another is made here; rejected, located, never written into a
             # slot it does not fit
             local held = getfield(v, field.index)
+            # a TypeName's type caches, pruned to the program's type values as Julia's image writer prunes them
+            # (src/julia/classes.jl typename_cache_pruned, julia/src/staticdata.c:3311-3316)
+            cls === Core.TypeName && Symbol(field.name) in TYPENAME_CACHES && held isa Core.SimpleVector &&
+                (held = typename_cache_pruned(Base.IdSet{DataType}(e for e in type_value_entries(translator) if e !== nothing), v, Symbol(field.name)))
             held isa field.type ||
                 reject!(Unquarantined("src/constants.jl visitInstanceConstant: the field $(field.name) of a $cls constant holds a $(typeof(held)), outside its declared type $(field.type)"), at)
             held

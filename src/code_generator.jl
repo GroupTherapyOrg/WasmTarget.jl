@@ -2317,6 +2317,10 @@ end
     if target.cls <: Core.GenericMemoryRef && target.name == "ptr_or_offset"
         return generate_static_intrinsic(self.intrinsifier[], Val(:memoryref_address), target.cls, receiver)
     end
+    # a TypeName's hash cache, which a constant holds pruned but not rehashed, rejects at the read, located
+    # (src/julia/classes.jl typename_cache_unread)
+    local pruned = typename_cache_unread(target)
+    pruned === nothing || reject!(pruned, "$(julia_text(self.enclosing_member))")
     # a field whose type Julia's inference reads as another than the one it holds (Julia 1.12's TypeName
     # linearcache) rejects at the read, located (src/julia/classes.jl declared_type_unheld)
     local unheld = declared_type_unheld(target.cls, target.index)

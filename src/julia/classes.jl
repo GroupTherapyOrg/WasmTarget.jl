@@ -708,6 +708,15 @@ end
         for f in _kind_instance_fields(t, at)
             f.index > 0 && isdefined(v, f.index) && _meet_constant!(out, seen, objs, getfield(v, f.index), at)
         end
+    elseif t === Core.TypeName
+        # a TypeName's type caches are queued, never recursed into (julia/src/staticdata.c:863-867, "don't recurse
+        # into several fields"), and pruned to the types reached otherwise (typename_cache_pruned): each cache is a
+        # SimpleVector whose kept entries are type values the walk meets by their own reach, never by the cache
+        for i in 1:fieldcount(t)
+            isdefined(v, i) || continue
+            fieldname(t, i) in TYPENAME_CACHES ? _meet_value!(out, seen, Core.SimpleVector, at) :
+                _meet_constant!(out, seen, objs, getfield(v, i), at)
+        end
     elseif !isprimitivetype(t)
         for i in 1:fieldcount(t)
             isdefined(v, i) && _meet_constant!(out, seen, objs, getfield(v, i), at)
@@ -1515,6 +1524,55 @@ reads the field as it is held, so that read is Unquarantined, located, never the
     return Unquarantined("src/julia/classes.jl _memoryref_instance_fields: a read of the ptr_or_offset of a $(field.cls) through a getter selector, which reads the index WasmTarget holds where Julia holds the element's address")
 end
 
+# a TypeName's type caches, the hash table `cache` and the list `linearcache` (julia/src/julia.h:533-534): the fields
+# Julia's image writer queues without recursing into them and prunes (julia/src/staticdata.c:866-867, :3311-3316), each
+# a field of Core.TypeName, checked when the package loads: a Julia that renames one refuses the load, never a walk that
+# recurses into a cache under a new name
+@quarantine "julia/src/staticdata.c:2544 jl_prune_type_cache_hash prunes a TypeName's cache, and :2572 jl_prune_type_cache_linear its linearcache" Core.TypeName const TYPENAME_CACHES::Tuple{Symbol,Symbol} = let names = (:cache, :linearcache)
+    for n in names
+        n in fieldnames(Core.TypeName) ||
+            throw(ConstructionViolation("TYPENAME_CACHES", "$n is no field of Core.TypeName in this Julia ($(join(fieldnames(Core.TypeName), ", "))): the type caches Julia's image writer prunes (julia/src/staticdata.c:3311-3316) are not where src/julia/classes.jl reads them"))
+    end
+    names
+end
+
+"""
+    typename_cache_pruned(held, tn, f) -> Core.SimpleVector
+
+A TypeName constant `tn`'s type cache, its field `f` (`TYPENAME_CACHES`), as Julia's image writer leaves it: an
+entry the program does not otherwise reach is `nothing` (julia/src/staticdata.c:3311-3316). The program's reach is
+`held`, its type values (`type_value_entries`, the typeof table's, the one list of the type values a program holds), as
+Julia's is the serialization order. The hash table keeps its slots, each unreached entry `nothing`
+(jl_prune_type_cache_hash, :2544); the list keeps its reached entries in order, then `nothing`
+(jl_prune_type_cache_linear, :2572). So the constant holds no type the session made and the program never names: its
+module is the same whatever the compiling process made before it.
+
+How it differs from Julia: jl_prune_type_cache_hash then rehashes the table to the kept count (cache_rehash_set); this
+keeps the slots, so a read of `cache` would see another table than Julia's image: such a read rejects, located
+(`typename_cache_unread`).
+"""
+@quarantine pin"julia/src/staticdata.c:2544 jl_prune_type_cache_hash" "a TypeName's type caches are pruned to the types the image reaches otherwise (julia/src/staticdata.c:2572 jl_prune_type_cache_linear), so a constant holds no type the session made and the program never names" Core.TypeName function typename_cache_pruned(held::Base.IdSet{DataType}, tn::Core.TypeName, f::Symbol)::Core.SimpleVector
+    f in TYPENAME_CACHES || reject!(Internal("src/julia/classes.jl typename_cache_pruned: $f, no type cache of a TypeName"), "typename_cache_pruned")
+    local cache = getfield(tn, f)::Core.SimpleVector
+    local reached(@nospecialize(e))::Bool = e isa DataType && e in held
+    f === :cache && return Core.svec(Any[reached(e) ? e : nothing for e in cache]...)
+    local kept = Any[e for e in cache if reached(e)]
+    return Core.svec(kept..., ntuple(_ -> nothing, length(cache) - length(kept))...)
+end
+
+"""
+    typename_cache_unread(field) -> Union{Rejection,Nothing}
+
+Why a program's read of the field `field` gives no value of Julia's image, or `nothing`: a TypeName's `cache`, its hash
+table of types, which a constant holds pruned in place (`typename_cache_pruned`) where Julia's image rehashes it to the
+kept count (julia/src/staticdata.c:2544 jl_prune_type_cache_hash, cache_rehash_set): Unquarantined, located at the read.
+(`linearcache` is refused at its read already, declared_type_unheld.)
+"""
+@quarantine pin"julia/src/staticdata.c:2544 jl_prune_type_cache_hash" "a TypeName's pruned hash cache is rehashed by Julia's image writer (cache_rehash_set), which WasmTarget's constant does not do, so a read of it is refused, located" Core.TypeName function typename_cache_unread(field::ClassField)::Union{Rejection,Nothing}
+    field.cls === Core.TypeName && field.name == "cache" || return nothing
+    return Unquarantined("src/julia/classes.jl typename_cache_pruned: a read of a TypeName's cache, its type hash table, which Julia's image rehashes when it prunes it (julia/src/staticdata.c:2544 jl_prune_type_cache_hash) and WasmTarget's constant does not")
+end
+
 """
     _module_instance_fields(c, at) -> Vector{ClassField}
 
@@ -1704,6 +1762,14 @@ reads it where dart reads TFA's selector ids. A receiver of a concrete type is a
             local fs = class_instance_fields(c, "src/julia/classes.jl field_selector_calls")
             local k = findfirst(x -> x.name == name, fs)
             local unread = k === nothing ? nothing : memoryref_address_unread(fs[k])
+            unread === nothing || reject!(unread, "$(b.ci.def) statement $index")
+        end
+        # a getter of a TypeName's pruned hash cache rejects at this site, as _directGet's read does (typename_cache_unread)
+        is_setter || for c in admitted
+            c === Core.TypeName || continue
+            local fs = class_instance_fields(c, "src/julia/classes.jl field_selector_calls")
+            local k = findfirst(x -> x.name == name, fs)
+            local unread = k === nothing ? nothing : typename_cache_unread(fs[k])
             unread === nothing || reject!(unread, "$(b.ci.def) statement $index")
         end
         # a field whose type Julia's inference reads as another than the one it holds rejects at a getter's or a
