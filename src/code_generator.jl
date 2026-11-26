@@ -1256,10 +1256,14 @@ end
                     WasmBuilder.local_set(b, dest)
                 elseif st isa NirUpsilon
                     # Julia's codegen (emit_upsilonnode, src/codegen.cpp): the value stored in the
-                    # register of each PhiC naming the Upsilon, which the catch block reads
-                    st.val === nothing && haskey(upsilon_phics, k) &&
-                        reject!(Unquarantined("src/code_generator.jl visit_block: an Upsilon with no value, a variable undefined on the exception edge"), at)
-                    for p in get(upsilon_phics, k, Int[])
+                    # register of each PhiC naming the Upsilon, which the catch block reads; an Upsilon
+                    # with no value, a variable undefined on the exception edge, stores nothing: "the
+                    # middle end guarantees that the value from this upsilon node is not dynamically
+                    # observed" (codegen.cpp:6060), its PhiC's read guarded by the variable's
+                    # definedness (throw_undef_if_not), so the register keeps whatever it held; a value
+                    # of type Union{}, an undefined one, likewise (:6065)
+                    local unobserved = st.val === nothing || nir_value_type(self.body, something(st.val)) === Union{}
+                    for p in (unobserved ? Int[] : get(upsilon_phics, k, Int[]))
                         translate_expression(self, something(st.val), incoming_reg(p).type)
                         WasmBuilder.local_set(b, incoming_reg(p))
                     end
