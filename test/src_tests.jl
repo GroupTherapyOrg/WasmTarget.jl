@@ -193,6 +193,54 @@ _WT_MEASURED && let w0 = _wt_instructions(), c0 = _wt_children_cpu()
     WasmTarget.compile(x::Int64 -> x + Int64(1), (Int64,))   # a failure here is a broken pipeline, red
     isempty(get(ENV, "WT_SRC_WARM", "")) || open(io -> println(io, _wt_cost(w0, c0)), ENV["WT_SRC_WARM"], "a")
 end
+# The second stage of the warm-up (WT_SRC_WARM2, measured on its own line beside WT_SRC_WARM): what a process's first
+# test file that reaches the pipeline pays past `x -> x + 1`, moved out of that file's cost. Measured 2026-11-26 on the
+# Mac, statement by statement in fresh processes after the first stage (own instructions, children's CPU apart): of
+# class_info.jl's ClassIdNumbering testset (class_info_numbering.jl since), the Translators, ClassIdNumbering and the
+# closed world read 0-16 G each and its run_cases child 5 CPU-s (every call pays its own child), while its
+# `W.compile(ClassInfoCases.kind_isa, (Int64,))` read 384.8 G of the process's own instructions; after it, a second
+# function of the same body, Int32(n) and the abstract-class program each read 1-4 G. Split further: the first compile
+# of a named function after the closure of the first stage read 156.6 G; the definitions test/run_child.jl's include
+# makes (the judge's modules) leave the next compile 231.0 G of Julia's compilation of WasmTarget's own code (a module
+# of structs and an abstract type leaves 0.8 G); a type test against Type{T} on a slot of DataTypes then reads 172.0 G.
+# So the stage exercises exactly those, chosen by what they reach, never tuned to a number: test/run_child.jl included
+# (which the files that reach the pipeline include), then, in the newest world (after the include's definitions: a
+# statement's own world predates them, which is why a compile in the include's own statement left the re-compilation to
+# the first file), one WasmTarget.compile of a function of a module whose body is that type test
+# (class_info_numbering.jl's kind_isa). It runs no module: a run is a child process of its own (test/runner.jl), each
+# run_cases call paying its own.
+# It is lazy: it runs just before the shard's first CLAIMED file whose parse reaches the pipeline
+# (_wt_reaches_pipeline: a call of a module's `compile`, WasmTarget.compile, W.compile and their aliases, a Translator
+# construction, a run_cases call, or an include of test/run_child.jl or test/codegen_helpers.jl, read from the file as
+# Julia's parser reads it, as _wt_loads_corpus decides the corpus's loading), after the shard's start is written
+# (WT_SRC_START) and before that file's `started`, so neither holds it; a shard that claims no such file runs no stage
+# and writes no warm2
+module _WTWarm2
+# class_info_numbering.jl's kind_isa: a slot of DataTypes tested against Type{Int64} (jl_isa's jl_types_equal arm)
+kind_isa(n::Int64) = (v = Any[Int64, Float64]; v[n] isa Type{Int64} ? 1 : 0)
+end
+_wt_callee(c) = c isa Symbol ? c : c isa Expr && c.head === :. && length(c.args) == 2 && c.args[2] isa QuoteNode ? c.args[2].value : nothing
+_wt_names_pipeline_file(x)::Bool = x isa String ? occursin(r"(^|/)(run_child|codegen_helpers)\.jl$", x) :
+    x isa Expr && any(_wt_names_pipeline_file, x.args)
+function _wt_reaches(x)::Bool
+    x isa Expr || return false
+    if x.head === :call
+        local c = x.args[1]
+        local n = _wt_callee(c)
+        (n === :compile && c isa Expr) && return true   # a module's compile: WasmTarget.compile, W.compile, D.compile
+        (n === :Translator || n === :run_cases) && return true
+        (c === :include || c == :(Base.include)) && any(_wt_names_pipeline_file, x.args[2:end]) && return true
+    end
+    return any(_wt_reaches, x.args)
+end
+_wt_reaches_pipeline(f::String)::Bool = _wt_reaches(Meta.parseall(read(joinpath(SRC_TEST_DIR, f), String)))
+const _WT_WARMED2 = Ref(false)
+function _wt_warm2()
+    local w0, c0 = _wt_instructions(), _wt_children_cpu()
+    isdefined(Main, :WTChild) || Base.include(Main, joinpath(@__DIR__, "run_child.jl"))
+    Base.invokelatest(WasmTarget.compile, _WTWarm2.kind_isa, (Int64,))   # the newest world; a failure is a broken pipeline, red
+    isempty(get(ENV, "WT_SRC_WARM2", "")) || open(io -> println(io, _wt_cost(w0, c0)), ENV["WT_SRC_WARM2"], "a")
+end
 @testset verbose = true "src" begin
     for (i, f) in enumerate(SRC_SHARD)
         !isempty(_WT_STOP) && isfile(_WT_STOP) && break
@@ -202,6 +250,10 @@ end
         if !_WT_STARTED[] && _WT_MEASURED && !isempty(_WT_START)
             _WT_STARTED[] = true
             write(_WT_START, string(_wt_cost(UInt64(0), 0.0), "\n"))
+        end
+        if _WT_MEASURED && !_WT_WARMED2[] && _wt_reaches_pipeline(f)   # the warm-up's second stage, lazily (above)
+            _WT_WARMED2[] = true
+            _wt_warm2()
         end
         wt_progress(f)
         _wt_record("started\t$f")

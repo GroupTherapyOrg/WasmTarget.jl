@@ -142,7 +142,7 @@ def ship_result(path):
     kind, _, arg = text.partition(" ")
     return (kind, arg.strip() or None) if kind in SHIP_KINDS else ("OTHER", f"an unknown result {text[:60]!r}")
 
-SPLIT_RE = re.compile(r"(load|ratchet|shard\.(\d{1,2})) (\d+) ([0-9.]+) ([0-9.]+) ([0-9.]+)|wall (\d+)|start\.(\d{1,2}) ([0-9.]+)|band (\d{1,4})|l228 (harness|none)")
+SPLIT_RE = re.compile(r"(load|ratchet|shard\.(\d{1,2})) (\d+) ([0-9.]+) ([0-9.]+) ([0-9.]+)|wall (\d+)|start\.(\d{1,2}) ([0-9.]+)|band (\d{1,4})|l228 (harness|none)|warm2\.(\d{1,2}) ([0-9.]+|none)")
 
 def check_verdict(path):
     """The check's verdict as ship.sh wrote it: (its exit status, its critical path's seconds or None, its split or
@@ -153,7 +153,12 @@ def check_verdict(path):
     (load, ratchet, and the shards in order), the wall, and `band`, the red line the check judged itself against
     (dev/check.sh: D14_RED, or D14_RED_HARNESS when its ratchet ran the L228 harness), and `l228`, whether it did
     (`harness` or `none`, the ratchet's l228_scope as the check read it: the class of the check, measure.predict's
-    ratchet term), from the lines ship.sh copied after the first; a line it does not read leaves its stage out, never a number made up (D9)."""
+    ratchet term), and `warm2s`, each shard's warm-up second stage, measured on its own line (test/src_tests.jl's
+    WT_SRC_WARM2, run just before the shard's first claimed file that reaches the pipeline), None for a shard that claimed
+    no such file (`warm2.<k> none`), in the shards' order beside `starts` (a check whose split carries them ran its files
+    clear of the warm-up: measure.predict charges each shard's start plus its own stage, shard_costs), kept only when
+    they name exactly the shards `starts` names; from the lines ship.sh copied after the first; a line it does not read
+    leaves its stage out, never a number made up (D9)."""
     lines = (read_once(path) or "").splitlines()
     f = lines[0].split() if lines else []
     split = {}
@@ -161,7 +166,9 @@ def check_verdict(path):
         m = SPLIT_RE.fullmatch(l.strip())
         if not m:
             continue
-        if m.group(11):   # whether its ratchet ran the L228 harness: the check's class
+        if m.group(12):   # a shard's warm-up second stage, G, on its own line
+            split.setdefault("warm2s", {})[int(m.group(12))] = None if m.group(13) == "none" else float(m.group(13))
+        elif m.group(11):   # whether its ratchet ran the L228 harness: the check's class
             split["l228"] = m.group(11)
         elif m.group(10):   # the red line this check was judged against
             split["band"] = int(m.group(10))
@@ -177,8 +184,11 @@ def check_verdict(path):
                 split[m.group(1)] = v
     if "shards" in split:
         split["shards"] = [split["shards"][k] for k in sorted(split["shards"])]
-    if "starts" in split:
-        split["starts"] = [split["starts"][k] for k in sorted(split["starts"])]
+    if "warm2s" in split and set(split["warm2s"]) != set(split.get("starts") or {}):   # a stage beside no start, or a
+        del split["warm2s"]   # start with no stage line: no shard's charge is read off another's (D9)
+    for k_ in ("starts", "warm2s"):
+        if k_ in split:
+            split[k_] = [split[k_][k] for k in sorted(split[k_])]
     return (int(f[0]) if f and re.fullmatch(r"-?\d+", f[0]) else None,
             int(f[1]) if len(f) > 1 and f[1].isdigit() else None, split or None)
 
@@ -682,16 +692,20 @@ def hand_set(item, files, ss):
     write_atomic(setp, f"# head {item['rebased']['commit']}\n# score {ss.get('hs', 'none')}\n" +
                  "".join(f"# known {f}\t" + "\t".join(fs) + "\n" for f, fs in known) + "".join(f + "\n" for f in files))
     rec = src_latest(git("rev-parse", f"origin/{MARCH}"))
-    write_atomic(costp, "".join(f"{f}\t{r[1]}\n" for f, r in sorted(rec[2].items()) if r[0] == "passed" and r[1] is not None) if rec else "")
+    write_atomic(costp, "".join(f"{f}\t{r[1]}\n" for f, r in sorted(rec[3].items()) if r[0] == "passed" and r[1] is not None) if rec else "")
     return setp, costp
 
 R3_ROLE = "measure"   # the role a red file is run at origin's head as (R3): the lander's measurements' (src_red_at)
 
-def shard_costs(text, warm):
+def shard_costs(text, warm, split):
     """Each file's measured cost in G from a check's shards' records as ship.sh passed them (`shard <name>` before each
     shard's lines; `row <file> <outcome> <G> <why> <canary>`, the file's instructions and its children's at the shards'
-    rate, test/src_tests.jl), a shard's first file less the warm-up `warm` its first file pays (measure.predict charges
-    every shard that warm-up once more, so it is never counted twice), at least 0. {} when no record was passed."""
+    rate, test/src_tests.jl), at least 0. A check whose split (check_verdict) carries `warm2s` ran the warm-up's second
+    stage outside every file's cost (on its own line, before a shard's first file that reaches the pipeline), so each
+    file's G is its own; for a check recorded before, a shard's first file less
+    the warm-up `warm` its first file paid (measure.predict charges such a check's shards that once more, so it is never
+    counted twice). {} when no record was passed."""
+    pays = 0.0 if (split or {}).get("warm2s") else warm
     out, first, cur = {}, True, None
     for l in (text or "").splitlines():
         f = l.split("\t")
@@ -701,12 +715,12 @@ def shard_costs(text, warm):
             cur = f[1]
         elif f[0] == "row" and len(f) == 6 and f[1] == cur and f[2] in ("passed", "failed"):
             with contextlib.suppress(ValueError):
-                out[cur] = max(0.0, float(f[3]) - (warm if first else 0.0))
+                out[cur] = max(0.0, float(f[3]) - (pays if first else 0.0))
             first, cur = False, None
     out.pop(CANARY, None)
     return out
 
-def d14_judged_red(item, ss, text, arg):
+def d14_judged_red(item, ss, text, arg, split):
     """A check red on D14's time alone, judged (quiet at both ends), whose own files hold no estimate (held_measured
     takes those). Its own records measure each own file (shard_costs); predicted alone in the item's class, against
     the line its check was judged on (`band`):
@@ -719,10 +733,10 @@ def d14_judged_red(item, ss, text, arg):
     of the queue, retried and red each time, the slots idle behind it, until the lead dequeued it by hand."""
     c = cfg()
     path = int(arg) if (arg or "").isdigit() else 0
-    got = shard_costs(text, ss.get("warm") or 0.0)
+    got = shard_costs(text, ss.get("warm") or 0.0, split)
     own = {f: got[f] for f in ss.get("own", []) if f in got}
     shards, checks = len(ss["own_unscored"]["shards"]), checks_measured()
-    pf = lambda fs: predict(fs, ss["warm"], ss["src_change"], shards, checks, harness=ss["harness"])[0]["path"]
+    pf = lambda fs: predict(fs, ss["warm"], ss["src_change"], shards, checks, warm2=ss["warm2"], harness=ss["harness"])[0]["path"]
     if own and pf(own) > ss["band"] and pf({}) <= ss["band"]:
         alone = [(f, g, pf({f: g})) for f, g in sorted(own.items())]
         named = [x for x in alone if x[2] > ss["band"]] or alone
@@ -745,7 +759,7 @@ def d14_judged_red(item, ss, text, arg):
                                                            [x for x in q if x["branch"] == item["branch"]]))
     event("land-d14-wait", hold=item["hold"], path=path, band=ss["band"], tries=n, wait_s=wait)
 
-def record_measured(item, ss, text):
+def record_measured(item, ss, text, split):
     """Each file of the set that src_costs estimated, its G as the check's own records measured it (shard_costs: a
     shard's first file less the warm-up), recorded in measure.SRC_MEASURED with its size at the commit checked, so the
     next set charges it, scaled by size, until a score's record holds the file: after every check whose records were
@@ -753,7 +767,7 @@ def record_measured(item, ss, text):
     landing until the next score paid the estimate and packed no share). Returns ({file: G} recorded, [estimated file
     the records do not measure])."""
     est = sorted(set(ss.get("estimated", [])))
-    got = shard_costs(text, ss.get("warm") or 0.0)
+    got = shard_costs(text, ss.get("warm") or 0.0, split)
     at = (item.get("rebased") or {}).get("commit") or item["sha"]
     sizes = src_sizes(at)
     rec = {f: {"G": round(got[f], 1), "size": sizes.get(f, 0), "sha": at[:10], "t": stamp()} for f in est if f in got and sizes.get(f)}
@@ -776,7 +790,7 @@ def empty_set_void(item, kind, arg, ss, files):
                                 "fault, the driver's, never the commit's"))
     return True
 
-def held_measured(item, ss, text, arg):
+def held_measured(item, ss, text, arg, split):
     """A check past D14's band whose own set held a file no score or check had costed (`estimated`, measure.src_costs):
     the check's own records measure each file (shard_costs), the costs are recorded (measure.SRC_MEASURED, each with
     the file's size at the commit checked, so a later edit is scaled), and the item is held in its place and tried
@@ -787,13 +801,13 @@ def held_measured(item, ss, text, arg):
     file was heavy at origin, the move's own when the move made it heavy). A file the records leave unmeasured is the
     driver's fault (item_error: held, then dropped uncharged)."""
     est = sorted(set(ss.get("estimated", [])) & set(ss.get("own", [])))
-    got = shard_costs(text, ss.get("warm") or 0.0)
+    got = shard_costs(text, ss.get("warm") or 0.0, split)
     missing = [f for f in est if f not in got]
     if missing:
         item_error(item, ClimbError(f"its check read {arg} s past D14's band and its records measure no cost for its "
                                     f"estimated own file(s) {missing}"))
         return
-    rec, _ = record_measured(item, ss, text)   # the one recording (every check's, record_measured)
+    rec, _ = record_measured(item, ss, text, split)   # the one recording (every check's, record_measured)
     unqueue(item, measured={f: rec[f] for f in est if f in rec})
     event("land-measured", hold=item["hold"], check=arg, files={f: rec[f] for f in est if f in rec},
           estimated={f: round(ss.get("costs", {}).get(f, 0.0), 1) for f in est} if ss.get("costs") else None)
@@ -1215,7 +1229,7 @@ def land_round():
             # one file claimed its red sibling away from every shard)
             item["src_verified"] = verified_rows(item, recs, files)
             if rtext and ss:   # each estimated file's measured G, green or red (record_measured)
-                record_measured(item, ss, rtext)
+                record_measured(item, ss, rtext, split)
             fetch()
             kind, arg = res
         else:
@@ -1238,7 +1252,7 @@ def land_round():
         if kind == "D14" and set((ss or {}).get("estimated", [])) & set((ss or {}).get("own", [])):
             # an own file no score ran was estimated, never measured: the check's own records measure it, the item is
             # held and tried again with those costs (held_measured), never the move's drop on an estimate
-            held_measured(item, ss, rtext, arg); continue
+            held_measured(item, ss, rtext, arg, split); continue
         if kind == "OWN" and arg == "tests" and ss and origin_red(item, slot, ss, recs):
             continue   # origin's red, located and filed: the item is checked again without it next round, uncharged
         if empty_set_void(item, kind, arg, ss, files if ss is not None else None):
@@ -1246,7 +1260,7 @@ def land_round():
         if kind == "OWN" and arg == "void" and ss and origin_void(item, ss, vfiles):
             continue   # origin's void, located and filed: as R3's red (spec v17 Z3), uncharged
         if kind == "D14":   # red on D14's time alone, judged: the commit's own files, or its own wait (d14_judged_red)
-            d14_judged_red(item, ss, rtext, arg)
+            d14_judged_red(item, ss, rtext, arg, split)
             d14_binds()
             continue
         if arg == "hourly":

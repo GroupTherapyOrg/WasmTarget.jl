@@ -98,7 +98,7 @@ set_ok || exit 1
 set_n=$(grep -v '^#' "$WT_SRC_SET" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')
 echo "check: the lander's test set: $set_n of $(git ls-files 'test/src/*.jl' | wc -l | tr -d ' ') test files"
 [ "$set_n" -gt 0 ] || echo "check: the lander's set is empty: no test file runs (the load, the ratchet and TLC do)"
-rm -f .wtd/src_records.* .wtd/src_start.*
+rm -f .wtd/src_records.* .wtd/src_start.* .wtd/src_warm2.*
 # the ratchet and the tests of ported code run side by side (two processes, one thread each): the
 # landing-lock holder's re-check is the loop's one serial step, so its wall is the slower of the two
 # a dependency the project names but the (gitignored) Manifest lacks is resolved first, once: a
@@ -291,7 +291,7 @@ git diff -M --name-status "$base" HEAD > .wtd/base/renames 2>/dev/null
 dart_dir="$(git rev-parse --path-format=absolute --git-common-dir)/wt-dart-corpus"
 for ((k = 1; k <= RUN_SHARDS; k++)); do
   : > ".wtd/progress.$k"
-  env -u GIT_WORK_TREE "${SRC_PROCESS_ENV[@]}" GIT_CEILING_DIRECTORIES="$PWD" WT_BASE_TREE="$PWD/.wtd/base" WT_DART_CORPUS_DIR="$dart_dir" WT_PROGRESS="$PWD/.wtd/progress.$k" WT_SRC_SHARD="$k/$SHARDS" WT_SRC_CLAIMS="$PWD/.wtd/claims" WT_SRC_SET="$WT_SRC_SET" WT_SRC_COSTS="${WT_SRC_COSTS:-}" WT_SRC_RECORDS="$PWD/.wtd/src_records.$k.out" WT_SRC_START="$PWD/.wtd/src_start.$k" WT_SRC_CHILD_RATE="$RATE_P_SRC" julia --startup-file=no dev/tree_instructions.jl ".wtd/src_tests.$k.gi" \
+  env -u GIT_WORK_TREE "${SRC_PROCESS_ENV[@]}" GIT_CEILING_DIRECTORIES="$PWD" WT_BASE_TREE="$PWD/.wtd/base" WT_DART_CORPUS_DIR="$dart_dir" WT_PROGRESS="$PWD/.wtd/progress.$k" WT_SRC_SHARD="$k/$SHARDS" WT_SRC_CLAIMS="$PWD/.wtd/claims" WT_SRC_SET="$WT_SRC_SET" WT_SRC_COSTS="${WT_SRC_COSTS:-}" WT_SRC_RECORDS="$PWD/.wtd/src_records.$k.out" WT_SRC_START="$PWD/.wtd/src_start.$k" WT_SRC_WARM2="$PWD/.wtd/src_warm2.$k" WT_SRC_CHILD_RATE="$RATE_P_SRC" julia --startup-file=no dev/tree_instructions.jl ".wtd/src_tests.$k.gi" \
     "${SRC_PROCESS[@]}" > ".wtd/src_tests.$k.out" 2>&1 & tpids="$tpids $!"
 done
 running() { kill -0 $rpid 2>/dev/null && return 0; for p in $tpids; do kill -0 $p 2>/dev/null && return 0; done; return 1; }
@@ -388,6 +388,12 @@ split_line() { awk -v n="$1" -v r="$2" '{ printf "%s %d %.1f %.1f %.1f\n", n, $2
   for ((k = 1; k <= RUN_SHARDS; k++)); do split_line "shard.$k" $RATE_P_SRC "src_tests.$k"; done
   # each shard's start (its G until its first file, test/src_tests.jl's WT_SRC_START): c0, measured (A13-7)
   for ((k = 1; k <= RUN_SHARDS; k++)); do [ -s ".wtd/src_start.$k" ] && printf 'start.%s %.1f\n' "$k" "$(head -1 ".wtd/src_start.$k")"; done
+  # and its warm-up's second stage on its own line (test/src_tests.jl's WT_SRC_WARM2, run lazily, just before the shard's
+  # first claimed file that reaches the pipeline, outside that start and every file's cost), or `none` for a shard with a
+  # start that claimed no such file and so ran no stage: a split carrying them tells the lander its shards' files paid
+  # no warm-up and each shard's start is charged its own stage (measure.predict, lander.shard_costs)
+  for ((k = 1; k <= RUN_SHARDS; k++)); do [ -s ".wtd/src_start.$k" ] || continue
+    if [ -s ".wtd/src_warm2.$k" ]; then printf 'warm2.%s %.1f\n' "$k" "$(head -1 ".wtd/src_warm2.$k")"; else printf 'warm2.%s none\n' "$k"; fi; done
   echo "wall $wall"; echo "band $band"; echo "l228 $l228"; } > .wtd/check-split.out
 echo "check: ${path} s on the critical path (load ${c_load}, ratchet ${p_ratchet}, src shards${shards}; performance-core G + efficiency-core seconds + unreported seconds: load $(split_of load); ratchet ${splits}); ${wall}s wall; CPU-s, unjudged: load $(cpu load), ${cpus}"
 [ -z "$slow" ] || echo "check: note, a stage's performance cores ran under its rate, so it reads low there:${slow}"

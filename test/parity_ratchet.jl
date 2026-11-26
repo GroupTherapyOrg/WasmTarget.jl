@@ -3341,10 +3341,10 @@ const BOUNDED_BREAKS = (
     ("a new file estimated at its directory's average G a byte", "dev/climb/measure.py",
      "        return max(rs_) if rs_ else", "        return sum(rs_) / len(rs_) if rs_ else", 33),
     ("a cost a check measured left unused", "dev/climb/measure.py", "        if f in measured:", "        if False:", 33),
-    ("a shard's first file charged the warm-up twice", "dev/climb/lander.py", "(warm if first else 0.0)", "0.0", 33),
+    ("a shard's first file charged the warm-up twice", "dev/climb/lander.py", "(pays if first else 0.0)", "0.0", 33),
     ("a move refused on an estimate", "dev/climb/measure.py",
-     "    pk, _ = predict({f: c_all[f] for f in base_set if f not in set(est)}, warm, src_change, shards, checks, harness=harness)",
-     "    pk, _ = predict({f: c_all[f] for f in base_set}, warm, src_change, shards, checks, harness=harness)", 32),
+     "    pk, _ = predict({f: c_all[f] for f in base_set if f not in set(est)}, warm, src_change, shards, checks, warm2=warm2, harness=harness)",
+     "    pk, _ = predict({f: c_all[f] for f in base_set}, warm, src_change, shards, checks, warm2=warm2, harness=harness)", 32),
     # a check's ratchet predicted from its own class's checks, an item's class and red line, a refusal no file makes held
     # (2026-11-14 23:15:34Z: the ratchet term mixed a harness check into every prediction, and an item with an empty own
     # set was dropped as its own)
@@ -3425,8 +3425,8 @@ const BOUNDED_BREAKS = (
      "            if (yields or pauses is not None and not pauses[\"failed\"]) and lander_waits(kind):", "            if yields and lander_waits(kind):", 45),
     ("a src run's failed pause unsaid", "dev/climb/measure.py", "                            pauses.update(failed=True, reaped=not held)",
      "                            pass", 45),
-    ("the look-back ending at the newest kept record", "dev/climb/measure.py", "        for ph, _, prow in kept:",
-     "        for ph, _, prow in kept[:1]:", 45),
+    ("the look-back ending at the newest kept record", "dev/climb/measure.py", "        for ph, _, _, prow in kept:",
+     "        for ph, _, _, prow in kept[:1]:", 45),
     # a pause holds every role that needs the store's answers; an unfrozen unit frozen before the measurement (2026-11-15)
     ("a loop's measurement not held while paused", "dev/climb/measure.py",
      "        if not loop_paused():   # a loop's measurement starts nothing while the climb is paused", "        if True:   #", 46),
@@ -3509,7 +3509,44 @@ const BOUNDED_BREAKS = (
     ("a slot's driver fault backing off as any infra (no driver, retry_backoff_s)", "dev/climb/slots.py",
      "**(dict(driver=driver_tree(), first=cfg()[\"driver_fault_backoff_s\"]) if driver else {})", "", 21),
     ("a driver fault's first wait retry_backoff_s (core.back_off)", "dev/climb/core.py",
-     "(first or cfg()[\"retry_backoff_s\"])", "cfg()[\"retry_backoff_s\"]", 21))
+     "(first or cfg()[\"retry_backoff_s\"])", "cfg()[\"retry_backoff_s\"]", 21),
+    # the warm-up's second stage measured on its own line, never a constant subtracted from a file (2026-11-15: ~360 G of
+    # first use charged to class_info.jl by every score, and twice to the shard drawing it)
+    ("a shard's warm-up second stage left out of the check's split", "dev/climb/lander.py",
+     "            split.setdefault(\"warm2s\", {})[int(m.group(12))] = None if m.group(13) == \"none\" else float(m.group(13))",
+     "            pass", 52),
+    ("a record's warm2 unread", "dev/climb/measure.py",
+     "(float(h[5]) if len(h) > 5 and h[4] == \"warm2\" and h[5] else None)", "None", 52),
+    ("a check that measured the stage on its own line charged the warm-up again", "dev/climb/measure.py",
+     "                if sp.get(\"warm2s\") and len(sp[\"warm2s\"]) == len(js):   # each shard's start plus its own stage, if it ran one",
+     "                if False:", 52),
+    ("a check recorded before charged the stage-one stand-in where warm2 is measured", "dev/climb/measure.py",
+     "st + (warm if warm2 is None else warm2), False))", "st + warm, False))", 52),
+    ("the priors' start charged the stage-one stand-in where warm2 is measured", "dev/climb/measure.py",
+     "c0 = (c[\"src_prior_start_g\"] + (warm if warm2 is None else warm2)) / g", "c0 = (c[\"src_prior_start_g\"] + warm) / g", 52),
+    ("a first file's warm-up subtracted from a check that measured the stage", "dev/climb/lander.py",
+     "    pays = 0.0 if (split or {}).get(\"warm2s\") else warm", "    pays = warm", 52),
+    ("a cost across the re-base refused as a jump", "dev/climb/measure.py",
+     "        elif ph in before:   # a cost across the re-base", "        elif False:   # a cost across the re-base", 52),
+    ("the re-base unnamed", "dev/climb/measure.py",
+     "    if kept[0][0] in before:   # the first record", "    if False:   # the first record", 52),
+    ("the jump rule off for good after the re-base", "dev/climb/measure.py",
+     "    before = {ph for ph, _, w2, _ in kept if w2 is None} if warm2 is not None else set()",
+     "    before = {ph for ph, _, w2, _ in kept} if warm2 is not None else set()", 52),
+    ("src_target's window kept across the re-base", "dev/climb/measure.py",
+     "    rebased = any((e.get(\"split\") or {}).get(\"warm2s\") for e, _ in pairs)", "    rebased = False", 52),
+    # the stage is lazy, run before a shard's first claimed file that reaches the pipeline: a shard that ran none says so
+    # on its own line, and each shard is charged its own start plus its own stage
+    ("a shard that ran no stage unread in the check's split", "dev/climb/lander.py",
+     "|warm2\\.(\\d{1,2}) ([0-9.]+|none)\")", "|warm2\\.(\\d{1,2}) ([0-9.]+)\")", 52),
+    ("stages kept that name other shards than the starts", "dev/climb/lander.py",
+     "    if \"warm2s\" in split and set(split[\"warm2s\"]) != set(split.get(\"starts\") or {}):", "    if False:", 52),
+    ("a shard's start charged without its own stage", "dev/climb/measure.py",
+     "own2 = [s_ + (w2_ or 0.0) for s_, w2_ in zip(sp[\"starts\"], sp[\"warm2s\"])]", "own2 = list(sp[\"starts\"])", 52),
+    ("check.sh writing no line for a shard that ran no stage", "dev/check.sh",
+     "; else printf 'warm2.%s none\\n' \"\$k\"; fi; done", "; fi; done", 52),
+    ("ship.sh dropping a shard's none", "dev/ship.sh",
+     "|^warm2\\.[0-9]{1,2} ([0-9]{1,9}\\.[0-9]|none)\$'", "|^warm2\\.[0-9]{1,2} [0-9]{1,9}\\.[0-9]\$'", 52))
 # what the harness and its negatives may cost: their children's CPU seconds (user + system, getrusage's
 # RUSAGE_CHILDREN around the negative), which the machine's load and the lock's place in a queue do not move, where wall
 # time did (2026-11-14: one tree's negative took 98.7 s of wall on a quieter run and 157.9 s at a load of 12, the same

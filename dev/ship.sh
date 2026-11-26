@@ -217,7 +217,7 @@ set -- "$1" env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u G
 if [ -n "${WT_SHIP_DOOR:-}" ]; then "${@:2}" python3 "$WT_SHIP_DOOR" land-check "$PWD"; rc=$?
 else "${@:2}" bash dev/check.sh 2>&1 | tee .wtd/check.log; rc=${PIPESTATUS[0]}; fi
 { printf '%s %s\n' "$rc" "$(tr -cd 0-9 < .wtd/check-path.out 2>/dev/null | cut -c1-6)"
-  grep -E '^(load|ratchet|shard\.[0-9]{1,2}) [0-9]{1,6}( [0-9]{1,9}\.[0-9]){3}$|^wall [0-9]{1,6}$|^band [0-9]{1,4}$|^l228 (harness|none)$|^start\.[0-9]{1,2} [0-9]{1,9}\.[0-9]$' .wtd/check-split.out 2>/dev/null | head -30; } > "$WT_CHECK_RESULT"
+  grep -E '^(load|ratchet|shard\.[0-9]{1,2}) [0-9]{1,6}( [0-9]{1,9}\.[0-9]){3}$|^wall [0-9]{1,6}$|^band [0-9]{1,4}$|^l228 (harness|none)$|^start\.[0-9]{1,2} [0-9]{1,9}\.[0-9]$|^warm2\.[0-9]{1,2} ([0-9]{1,9}\.[0-9]|none)$' .wtd/check-split.out 2>/dev/null | head -30; } > "$WT_CHECK_RESULT"
 # and each shard's per-file records (test/src_tests.jl's WT_SRC_RECORDS, a file a shard), headed by their shard, beside
 # the verdict: what the check reports it ran, the climb's lander's verified record and R3's reading, never assumed
 for f in .wtd/src_records.*.out; do [ -f "$f" ] && { printf 'shard\t%s\n' "$(basename "$f")"; cat "$f"; }; done > "$WT_CHECK_RESULT.records" 2>/dev/null

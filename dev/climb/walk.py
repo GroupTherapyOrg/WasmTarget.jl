@@ -60,13 +60,13 @@ def replay(state, commit, extra, here, repo, g, h):
     rec = M.src_latest(h)
     if rec is None:
         print(f"walk: no score's src record at {h[:10]} or before it in the state copy: nothing can be replayed"); return 1
-    hs, warm, rows = rec
+    hs, warm, warm2, rows = rec
     ch = M.checks_measured()
     print(f"walk: origin {h[:10]}, the score of {hs[:10]}; checks_measured(): " +
           ", ".join(f"{e['t'][11:19]} {e.get('result', '')[:12]} {e['path']} s (ratchet {e['split'].get('ratchet', [None])[0]}, "
                     f"{e['split'].get('l228') or 'no class'})" for e in ch))
     for k in (False, True):
-        p, _ = M.predict({}, warm, False, 5, ch, harness=k)
+        p, _ = M.predict({}, warm, False, 5, ch, warm2=warm2, harness=k)
         print(f"walk: no test file, {'the harness class' if k else 'no harness'}: {p['path']} s (ratchet {p['ratchet']}; {p['model']})")
     def apply_onto(at, ref):   # a ref cherry-picked onto `at`, or `patch:<file>` (a commit's format-patch) applied
         g("checkout", "-q", "-f", "--detach", at)

@@ -1778,7 +1778,7 @@ finally:
 real32 = {"drop": L.drop}
 try:
     checks32 = M.checks_measured()
-    path32 = lambda G: M.predict({"f": G}, 350.0, True, 5, checks32, harness=False)[0]["path"]
+    path32 = lambda G: M.predict({"f": G}, 350.0, True, 5, checks32, warm2=None, harness=False)[0]["path"]
     red32 = 180   # the fixture's D14_RED: a refusal and the src-near note read it, never D14_PACK
     big32 = next(G for G in range(200, 200000, 50) if path32(G) > red32 + 5)
     near32 = next(G for G in range(200, 200000, 10) if path32(G) >= 0.85 * red32 + 1)
@@ -1881,13 +1881,13 @@ try:
     item33 = {"branch": "ready/l228-33", "hold": "l228-33", "hold_id": "l228-33", "sha": c_new, "rebased": {"commit": c_new}}
     core.update_json("ready.json", [], lambda q: q.append(dict(item33)))
     recs33 = "shard 1\nstarted\tn2.jl\nrow\tn2.jl\tpassed\t750.0\tYQ==\tpassed\nstarted\tt01.jl\nrow\tt01.jl\tpassed\t100.0\tYQ==\tpassed\nshard 2\n"
-    L.held_measured(item33, dict(ss33, warm=350.0), recs33, "151")
+    L.held_measured(item33, dict(ss33, warm=350.0), recs33, "151", None)
     m33 = core.state_json(M.SRC_MEASURED, {}).get("n2.jl", {})
     q33 = [x for x in core.state_json("ready.json", []) if x["branch"] == "ready/l228-33"]
     if dropped33 or errors33 or m33.get("G") != 400.0 or m33.get("size") != M.src_sizes(c_new)["n2.jl"] or not q33 or q33[0].get("measured") != {"n2.jl": 400.0}:
         fault(f"a check past the band with an estimated own file: drops {dropped33}, errors {errors33}, recorded {m33} "
               f"(400 G: its shard's first file, 750 less the warm-up 350), the item {q33[0].get('measured') if q33 else 'gone'} (held)")
-    L.held_measured(item33, dict(ss33, warm=350.0), "shard 1\n", "151")
+    L.held_measured(item33, dict(ss33, warm=350.0), "shard 1\n", "151", None)
     if dropped33 or len(errors33) != 1:
         fault(f"a check whose records measure no estimated own file: drops {dropped33}, driver faults {errors33} (one expected)")
 except Exception as e:
@@ -1956,7 +1956,7 @@ try:
             ev.write(json.dumps(check35("2026-11-14T23:02:50", 265, 265, cls_b)) + "\n")
     def rts35():
         ch = M.checks_measured()
-        return tuple(M.predict({}, 350.0, False, 5, ch, harness=k)[0]["ratchet"] for k in (False, True))
+        return tuple(M.predict({}, 350.0, False, 5, ch, warm2=None, harness=k)[0]["ratchet"] for k in (False, True))
     history35(None, None)
     got35 = rts35()
     if got35 != (c35["src_prior_ratchet_s"], c35["src_prior_ratchet_harness_s"]):
@@ -2091,12 +2091,12 @@ try:
     mk37 = lambda n: {"branch": f"ready/l228-37{n}", "hold": f"l228-37{n}", "hold_id": f"l228-37{n}", "sha": c37}
     core.save_json("ready.json", [mk37("a"), mk37("b")])
     # its own file, measured past the line: the commit's own, the file named
-    L.d14_judged_red(mk37("a"), ss37, rec37(350.0 + 60000), "265")
+    L.d14_judged_red(mk37("a"), ss37, rec37(350.0 + 60000), "265", None)
     if len(dropped37) != 1 or dropped37[0][1] != "landing-red" or "test/src/t03.jl" not in dropped37[0][3]:
         fault(f"an own file measured past the line: drops {[(d[0], d[1]) for d in dropped37]} (l228-37a landing-red naming t03.jl)")
     # its own file light: the item waits at the tail on its own timer, no lander-wide backoff, then dropped uncharged
     dropped37.clear(); core.save_json("ready.json", [mk37("a"), mk37("b")])
-    L.d14_judged_red(mk37("a"), ss37, rec37(350.0 + 100), "190")
+    L.d14_judged_red(mk37("a"), ss37, rec37(350.0 + 100), "190", None)
     q37 = core.state_json("ready.json", [])
     if dropped37 or [x["hold"] for x in q37] != ["l228-37b", "l228-37a"] or not q37[1].get("not_before", 0) > time.time() \
             or q37[1].get("d14_tries") != 1 or "lander:d14" in core.state_json("backoff.json", {}):
@@ -2122,7 +2122,7 @@ try:
         fault(f"the round with a waiting item at the head reached {reached37}, not the item behind it")
     for n37, path37 in ((2, "191"), (3, "192")):
         it37 = next(x for x in core.state_json("ready.json", []) if x["hold"] == "l228-37a")
-        L.d14_judged_red(it37, ss37, rec37(350.0 + 100), path37)
+        L.d14_judged_red(it37, ss37, rec37(350.0 + 100), path37, None)
     if [(d[0], d[1], d[2]) for d in dropped37] != [("l228-37a", "landing-failed", False)]:
         fault(f"at d14_tries reds of the machine's: drops {[(d[0], d[1], d[2]) for d in dropped37]} (l228-37a, uncharged)")
 except Exception as e:
@@ -2194,7 +2194,7 @@ try:
         fault(f"section 39's fixture: n39.jl is not estimated ({ss39.get('estimated')})")
     est39 = M.src_costs({f: ("passed", 100.0, 0.0, "") for f in FILES}, ["n39.jl"], c39, h)[0]["n39.jl"]
     rec39, miss39 = L.record_measured({"hold": "l228-39", "sha": c39, "rebased": {"commit": c39}}, dict(ss39, warm=350.0),
-                                      "shard 1\nstarted\tn39.jl\nrow\tn39.jl\tpassed\t400.0\tYQ==\tpassed\n")
+                                      "shard 1\nstarted\tn39.jl\nrow\tn39.jl\tpassed\t400.0\tYQ==\tpassed\n", None)
     now39 = M.src_costs({f: ("passed", 100.0, 0.0, "") for f in FILES}, ["n39.jl"], c39, h, (), core.state_json(M.SRC_MEASURED, {}))[0]["n39.jl"]
     if rec39 != {"n39.jl": 50.0} or miss39 or abs(now39 - 50.0) > 0.01 or abs(est39 - 50.0) < 1:
         fault(f"a green check's measure of an estimated file: recorded {rec39} (50.0 G: 400 less the warm-up 350), "
@@ -2279,7 +2279,7 @@ try:
     open(f"{state}/src-latest.json", "w").write(json.dumps({"head": h}))   # the previous record: the prologue's, every file 100 G
     rows42 = {"t00.jl": ("passed", None, 3.0, ""), "t01.jl": ("passed", 1000.0, 3.0, ""), "t02.jl": ("passed", 120.0, 3.0, ""),
               "t03.jl": ("failed", 90.0, 3.0, "a red")}
-    got42 = M.settle_costs(rows42, h42)
+    got42 = M.settle_costs(rows42, h42, None)
     ev42 = {e["kind"]: e for e in core.events() if e["kind"] in ("src-cost-carried", "src-cost-jump")}
     if (got42["t00.jl"][1], got42["t01.jl"][1], got42["t02.jl"][1], got42["t03.jl"]) != (100.0, 100.0, 120.0, rows42["t03.jl"]) \
             or "carried from" not in got42["t00.jl"][3] or "t00.jl" not in ev42.get("src-cost-carried", {}).get("files", {}) \
@@ -2435,7 +2435,7 @@ try:
         f"{f}\tpassed\t{'' if f in ('t00.jl', 't01.jl') else 100.0}\t0.0\t\n" for f in FILES))
     open(f"{state}/src-latest.json", "w").write(json.dumps({"head": h45a}))
     got45 = M.settle_costs({"t00.jl": ("passed", None, 3.0, ""), "t01.jl": ("passed", 1000.0, 3.0, ""),
-                            "t02.jl": ("passed", 120.0, 3.0, "")}, h45b)
+                            "t02.jl": ("passed", 120.0, 3.0, "")}, h45b, None)
     if (got45["t00.jl"][1], got45["t01.jl"][1], got45["t02.jl"][1]) != (100.0, 100.0, 120.0) or h[:10] not in got45["t00.jl"][3]:
         fault(f"settled against the kept records (t00 and t01 blank in the newest): {({f: (r[1], r[3][:40]) for f, r in got45.items()})} "
               f"(t00 carried 100.0 from {h[:10]}, t01's jump refused against that record's 100.0, t02 kept)")
@@ -2884,13 +2884,13 @@ try:
     open(f"{state}/src-{h53[:8]}.tsv", "w").write(
         f"head\t{h53}\twarm\t390.0\n" + "a.jl\tfailed\t294.9\t25.4\ttest/src/a.jl:14 nontest_error: e\n"
         "test/src/a.jl:64 test: all((r->begin r.ok end), results)\n" + "b.jl\tpassed\t10.0\t1.0\t\n")
-    w, rows53 = M.src_record(h53)
+    w, _, rows53 = M.src_record(h53)
     if w != 390.0 or set(rows53) != {"a.jl", "b.jl"} or rows53["a.jl"][3] != \
             "test/src/a.jl:14 nontest_error: e\ntest/src/a.jl:64 test: all((r->begin r.ok end), results)" or rows53["b.jl"][:3] != ("passed", 10.0, 1.0):
         fault(f"a record written before the escape, a red's why across two lines: {rows53}")
     open(f"{state}/src-{h53[:8]}.tsv", "w").write(f"head\t{h53}\twarm\t390.0\n" + f"a.jl\tfailed\t294.9\t25.4\t{M.why_field(w53)}\n")
-    if M.src_record(h53)[1]["a.jl"][3] != w53:
-        fault(f"a record's escaped why read back: {M.src_record(h53)[1]['a.jl'][3]!r}")
+    if M.src_record(h53)[2]["a.jl"][3] != w53:
+        fault(f"a record's escaped why read back: {M.src_record(h53)[2]['a.jl'][3]!r}")
 except Exception as e:
     fault(f"a src record with a why of several lines raised {type(e).__name__}: {str(e)[:240]}")
 
@@ -2957,3 +2957,124 @@ finally:
         g("worktree", "remove", "--force", f"{tmp}/slot54w")
     with contextlib.suppress(Exception):
         g("update-ref", "-d", f"refs/remotes/origin/{core.MARCH}")
+
+# 52. the warm-up's second stage is measured on its own line (test/src_tests.jl's WT_SRC_WARM2, run lazily just before
+# a shard's first claimed file that reaches the pipeline), never a constant subtracted from a file: dev/check.sh writes
+# each shard's `warm2.<k> <G>`, or `warm2.<k> none` for a shard with a start that ran no stage, ship.sh passes both,
+# and check_verdict reads them into the split's `warm2s` (None for none) only when they name exactly the shards the
+# starts name; a score's record carries `warm2` beside `warm` (measure.src_record); predict charges each shard of a
+# check whose split carries warm2s its measured start plus its own stage (a shard that ran none its start alone), one
+# recorded before its start plus the record's warm2 (warm when the record holds none), and the priors their start plus
+# warm2; shard_costs subtracts nothing from the first file of a check that measured the stage, and warm from an older
+# one's; settle_costs reads a record with warm2 against kept records without it as one re-base (one `src-cost-rebase`
+# event naming both records and warm2, no jump refused across it, an unmeasured file still carried, named), and
+# src_target's window starts again on checks that measured the stage. 2026-11-15: ~360 G of first use landed on
+# whichever heavy file a process ran first (class_info.jl 441.9 G alone, 77.2 G after code_generator.jl), every score
+# charged it to class_info.jl, and predict charged the shard drawing it twice
+#: limit 60
+try:
+    c52 = core.cfg()
+    # the split parser
+    v52 = os.path.join(tmp, "check52")
+    open(v52, "w").write("0 120\nshard.1 80 650.0 0.0 0.0\nshard.2 79 640.0 0.0 0.0\nshard.3 30 200.0 0.0 0.0\nstart.2 381.0\n"
+                         "start.1 375.0\nstart.3 377.0\nwarm2.2 361.5\nwarm2.3 none\nwarm2.1 360.0\nwall 130\nband 180\nl228 none\n")
+    _, _, sp52 = L.check_verdict(v52)
+    if (sp52 or {}).get("warm2s") != [360.0, 361.5, None] or (sp52 or {}).get("starts") != [375.0, 381.0, 377.0]:
+        fault(f"check_verdict read warm2s {(sp52 or {}).get('warm2s')} and starts {(sp52 or {}).get('starts')} "
+              "(warm2s [360.0, 361.5, None]: shard 3 ran no stage; starts [375.0, 381.0, 377.0], each in its shard's order)")
+    # a stage line missing for a shard with a start: no warm2s read, so no shard is charged another's stage
+    open(v52, "w").write("0 120\nshard.1 80 650.0 0.0 0.0\nshard.2 79 640.0 0.0 0.0\nstart.1 375.0\nstart.2 381.0\nwarm2.1 360.0\n")
+    sp52m = L.check_verdict(v52)[2] or {}   # (it reads the verdict once: read_once)
+    if "warm2s" in sp52m:
+        fault(f"check_verdict kept warm2s {sp52m.get('warm2s')} for a split whose shard 2 has a start and no "
+              "stage line (expected none: the stages name other shards than the starts)")
+    # dev/check.sh's stage lines: a shard's measured stage, `none` for a shard with a start and no stage, nothing for a
+    # shard with no start; dev/ship.sh passes both forms to the lander and nothing else
+    chk52 = open(f"{root}/dev/check.sh").read()
+    loop52 = re.search(r"^  for \(\(k = 1; k <= RUN_SHARDS; k\+\+\)\); do \[ -s \"\.wtd/src_start\.\$k\" \] \|\| continue\n.*?done\n", chk52, re.M | re.S)
+    d52 = os.path.join(tmp, "sh52"); os.makedirs(f"{d52}/.wtd", exist_ok=True)
+    for n_, x_ in (("src_start.1", "375.0\n"), ("src_warm2.1", "360.04\n"), ("src_start.2", "381.0\n")):
+        open(f"{d52}/.wtd/{n_}", "w").write(x_)
+    out52 = subprocess.run(["bash", "-c", "RUN_SHARDS=3\n" + (loop52.group(0) if loop52 else "exit 3\n")], cwd=d52,
+                           capture_output=True, text=True).stdout if loop52 else None
+    if out52 != "warm2.1 360.0\nwarm2.2 none\n":
+        fault(f"dev/check.sh's stage lines for shards with a stage, with a start and no stage, and with neither: {out52!r} "
+              "(expected 'warm2.1 360.0\\nwarm2.2 none\\n')")
+    ship52 = re.search(r"grep -E '([^']*)' \.wtd/check-split\.out", open(f"{root}/dev/ship.sh").read())
+    kept52 = subprocess.run(["grep", "-E", ship52.group(1)], input="warm2.1 360.0\nwarm2.2 none\nwarm2.3 nan\nwarm2.4 -1\n",
+                            capture_output=True, text=True).stdout if ship52 else None
+    if kept52 != "warm2.1 360.0\nwarm2.2 none\n":
+        fault(f"dev/ship.sh passed {kept52!r} of the stage lines (expected a measured stage and `none`, nothing else)")
+    # the record's header
+    g("checkout", "-q", "--detach", h)
+    open(f"{repo}/src/x.jl", "a").write("# 52\n"); g("add", "-A"); g("commit", "-q", "-m", "c52"); h52 = g("rev-parse", "HEAD")
+    open(f"{state}/src-{h52[:8]}.tsv", "w").write(f"head\t{h52}\twarm\t350\twarm2\t360\n" + "".join(f"{f}\tpassed\t100.0\t0.0\t\n" for f in FILES))
+    r52, r52o = M.src_record(h52), M.src_record(h)
+    if r52 is None or r52[:2] != (350.0, 360.0) or r52o is None or r52o[:2] != (350.0, None):
+        fault(f"src_record's (warm, warm2): {r52 and r52[:2]} for a record with warm2 (350.0, 360.0), {r52o and r52o[:2]} "
+              "for one without (350.0, None)")
+    os.remove(f"{state}/src-{h52[:8]}.tsv")
+    # predict, checks of each kind (each shard 80 s on 650 G, the score's costs 1000 G)
+    def chk52(warm2s):
+        sp = {"load": [17, 200, 0, 0], "ratchet": [79, 400, 0, 0], "l228": "none", "shards": [[80, 650, 0, 0]] * 5,
+              "starts": [375.0] * 5}
+        if warm2s:
+            sp["warm2s"] = [360.0] * 5 if warm2s is True else warm2s
+        return {"split": sp, "src_set": {"src_change": True, "ran_cost": 1000.0}}
+    n52 = c52["src_shape_checks_min"]
+    g_new, g_old = (1000 + 5 * 735) / 400, (1000 + 5 * 375 + 5 * 350) / 400
+    g_lazy = (1000 + 3 * 735 + 2 * 375) / 400   # two shards claimed no file that reaches the pipeline: no stage
+    got52 = {"measured both stages": M.predict({}, 350.0, True, 5, [chk52(True)] * n52, warm2=360.0, harness=False)[0]["c0"],
+             "two shards with no stage": M.predict({}, 350.0, True, 5, [chk52([360.0, None, 360.0, None, 360.0])] * n52,
+                                                   warm2=360.0, harness=False)[0]["c0"],
+             "before, the record's warm2": M.predict({}, 350.0, True, 5, [chk52(False)] * n52, warm2=360.0, harness=False)[0]["c0"],
+             "before, no warm2 recorded": M.predict({}, 350.0, True, 5, [chk52(False)] * n52, warm2=None, harness=False)[0]["c0"],
+             "priors": M.predict({}, 350.0, True, 5, [], warm2=360.0, harness=False)[0]["c0"]}
+    want52 = {"measured both stages": round(735 / g_new, 1), "two shards with no stage": round(735 / g_lazy, 1),
+              "before, the record's warm2": round((375 + 360) / g_old, 1),
+              "before, no warm2 recorded": round((375 + 350) / g_old, 1),
+              "priors": round((c52["src_prior_start_g"] + 360) / c52["src_prior_g"]["src"], 1)}
+    if got52 != want52:
+        fault(f"predict's c0: {got52} (expected {want52})")
+    # shard_costs: a shard's first file less nothing after the stage is measured, less warm before
+    rec52 = "shard 1\nstarted\tt01.jl\nrow\tt01.jl\tpassed\t500.0\tYQ==\tpassed\nstarted\tt02.jl\nrow\tt02.jl\tpassed\t90.0\tYQ==\tpassed\n"
+    sc52 = (L.shard_costs(rec52, 350.0, sp52), L.shard_costs(rec52, 350.0, {"starts": [375.0]}))
+    if sc52 != ({"t01.jl": 500.0, "t02.jl": 90.0}, {"t01.jl": 150.0, "t02.jl": 90.0}):
+        fault(f"shard_costs: {sc52} (with warm2s the first file's own 500.0; before, 500 less warm 350)")
+    # settle_costs: the re-base against the prologue's record (no warm2, every file 100 G)
+    open(f"{state}/src-latest.json", "w").write(json.dumps({"head": h}))
+    n0 = len(core.events())
+    rows52 = {"t00.jl": ("passed", None, 3.0, ""), "t01.jl": ("passed", 1000.0, 3.0, ""), "t02.jl": ("passed", 120.0, 3.0, "")}
+    got52s = M.settle_costs(rows52, h52, 360.0)
+    ev52 = core.events()[n0:]
+    reb52 = [e for e in ev52 if e["kind"] == "src-cost-rebase"]
+    if (got52s["t00.jl"][1], got52s["t01.jl"][1], got52s["t02.jl"][1]) != (100.0, 1000.0, 120.0) or "carried from" not in got52s["t00.jl"][3] \
+            or any(e["kind"] == "src-cost-jump" for e in ev52) or len(reb52) != 1 \
+            or (reb52[0].get("sha"), reb52[0].get("prev"), reb52[0].get("warm2"), reb52[0].get("carried")) != (h52[:8], h[:8], 360.0, ["t00.jl"]):
+        fault(f"the re-base: settled {({f: r[1] for f, r in got52s.items()})} (t00 carried 100.0, t01's 1000.0 measured "
+              f"and kept, t02 120.0), events {[e['kind'] for e in ev52]} (one src-cost-rebase naming {h52[:8]}, {h[:8]}, "
+              f"warm2 360.0 and t00.jl, no jump): {reb52}")
+    # past the re-base the jump rule holds again: a record with warm2 settled against one with warm2
+    open(f"{state}/src-{h52[:8]}.tsv", "w").write(f"head\t{h52}\twarm\t350\twarm2\t360\n" + "".join(f"{f}\tpassed\t100.0\t0.0\t\n" for f in FILES))
+    open(f"{repo}/src/x.jl", "a").write("# 52b\n"); g("add", "-A"); g("commit", "-q", "-m", "c52b"); h52b = g("rev-parse", "HEAD")
+    n0 = len(core.events())
+    got52b = M.settle_costs({"t01.jl": ("passed", 1000.0, 3.0, "")}, h52b, 360.0)
+    ev52b = [e["kind"] for e in core.events()[n0:]]
+    if got52b["t01.jl"][1] != 100.0 or "src-cost-jump" not in ev52b or "src-cost-rebase" in ev52b:
+        fault(f"after the re-base: t01 settled {got52b['t01.jl'][1]} (its jump refused, 100.0), events {ev52b} (a jump, no re-base)")
+    # src_target: the prologue's twelve checks a shape, then two of the new model's for a change to src/
+    m_old = M.src_target(140, True)[1]
+    with open(f"{state}/events.jsonl", "a") as ev:
+        for i in range(2):
+            ev.write(json.dumps({"t": f"2026-11-25T0{i}:00:01", "kind": "ship", "result": "LANDED:x", "check": 0, "path": 101.0,
+                                 "src_set": {"src_change": True, "ran_cost": 1000.0, "predicted": {"path": 100.0}},
+                                 "split": dict(chk52(True)["split"]), "probe": {"quiet": {"start": True, "end": True}}}) + "\n")
+    m_new, m_out = M.src_target(140, True)[1], M.src_target(140, False)[1]
+    if m_old["checks"] != c52["src_margin_checks"] or (m_new["margin"], m_new["checks"]) != (c52["src_margin_start_s"], 2) \
+            or "restarted" not in m_new["why"] or m_out["margin"] != expect_margin(False):
+        fault(f"src_target across the re-base: before {m_old['margin']} on {m_old['checks']} checks; after two checks that measured "
+              f"the stage {m_new['margin']} on {m_new['checks']} ({m_new['why'][:90]}; expected src_margin_start_s "
+              f"{c52['src_margin_start_s']} on 2, the window restarted); the other shape's {m_out['margin']} (its own window kept)")
+except Exception as e:
+    import traceback
+    fault(f"the warm-up's second stage raised {type(e).__name__}: {str(e)[:240]} {traceback.format_exc()[-300:]}")

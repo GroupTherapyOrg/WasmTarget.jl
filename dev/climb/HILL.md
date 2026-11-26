@@ -53,7 +53,12 @@ profile; the one process dev/check.sh declares, `SRC_PROCESS_ENV` and `SRC_PROCE
 score reads at the commit, spec v17 Z7), at default QoS under the score's lock (so never beside a check, and its
 instructions counted on the cores a check's shards run on), watched as a measurement's cases are (each file's
 `started` and `row` records, `WT_SRC_RECORDS`; its budget learned from origin's commits; a lander waiting served at a
-file's boundary). Its record, `src-<head>.tsv`, holds each file's outcome, cost and seconds and the run's warm-up (the newest
+file's boundary). Its record, `src-<head>.tsv`, holds each file's outcome, cost and seconds and the run's warm-up, its
+two stages each on its own line (`warm`, the first compile of `x -> x + 1`, and `warm2`, the first use of the stages a
+heavy file reaches, test/src_tests.jl's WT_SRC_WARM and WT_SRC_WARM2: before 2026-11-25 the second landed on whichever
+heavy file a process ran first, class_info.jl 441.9 G alone and 77.2 G after code_generator.jl; it is run lazily, just
+before a process's first claimed file whose parse reaches the pipeline, and exercises what that first file paid:
+test/run_child.jl's definitions, then in the newest world one compile of a type test against Type{T}) (the newest
 `SRC_KEEP` heads' records and plans kept, as STATE/ship keeps its newest `SHIP_KEEP` attempts' files: spec v17 Z7); a
 green run is stamped with the landings its COMMIT holds (`core.landings_at`), never those landed while it ran, and a
 landing's window index counts landings, never commits; a
@@ -1091,9 +1096,15 @@ door's, run as Dale on paths no build user writes.
   origin's head nothing lands or climbs (`admits`: the first score comes first), and a set that cannot be made leaves
   the item waiting with one note, never a check of every file (spec v18 Q2). `predict` lays the files by longest processing time over the
   shards, each shard read as c0 + its G / g: c0 the median of the checks' measured shard starts (each shard's time to
-  its first claimed file, `start.<k>` in the split) plus the warm-up its first file pays (the score's `warm`), g fitted
-  alone to those checks (their shards' judged seconds against the score's costs of the files they ran, their starts
-  and their warm-ups), each from the predicted shape's own last five checks (the other shape's while it has fewer than
+  its first claimed file, `start.<k>` in the split, plus its own warm-up second stage for a check whose split carries
+  `warm2.<k>`, `warm2s`, run before its first file that reaches the pipeline, `warm2.<k> none` for a shard that claimed
+  no such file and ran none (the stage is the heaviest first use, class_info_numbering.jl's: a shard whose only such
+  file is code_generator_nir.jl, whose first use is a part of it, pays about 123.5 G, ~10 s, more than before, a price
+  the lead accepted 2026-11-26 for a stage that holds the first use where it is paid and an honest prediction of every
+  other shard); a check recorded before measured the first stage alone, and its start is charged the score's
+  `warm2`, else the stand-in `warm` when the record holds no `warm2`), g fitted alone to those checks (their shards'
+  judged seconds against the score's costs of the files they ran and their starts; an older check's g keeps the formula
+  it was fitted with, its starts plus the score's `warm` a shard), each from the predicted shape's own last five checks (the other shape's while it has fewer than
   `src_shape_checks_min`); the slowest shard at least the mean plus the checks' imbalance, beside the ratchet of the
   checks of the item's CLASS (whether its check's ratchet runs the L228 behaviour harness: `l228_harness`, the
   ratchet's own rule read by dev/climb/l228scope.py, which L228's scope negative holds to l228_scope; a check records
@@ -1134,7 +1145,13 @@ door's, run as Dale on paths no build user writes.
   against the kept records before they are written (`settle_costs` over `src_kept`), each file against the newest one
   that measured it: a passed file the run left unmeasured carries that record's cost, scaled by size, never the
   densest-rate estimate while a kept record measured it; a measured cost past `src_cost_jump` of that record's with the
-  size unchanged is a fault (an event and a note) and that cost is kept. A landing-red's note, the
+  size unchanged is a fault (an event and a note) and that cost is kept. The first record that measured `warm2`, settled
+  against kept records that did not, is a re-base, deliberate and named: one `src-cost-rebase` event naming both
+  records and `warm2`, no jump refused across it (a heavy file's cost no longer holds the stage's first use), an
+  unmeasured file still carried, named; and `src_target`'s window starts again on checks that measured the stage,
+  `src_margin_start_s` until `src_margin_checks` of them exist. A check's own records measure its files
+  (`lander.shard_costs`): a shard's first file less nothing for a check that measured the stage, less `warm` for one
+  recorded before. A landing-red's note, the
   `stopped` event, the hold's handoff and Dale's note lead with the check's own failure lines (`landing_reason`: the
   ratchet's `✗` lines and the broken locks' names, a test red's first failures, else the check's last line), the head
   of a note kept, never its tail. A check red on its test files alone (its exit

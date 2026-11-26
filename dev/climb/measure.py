@@ -2796,15 +2796,18 @@ def src_run(head, files, task, role="score", learn_=False, yields=False):
     what the walk's earlier files had compiled, and that charge lands on whichever of its files first needs it (the score
     of c783ab62: code_generator.jl 543.2 G after a restart, 185.3 G in one walk), so it belongs to no file;
     settle_costs carries each from the last record that measured it. Returns ({file: (outcome, G, secs, why)}, the
-    warm-up G or None) for every file, or (None, why) when a process's records were void, refused or missing; MeasureCut
-    when a part is cut with no file to book."""
+    warm-up G or None, its second stage's G or None) for every file, or (None, why, None) when a process's records were
+    void, refused or missing; MeasureCut when a part is cut with no file to book. The warm-up's two stages are measured
+    each on its own line (test/src_tests.jl: WT_SRC_WARM, the first compile of `x -> x + 1`; WT_SRC_WARM2, the first use
+    of the stages a heavy file reaches, which before 2026-11-25 landed on whichever such file a process ran first: the
+    score charged class_info.jl 432 G of which about 77 G were its own), and each is the least a process of the run read."""
     if not files:
         raise ClimbError("src_run with no file to run (D9: an empty set is never every file)")
     env = environment(head)
     dk = deps(head, env["Manifest.toml"])
     rate, kind = check_rate(head), SLOT_KIND.get(role)
     penv, pcmd = src_process_decl(head)
-    secs, rows, warms, restarted, rnd = case_secs("src"), {}, [], set(), 0
+    secs, rows, warms, warms2, restarted, rnd = case_secs("src"), {}, [], [], set(), 0
     with door.using(role):
         dh, d, prof = f"{door.home(role)}/s/{task}", None, None
         def prepare():   # the run directory, its history and the tree: at entry, and again as the rejoin after a yield
@@ -2835,7 +2838,8 @@ def src_run(head, files, task, role="score", learn_=False, yields=False):
                                env=dict(penv, TMPDIR=f"{dh}/tmp", JULIA_DEPOT_PATH=f"{dh}/depot:{dk}:{door.TOP}/julia:", WT_SRC_SET=setf,
                                         WT_BASE_TREE=f"{dh}/base", GIT_CEILING_DIRECTORIES=dh,
                                         WT_DART_CORPUS_DIR=f"{dh}/wt-dart-corpus",   # the corpus's images: no history to ask
-                                        WT_SRC_WARM=f"{door.home(role)}/{rel}/warm", WT_SRC_CHILD_RATE=rate,
+                                        WT_SRC_WARM=f"{door.home(role)}/{rel}/warm", WT_SRC_WARM2=f"{door.home(role)}/{rel}/warm2",
+                                        WT_SRC_CHILD_RATE=rate,
                                         WT_SRC_STOP=f"{door.home(role)}/{rel}/stop", **e),
                                profile=prof, background=False, stdout=log, stderr=subprocess.STDOUT)
                 procs.append(p)
@@ -2855,9 +2859,10 @@ def src_run(head, files, task, role="score", learn_=False, yields=False):
             stopped[0] = stopped[0] or pz["reaped"]   # a pause past its wall reaped the process: the rest after a yield
             if refused:
                 door.wipe(role, f"{door.home(role)}/s")
-                return None, f"the driver refused the src run's records: {refused}"
-            warms += [float(x) for x in (door.take(role, f"{rel}/warm", 1 << 16) or b"").decode(errors="replace").split()
-                      if re.fullmatch(r"[0-9.]+", x)]
+                return None, f"the driver refused the src run's records: {refused}", None
+            for name, into in (("warm", warms), ("warm2", warms2)):   # each stage on its own line, never one less the other
+                into += [float(x) for x in (door.take(role, f"{rel}/{name}", 1 << 16) or b"").decode(errors="replace").split()
+                         if re.fullmatch(r"[0-9.]+", x)]
             got = {}
             for k in range(n):   # each process's own records, read whole once it ended
                 text = (door.take(role, f"{rel}/rec.{k}", cfg()["cases_cap_bytes"]) or b"").decode(errors="replace")
@@ -2877,7 +2882,7 @@ def src_run(head, files, task, role="score", learn_=False, yields=False):
             left = [f_ for f_ in remaining if f_ not in rows]
             if not stopped[0] and left:   # it ended with files unread and no stop asked: no result (O8-1)
                 door.wipe(role, f"{door.home(role)}/s")
-                return None, f"the src run wrote no row for {len(left)} of its {len(files)} file(s) ({', '.join(left[:5])}): " + out[-600:]
+                return None, f"the src run wrote no row for {len(left)} of its {len(files)} file(s) ({', '.join(left[:5])}): " + out[-600:], None
             remaining, rnd = left, rnd + 1
             if stopped[0] and remaining:   # the lander lands; the rest after it, in a fresh process, the role left meanwhile
                 with door.released(role) as use:   # (spec v18 Q4, the round-15 operator's finding 1: a yield that held the
@@ -2887,8 +2892,8 @@ def src_run(head, files, task, role="score", learn_=False, yields=False):
                     prepare()
         rc, err = door.wipe(role, f"{door.home(role)}/s")
     if rc != 0:
-        return None, f"the src run's directory could not be removed: {err.strip()[-300:]}"
-    return rows, (min(warms) if warms else None)
+        return None, f"the src run's directory could not be removed: {err.strip()[-300:]}", None
+    return rows, (min(warms) if warms else None), (min(warms2) if warms2 else None)
 
 def src_stop_wanted(kind, pz):
     """Whether a src run stops gracefully before its next file (its stop file): a lander waits on its lock, and either
@@ -2914,13 +2919,13 @@ def src_red_at(files, at, task, role="score"):
     run = sorted(set(files) & have)
     if run:
         try:
-            rows, _ = src_run(at, run, task, role=role)
+            rows, why, _ = src_run(at, run, task, role=role)
         except SrcVoid as e:   # one file's process alone void: that file's red, `void` (Z3); more: the caller splits
             if len(run) == 1:
                 return dict(out, **{run[0]: ("void", str(e)[:400])})
             raise
         if rows is None:
-            raise ClimbError(f"the src run of {len(run)} file(s) at {at[:10]} wrote no result: {_}")
+            raise ClimbError(f"the src run of {len(run)} file(s) at {at[:10]} wrote no result: {why}")
         out.update({f: (rows[f][0], rows[f][3]) for f in run})
     return out
 
@@ -3013,7 +3018,10 @@ def why_unfield(w):
     return re.sub(r"\\(\\|n)", lambda m: "\n" if m.group(1) == "n" else "\\", w)
 
 def src_record(head):
-    """The score's src record of `head`, STATE/src-<head>.tsv: (warm G or None, {file: (outcome, G, secs, why)}), or None.
+    """The score's src record of `head`, STATE/src-<head>.tsv: (warm G or None, warm2 G or None, {file: (outcome, G, secs,
+    why)}), or None. Its header is `head <sha> warm <G>`, then `warm2 <G>` (the warm-up's second stage, src_run) in a
+    record written since that stage was measured; an older record holds none (None: its files' costs hold the stage on
+    whichever heavy file ran first, which settle_costs reads as a re-base).
     A row is one line, its why escaped (why_field). A record written before that holds a red's why of several lines
     raw, its rows broken across lines (2026-11-26 05:03Z: the score of 3c0c2b38, constants_objects.jl red twice, and
     every landing's set failed on its line 14 with an IndexError, the lander landing nothing): a line that is no row
@@ -3036,7 +3044,8 @@ def src_record(head):
             continue
         rows[f[0]] = (f[1], float(f[2]) if f[2] else None, float(f[3]), why_unfield(f[4]) if len(f) > 4 else "")   # "" unmeasured
         last = f[0]
-    return (float(h[3]) if len(h) > 3 and h[3] else None), rows
+    return ((float(h[3]) if len(h) > 3 and h[3] else None), (float(h[5]) if len(h) > 5 and h[4] == "warm2" and h[5] else None),
+            rows)
 
 def src_ran(commit, files, source):
     """A green run of `files` (paths under test/src, exactly those that ran green: never "every file") at origin's
@@ -3195,23 +3204,30 @@ def src_flaky_passed(files):
 
 def src_kept(head):
     """The kept score records (STATE/src-<head>.tsv, SRC_KEEP of them) of `head` and its ancestors, newest first:
-    [(their head, warm, {file: row})], where settle_costs reads each file's last measured cost."""
+    [(their head, warm, warm2, {file: row})], where settle_costs reads each file's last measured cost."""
     out = []
     for p in sorted(glob.glob(os.path.join(STATE, "src-*.tsv")), key=os.path.getmtime, reverse=True):
         with contextlib.suppress(OSError, IndexError):
             h = open(p).readline().split("\t")[1]
             if sh(["git", "merge-base", "--is-ancestor", h, head]).returncode == 0 and (rec := src_record(h)) is not None:
-                out.append((h, rec[0], rec[1]))
+                out.append((h, *rec))
     return out
 
-def settle_costs(rows, head):
+def settle_costs(rows, head, warm2):
     """A score's rows ({file: (outcome, G or None, secs, why)}) settled against the kept records before they are written,
     each file against the newest kept record (src_kept) that MEASURED it, passed (2026-11-15: a record whose own cost
     for classes.jl was blank sent it to the densest-rate estimate, 3,675.3 G, while two kept records had measured it at
     209.9 and 218.9): a passed file src_run left unmeasured (src_unmeasured: a restarted process's files) carries that
     record's cost, scaled by its size now over its size there, its why naming the record ("carried from <head>"); and a
     measured cost whose G per byte differs from that record's by more than src_cost_jump, the file's size unchanged, is
-    a fault (one event and one note naming each file), that record's cost recorded in its place, never the jump. 2026-11-15: the score of f1435467,
+    a fault (one event and one note naming each file), that record's cost recorded in its place, never the jump.
+    The re-base: a record that measured the warm-up's second stage (`warm2`, src_run) settled against kept records that
+    did not is a change of what a file's cost holds, deliberate and named, never 60 jumps: before it, the stage's
+    ~360 G of first use landed on whichever heavy file a process ran first (class_info.jl 432 G in every score, its own
+    work about 77 G; measured 2026-11-15); after it, on the stage's own line. So src_cost_jump is not applied between a
+    record with warm2 and one without (the cost measured stands), one `src-cost-rebase` event names both records and
+    warm2, and src_target's window starts again on checks that measured the stage. A file left unmeasured is still
+    carried, named, across it (a restart's charge belongs to no file either way). 2026-11-15: the score of f1435467,
     yielding to landings, left classes.jl and closures.jl unmeasured, and src_costs charged them its estimate for a
     file no score has run, the densest G per byte of test/src: 3,723.4 G and 1,537.9 G against about 205 and 11, a
     src-near note and a would-be hold for files that are light. A file the previous record did not measure either is
@@ -3220,8 +3236,9 @@ def settle_costs(rows, head):
     if not kept:
         return rows
     now_s, sizes = src_sizes(head), {}
+    before = {ph for ph, _, w2, _ in kept if w2 is None} if warm2 is not None else set()   # the records the re-base crosses
     def last(f):   # (the newest kept record that measured f, passed; its cost; f's size there)
-        for ph, _, prow in kept:
+        for ph, _, _, prow in kept:
             p = prow.get(f)
             if p and p[0] == "passed" and p[1] is not None:
                 return ph, p[1], sizes.setdefault(ph, src_sizes(ph)).get(f)
@@ -3236,9 +3253,16 @@ def settle_costs(rows, head):
         if g is None:
             out[f] = (o, round(pg * scale, 1), secs, f"carried from {ph[:10]}")
             carried[f], src[f] = out[f][1], ph[:8]
+        elif ph in before:   # a cost across the re-base: measured on another model of the warm-up, never a jump
+            continue
         elif now_s[f] == was and pg > 0 and g > 0 and max(g / pg, pg / g) > cfg()["src_cost_jump"]:
             out[f] = (o, pg, secs, f"a jump from {pg} G to {g} G refused, carried from {ph[:10]}")
             jumps[f], src[f] = (pg, g), ph[:8]
+    if kept[0][0] in before:   # the first record that measured the second stage, settled against the newest that did not
+        event("src-cost-rebase", sha=head[:8], prev=kept[0][0][:8], warm2=warm2, carried=sorted(carried),
+              why="the warm-up's second stage is measured on its own line (warm2) from this record on: a file's cost no "
+                  "longer holds its first use, so src_cost_jump is not applied across it, and src_target's window starts "
+                  "again: src_margin_start_s until src_margin_checks checks of each shape measured the stage")
     if carried:
         event("src-cost-carried", sha=head[:8], files=carried, prev=kept[0][0][:8], records={f: src[f] for f in carried})
     if jumps:
@@ -3256,11 +3280,11 @@ def src_score(head, role="score"):
     yielding to a waiting lander at file boundaries, its files' seconds learned), recorded in STATE/src-<head>.tsv (each
     file's outcome, cost and seconds, and the warm-up), a green run kept (src_ran), the known reds it ran green resolved
     (a located red at once, a flaky one at its second pass: its fix-first entry removed), and every other red located
-    (src_locate). A run with no result records nothing (D9): its head is not verified. Returns (rows, warm) or None."""
+    (src_locate). A run with no result records nothing (D9): its head is not verified. Returns (rows, warm, warm2) or None."""
     t0, files = door.CLOCK(), src_files(head)
     voided = {}
     try:
-        rows, warm = src_run(head, files, f"score-{head[:8]}", role=role, learn_=True, yields=True)
+        rows, warm, warm2 = src_run(head, files, f"score-{head[:8]}", role=role, learn_=True, yields=True)
     except SrcVoid as e:   # a void process is located, never only an event (spec v17 Z3): narrowed to the file whose
         fs, why = src_void_split(e.files, head, f"void-{head[:8]}", role)   # presence voids it, then located over commits
         voided = {f: why for f in fs}
@@ -3269,16 +3293,17 @@ def src_score(head, role="score"):
                  f"its process's records void: {why[:400]}. Default taken: located as a red (src_locate), filed fix-first, "
                  "and the score's other files run again without it.")
         try:
-            rows, warm = src_run(head, [f for f in files if f not in voided], f"score-{head[:8]}-novoid", role=role, learn_=True, yields=True)
+            rows, warm, warm2 = src_run(head, [f for f in files if f not in voided], f"score-{head[:8]}-novoid", role=role, learn_=True, yields=True)
         except SrcVoid as e2:
-            rows, warm = None, str(e2)
+            rows, warm, warm2 = None, str(e2), None
         if rows is not None:
             rows.update({f: ("void", None, 0.0, f"void: {why}"[:400]) for f in voided})
     if rows is None:
         event("src-failed", sha=head[:8], why=warm[-300:] if isinstance(warm, str) else "")
         return None
-    rows = settle_costs(rows, head)
-    write_atomic(os.path.join(STATE, f"src-{head[:8]}.tsv"), f"head\t{head}\twarm\t{'' if warm is None else warm}\n" +
+    rows = settle_costs(rows, head, warm2)
+    write_atomic(os.path.join(STATE, f"src-{head[:8]}.tsv"), f"head\t{head}\twarm\t{'' if warm is None else warm}" +
+                 ("" if warm2 is None else f"\twarm2\t{warm2}") + "\n" +
                  "".join(f"{f}\t{o}\t{'' if g is None else g}\t{s_}\t{why_field(w)}\n" for f, (o, g, s_, w) in sorted(rows.items())))
     green = sorted(f for f, r in rows.items() if r[0] == "passed")
     src_ran(head, green, "score")
@@ -3302,19 +3327,20 @@ def src_score(head, role="score"):
         new = {f: w for f, w in new.items() if f not in voided}
     filed = src_locate(new, head, role) if new else {}
     event("src-scored", sha=head[:8], files=len(files), red=len(files) - len(green), new=len(new), filed=len(filed),
-          warm=warm, secs=round(door.CLOCK() - t0))
-    return rows, warm
+          warm=warm, warm2=warm2, secs=round(door.CLOCK() - t0))
+    return rows, warm, warm2
 
 # ---- a landing's test set (the landing-check ruling's R1, R2, R5; step 3: computed and recorded for every landing,
 # not yet applied, so its prediction is measured against the judged path of real checks)
 def src_latest(at):
     """The newest score's src record (src-latest.json, written by src_score), when its head is `at` or an ancestor of it:
-    (its head, warm G or None, {file: row}) or None; one read and one ancestry test, never a scan of every record."""
+    (its head, warm G or None, warm2 G or None, {file: row}) or None; one read and one ancestry test, never a scan of
+    every record."""
     h = state_json(SRC_LATEST, {}).get("head")
     if not h or sh(["git", "merge-base", "--is-ancestor", h, at]).returncode != 0:
         return None
     rec = src_record(h)
-    return None if rec is None else (h, rec[0], rec[1])
+    return None if rec is None else (h, *rec)
 
 def src_target(pack, src_change):
     """THE target a landing's test set is cut to (round 13's ruling S3, D5: a number that moves with the model and the
@@ -3329,6 +3355,9 @@ def src_target(pack, src_change):
         probe); a check red on its tests teaches nothing here;
       - the margin: three times the SECOND-largest of them (one outlier moves nothing), between src_margin_min_s and
         src_margin_max_s; src_margin_start_s until that many checks exist;
+      - the window starts again at the re-base (settle_costs: the warm-up's second stage measured on its own line):
+        once a check of the shape measured the stage (its split carries `warm2s`), only such checks count, since predict
+        charges them another start, so src_margin_start_s holds until src_margin_checks of them exist, `why` saying so;
       - its range: the largest set in G those errors were measured on (`gmax`): src_set admits no set larger than it
         by more than one file, so the model is never trusted past the sets it was checked on (none until a check of the
         shape exists).
@@ -3340,20 +3369,23 @@ def src_target(pack, src_change):
              if e["kind"] == "ship" and (e.get("check") == 0 and str(e.get("result", "")).startswith("LANDED") or e.get("check") == 10)
              and (e.get("src_set") or {}).get("src_change") is bool(src_change) and e.get("path") is not None
              and judged_check(e)   # quiet at its start and its end, and not cut by battery (throughput P0)
-             and isinstance(((e.get("src_set") or {}).get("predicted") or {}).get("path"), (int, float))][-n:]
+             and isinstance(((e.get("src_set") or {}).get("predicted") or {}).get("path"), (int, float))]
+    rebased = any((e.get("split") or {}).get("warm2s") for e, _ in pairs)
+    pairs = [(e, err) for e, err in pairs if not rebased or (e.get("split") or {}).get("warm2s")][-n:]
+    model = " that measured the second warm-up stage (the window restarted at the re-base)" if rebased else ""
     gmax = max([e["src_set"].get("ran_cost") or 0.0 for e, _ in pairs], default=None)
     shape = "a change to src/" if src_change else "a change outside src/"
     if len(pairs) < n:
         raw = margin = c["src_margin_start_s"]
         info = {"margin": margin, "checks": len(pairs), "gmax": gmax,
-                "why": f"{len(pairs)} of {n} checks of {shape} (landed, or red on D14 alone) predicted before they ran: the start margin"}
+                "why": f"{len(pairs)} of {n} checks of {shape}{model} (landed, or red on D14 alone) predicted before they ran: the start margin"}
     else:
         pos = sorted((err for _, err in pairs if err > 0), reverse=True)
         second = pos[1] if len(pos) > 1 else 0.0
         raw = round(3 * second, 1)
         margin = min(c["src_margin_max_s"], max(c["src_margin_min_s"], raw))
         info = {"margin": margin, "checks": len(pairs), "gmax": gmax, "second": second, "largest": pos[0] if pos else 0.0,
-                "why": f"3 x {second:+} s, the second-largest positive error of the last {n} checks of {shape} (landed, or red on D14 alone)"
+                "why": f"3 x {second:+} s, the second-largest positive error of the last {n} checks of {shape}{model} (landed, or red on D14 alone)"
                        + (f", capped at src_margin_max_s" if raw > margin else "")}
     target = round(pack - margin, 1)
     over = raw > c["src_margin_max_s"]
@@ -3420,15 +3452,24 @@ def src_costs(rows, files, at, scored_at=None, deleted=(), measured=None):
         return sizes.get(f, 0) * rate_of(f)
     return {f: cost(f) for f in files}, sorted(f for f in files if f not in have and f not in measured)
 
-def predict(costs, warm, src_change, shards, checks, *, harness):
+def predict(costs, warm, src_change, shards, checks, *, warm2, harness):
     """The critical path a check of the files `costs` ({file: G}) would read (the landing-check ruling's B.2): the files
     by longest processing time over `shards`, each shard read as c0 + its files' G / g judged seconds, c0 its measured
-    start plus the warm-up its first file pays (the score's record's `warm`); the slowest shard at least the mean plus
-    the checks' imbalance; beside the ratchet, plus the load of a check of its shape. Each term is the measured checks'
-    when they hold it and a declared prior (DEFAULTS `src_prior_*`, measured on this machine) until they do (round 14's
-    T3: a launch has priors, never "every file"):
+    start; the slowest shard at least the mean plus the checks' imbalance; beside the ratchet, plus the load of a check
+    of its shape. Each term is the measured checks' when they hold it and a declared prior (DEFAULTS `src_prior_*`,
+    measured on this machine) until they do (round 14's T3: a launch has priors, never "every file"):
       - g and the start: the predicted shape's own checks with measured starts once src_shape_checks_min exist, else
-        the other shape's once it has that many (S2), else the priors (`src_prior_g` of the shape, `src_prior_start_g`);
+        the other shape's once it has that many (S2), else the priors (`src_prior_g` of the shape, `src_prior_start_g`).
+        A check whose split carries `warm2s` measured the warm-up's second stage on its own line, run just before each
+        shard's first claimed file that reaches the pipeline (test/src_tests.jl's WT_SRC_WARM2; WT_SRC_START is written
+        at the first claim, before it): each shard is charged its measured start plus its own stage, a shard that ran
+        none (`warm2.<k> none`) its start alone, and no file pays more. A check recorded before (no `warm2s`) measured
+        the first stage alone, and its shards' first files paid the second (the shards' own records read 230-375 G over
+        the score's cost on each shard's first file, step 6's re-run 2026-11-11): its start is charged the score's
+        record's `warm2`, the second stage measured on its own line, and its g keeps the formula it was fitted with
+        (each shard's start plus the record's `warm`, the stand-in it was fitted with). A record written before warm2
+        was measured holds none: such a check's start is then charged `warm`, the stand-in, named in `model`. The
+        priors: `src_prior_start_g` (a start of the first stage alone) plus warm2 (else warm);
       - the load: the median of the shape's measured loads from its first measured check, else `src_prior_load_s`;
       - the ratchet: the median of the measured checks OF THE CHECK'S CLASS (`harness`: whether its ratchet runs the
         L228 behaviour harness, l228_harness; a check's own is its split's `l228`, written by dev/check.sh from the
@@ -3453,10 +3494,12 @@ def predict(costs, warm, src_change, shards, checks, *, harness):
             js = [x[0] for x in sp["shards"]]
             gap.append(max(js) - sum(js) / len(js))
             if sp.get("starts") and len(sp["starts"]) == len(js) and shape in (True, False):   # each shard's start (A13-7)
-                # each shard pays the warm-up once more on its first file (the shared first compile the score pays once and
-                # keeps off every file's cost, its record's `warm`): the shards' own records read 230-375 G over the
-                # score's cost on each shard's first file (step 6's re-run, 2026-11-11), so it is a term of every shard
-                measured[shape].append((ran + sum(sp["starts"]) + len(js) * warm, sum(js), sorted(sp["starts"])[len(sp["starts"]) // 2]))
+                st = sorted(sp["starts"])[len(sp["starts"]) // 2]
+                if sp.get("warm2s") and len(sp["warm2s"]) == len(js):   # each shard's start plus its own stage, if it ran one
+                    own2 = [s_ + (w2_ or 0.0) for s_, w2_ in zip(sp["starts"], sp["warm2s"])]
+                    measured[shape].append((ran + sum(own2), sum(js), sorted(own2)[len(own2) // 2], True))
+                else:   # the first stage alone: its g as it was fitted, its start charged the second stage measured
+                    measured[shape].append((ran + sum(sp["starts"]) + len(js) * warm, sum(js), st + (warm if warm2 is None else warm2), False))
         if sp.get("ratchet") and sp.get("l228") == ("harness" if harness else "none"):   # its class's alone
             rat.append(sp["ratchet"][0])
         if sp.get("load") and shape in (True, False):
@@ -3466,15 +3509,18 @@ def predict(costs, warm, src_change, shards, checks, *, harness):
     own, other, nmin = measured[bool(src_change)], measured[not src_change], c["src_shape_checks_min"]
     shape_name = "a change to src/" if src_change else "a change outside src/"
     use = own if len(own) >= nmin else other if len(other) >= nmin else None
+    stage2 = ("the record's warm2" if warm2 is not None else "the stand-in warm (the record measured no warm2)")
     if use is not None:
-        g = sum(w for w, _, _ in use) / max(1, sum(s_ for _, s_, _ in use))
-        c0 = (med([st for _, _, st in use]) + warm) / g   # its start, then the warm-up its first file pays
+        g = sum(w for w, _, _, _ in use) / max(1, sum(s_ for _, s_, _, _ in use))
+        c0 = med([st for _, _, st, _ in use]) / g   # its start, both stages of the warm-up in it
+        n2 = sum(1 for *_, m2 in use if m2)
         model = (f"c0 measured, g over {len(use)} checks of {shape_name}" if use is own else
                  f"c0 measured, g over {len(use)} checks of the other shape ({shape_name} has {len(own)}, under {nmin})")
+        model += f" ({n2} measured the second warm-up stage" + (f"; {len(use) - n2} charged {stage2})" if n2 < len(use) else ")")
     else:   # too few measured checks of either shape: the declared priors, until src_shape_checks_min exist (T3)
         g = c["src_prior_g"][key]
-        c0 = (c["src_prior_start_g"] + warm) / g
-        model = f"priors (g, start: {len(own)} of {shape_name}'s checks and {len(other)} of the other's measured, under {nmin})"
+        c0 = (c["src_prior_start_g"] + (warm if warm2 is None else warm2)) / g
+        model = f"priors (g, start: {len(own)} of {shape_name}'s checks and {len(other)} of the other's measured, under {nmin}; the start plus {stage2})"
     ld = med(load[bool(src_change)]) if load[bool(src_change)] else c["src_prior_load_s"][key]
     rt = med(rat) if rat else c["src_prior_ratchet_harness_s" if harness else "src_prior_ratchet_s"]
     imb = med(gap) if gap else c["src_prior_imbalance_s"]
@@ -3565,7 +3611,7 @@ def src_set(h, sha, hold_id):
     rec = src_latest(h)
     if rec is None:
         return {"why": f"no score's src record at {h[:10]} or before it"}
-    hs, warm, rows = rec
+    hs, warm, warm2, rows = rec
     # the check's class (l228_harness, computed once here) and the red line it will be judged on: D14_RED, or
     # D14_RED_HARNESS when its ratchet runs the L228 harness; and the packing ceiling the target is cut from (D14_PACK)
     checksh = git("show", f"{h}:dev/check.sh")
@@ -3592,8 +3638,8 @@ def src_set(h, sha, hold_id):
     out = {"hs": hs[:10], "own": sorted(own), "unscored": sorted(unscored), "flaky": sorted(flaky), "src_change": src_change,
            "reds": sorted(reds & t_sha), "harness": harness}
     every, est = src_costs(rows, sorted(t_sha - reds), sha, hs, deleted, measured)
-    out["deleted"], out["warm"] = sorted(deleted), warm
-    pa, why = predict(every, warm, src_change, shards, checks, harness=harness)
+    out["deleted"], out["warm"], out["warm2"] = sorted(deleted), warm, warm2
+    pa, why = predict(every, warm, src_change, shards, checks, warm2=warm2, harness=harness)
     out["all"], out["estimated"] = pa or {"why": why}, est
     target, margin = src_target(int(pack.group(1)), src_change)   # D14_PACK less this shape's measured margin (S3, Z5)
     out["band"] = int(band.group(1))
@@ -3604,18 +3650,18 @@ def src_set(h, sha, hold_id):
     pos = rs.get("pos", 0) % max(1, len(names)) if rs.get("hs") == hs[:10] else 0   # a new score's ring starts at 0
     base_set = sorted(own | unscored | flaky)   # a flaky known red runs in every landing until it resolves (red 7)
     c_all, _ = src_costs(rows, sorted(set(base_set) | (set(names) & t_sha) | set(rs.get("carry", [])) & t_sha), sha, hs, deleted, measured)
-    pb, why = predict({f: c_all[f] for f in base_set}, warm, src_change, shards, checks, harness=harness)
+    pb, why = predict({f: c_all[f] for f in base_set}, warm, src_change, shards, checks, warm2=warm2, harness=harness)
     if pb is None:
         out["why"] = why; return out
     # the refusal reads costs a score or a check measured, never an estimate: a file no score or check has costed is
     # left out of it (an estimate is set high on purpose, src_costs, and a high one only carries less: the check runs
     # its set with nothing packed around it, and held_measured records what it measures)
-    pk, _ = predict({f: c_all[f] for f in base_set if f not in set(est)}, warm, src_change, shards, checks, harness=harness)
+    pk, _ = predict({f: c_all[f] for f in base_set if f not in set(est)}, warm, src_change, shards, checks, warm2=warm2, harness=harness)
     out["refuse"] = pk["path"] > int(band.group(1))
     # what the check costs with no test file at all (the load, the ratchet, each shard's start): past the line, no file of
     # the commit's makes the refusal, so it is the predictor's or the machine's, never the commit's (lander.src_refused
     # holds the item; 2026-11-14 23:15:34Z: an item with no own and no unscored file was dropped as its own at 265 s)
-    p0, _ = predict({}, warm, src_change, shards, checks, harness=harness)
+    p0, _ = predict({}, warm, src_change, shards, checks, warm2=warm2, harness=harness)
     out["base_over"] = p0["path"] > int(band.group(1))
     out["base"] = p0
     # an own file that ALONE predicts past the band as it stands at origin (its recorded cost scaled to its size at h):
@@ -3623,7 +3669,7 @@ def src_set(h, sha, hold_id):
     # every own file fits at origin is a refusal the commit's own (its additions, or its edits, push the set past it)
     at_h, _ = src_costs(rows, sorted(own & set(t_h)), h, hs)
     out["origin_heavy"] = [[f, round(g_, 1), p_["path"]] for f, g_ in sorted(at_h.items())
-                           for p_ in [predict({f: g_}, warm, src_change, shards, checks, harness=harness)[0]]
+                           for p_ in [predict({f: g_}, warm, src_change, shards, checks, warm2=warm2, harness=harness)[0]]
                            if p_["path"] > int(band.group(1))] if out["refuse"] else []
     # the share (round 14's T2): the files the last landing could not take first (deficit round robin, A13-6), then the
     # ring from its position, each taken while the set predicts within THIS landing's target. A ring file that does not
@@ -3636,7 +3682,7 @@ def src_set(h, sha, hold_id):
     # never past `gmax`, the largest set this shape's margin was measured on; no range until a check of the shape exists
     gmax = margin.get("gmax")
     in_range = lambda fs: gmax is None or not fs or sum(c_all[x] for x in base_set + fs[:-1]) <= gmax
-    fits = lambda fs: in_range(fs) and predict({x: c_all[x] for x in base_set + fs}, warm, src_change, shards, checks, harness=harness)[0]["path"] <= target
+    fits = lambda fs: in_range(fs) and predict({x: c_all[x] for x in base_set + fs}, warm, src_change, shards, checks, warm2=warm2, harness=harness)[0]["path"] <= target
     kept, dropped = [], []
     carry = [f for f in rs.get("carry", []) if f in t_sha and f not in skip] if rs.get("hs") == hs[:10] else []
     # an estimate is not a measurement: a set whose own files hold an estimated one (a new file no score or check has
@@ -3671,15 +3717,15 @@ def src_set(h, sha, hold_id):
         considered = passed[0][0] + 1 if passed else 0
     pos_next = (pos + considered) % max(1, len(names))
     share = kept
-    pr, _ = predict({f: c_all[f] for f in base_set + share}, warm, src_change, shards, checks, harness=harness)
+    pr, _ = predict({f: c_all[f] for f in base_set + share}, warm, src_change, shards, checks, warm2=warm2, harness=harness)
     # a file's own unfitness is the file's, read in the class without the harness (whose ratchet alone passes the target)
-    lone = [[f, round(c_all[f], 1)] for f in dropped if predict({f: c_all[f]}, warm, src_change, shards, checks, harness=False)[0]["path"] > target]
+    lone = [[f, round(c_all[f], 1)] for f in dropped if predict({f: c_all[f]}, warm, src_change, shards, checks, warm2=warm2, harness=False)[0]["path"] > target]
     # the warning before the wall: each scored file of h whose cost alone, as a change to src/ (the heavier shape) would
     # read it, predicts within src_near_band of D14's band, named before a landing that edits it is refused
     near_s = cfg()["src_near_band"] * int(red.group(1))   # a change to src/ never runs the harness (bundled)
     rec_h, _ = src_costs(rows, sorted(f for f in t_h if rows.get(f, ("",))[0] == "passed"), h, hs)
     near = [[f, round(g_, 1), p_] for f, g_ in sorted(rec_h.items())
-            for p_ in [predict({f: g_}, warm, True, shards, checks, harness=False)[0]["path"]] if p_ >= near_s]
+            for p_ in [predict({f: g_}, warm, True, shards, checks, warm2=warm2, harness=False)[0]["path"]] if p_ >= near_s]
     src_unfit(hs, lone, src_change, target, near, int(red.group(1)))
     i, T = src_index(h, hs), plan["T"]
     out.update({"i": i, "T": T, "pos": pos, "pos_next": pos_next, "considered": considered, "carried": carry, "share": share,
@@ -3694,7 +3740,7 @@ def src_handed(ss, h, sha):
         raise ClimbError(f"src_handed with no set made: {ss.get('why', 'no set')}")
     files = sorted(set(ss["own"]) | set(ss["unscored"]) | set(ss.get("flaky", [])) | set(ss["share"]))
     rec = src_latest(h)
-    ss["ran"], ss["ran_cost"] = files, round(sum(src_costs(rec[2], files, sha, rec[0], ss.get("deleted", ()),
+    ss["ran"], ss["ran_cost"] = files, round(sum(src_costs(rec[3], files, sha, rec[0], ss.get("deleted", ()),
                                                            state_json(SRC_MEASURED, {}))[0].values()), 1) if rec else None
     return files
 
