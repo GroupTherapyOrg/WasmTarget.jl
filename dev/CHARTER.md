@@ -1,6 +1,6 @@
 # The WasmTarget.jl charter
 
-This is the definition of done for the rewrite (PR #122) and the standard for every change
+This is the definition of done for the rebuild (PR #128) and the standard for every change
 after it. It outranks every task list, phase plan, agent brief and commit message. A task
 is worth doing only to the extent that it closes a clause below; an exit check that
 does not close a clause is not an exit. The ratchet reads this file (L125): every check in the
@@ -9,27 +9,60 @@ enforcement stack must be cited by a clause, and every check a clause cites must
 Changes to this file are made at Dale's direction only. Agents may propose a change in a
 report; they never make one to fit where their work stopped.
 
-## Intent (Dale's words, 2026-06-28 … 2026-09-22)
+## Intent (Dale's words)
 
 > A CLEAN and PERFECT foundation for all future agent-driven development … dart2wasm's
 > battle-tested structure followed VERBATIM; the Julia compiler is the ground truth;
 > NOTHING ever reinvents the wheel … as STRICT as possible in EVERY regard … NO stale code,
 > NO bloat, NO parallel/confusing pathways, NOTHING dart2wasm doesn't do … the Rust
-> analogy: the structure itself makes whole classes of mistakes impossible — anything
-> implemented inappropriately becomes clear IMMEDIATELY. (2026-09-01)
+> analogy: the structure itself makes whole classes of mistakes impossible. (2026-09-01)
 
-> Correct ≠ parity. A passing differential test means SOUND, not DART-FAITHFUL. "Done"
-> never applies while not at dart2wasm parity. Don't be OK settling. (2026-06-29)
+> Correct ≠ parity. A passing differential test means SOUND, not DART-FAITHFUL. Don't be OK
+> settling. (2026-06-29)
+
+> If dart doesn't provide a 1-1 port, then the Julia compiler ITSELF, along with another
+> language like Rust or C#, should be enough for us to port from. (2026-10-28) · NEVER ever
+> build a piece bespoke, but rather find a near 1-1 match and then port it, like we did for
+> dart and the LLVM stackifier. (2026-10-29)
+
+> We should ALSO port dart's TEST set, with Julia as the ground truth. (2026-10-22) · Do NOT
+> allow stubs to be called complete. (2026-10-29)
 
 > WT must be FULLY valid by construction. (2026-07-07) · Formal methods through and
 > through. (2026-09-02) · ALWAYS fix the root issue. (2026-06-28)
 
-> The most insanely strict and clean and robust and verified starting point … building
-> this out further is seamless, comes with strict guarantees, efficient because it fails
-> fast and LOUD, doesn't ALLOW wrong choices in the same way that Rust's compiler doesn't,
-> is FULLY 1-1 using dart2wasm as the oracle through and through … this should NEVER be
-> sacrificed or forgotten … always at the forefront of everything the agents do and land.
-> (2026-09-22)
+## Where every definition comes from: port, never invent
+
+A definition in `src/` is a port. Its source is the first of these that answers the question,
+each read at its pinned commit (dev/PARITY_MASTER.md), each pin cited where the definition is
+written and resolved when the package loads:
+
+1. **dart2wasm and wasm_builder** (dart-lang/sdk `898a1e4b`): the structure, file for file.
+   `src/` mirrors `lib/` and `lib/src/`; every definition there carries `@parity`.
+2. **Julia itself** (julia at the pinned 1.12 commit, with its pinned dependencies such as
+   utf8proc): every behavior, and everything Julia forces that dart has no counterpart for.
+   This covers Julia's compiler (inference, the trim verifier, the optimized IR WasmTarget
+   reads), Base, and Julia's own C runtime: a foreign call or builtin a program reaches lowers
+   to the port of the C function Julia's codegen calls for it, in the one table of them, held in
+   a closed world only where a statement reaches it. dart's `@patch` files correspond to Julia's
+   overlay method tables, kept in one findable place. Every definition here carries
+   `@quarantine pin"<citation>"`.
+3. **LLVM** (llvm/llvm-project `7a941dfb`), where Julia delegates the answer to LLVM and dart
+   has none: the stackifier, soft-promoted half precision, the atomics a single-threaded wasm
+   target strips, the folds that delete a raise.
+4. **A named production precedent** in another ecosystem, for a construction none of the
+   above has: Rust, C#, GraalVM or another, each pinned before it is cited. A construction with no
+   precedent anywhere is an invention, and an invention waits for Dale.
+
+Two exact, reviewable lists hold the rest, and each only shrinks: `dev/quarantine_unpinned.txt`,
+definitions still owing their pin (`@quarantine unpinned`), and
+`dev/quarantine_no_counterpart.txt`, readers of WasmTarget's own formats, which no ecosystem
+has, each admitted by the lead with its reason.
+
+The three oracles never stand in for one another: dart2wasm for structure, native Julia for
+behavior, and native-versus-wasm differential execution for soundness. Where Julia leaves an
+answer to the host (a NaN's payload, an address), the oracle compares only what Julia's source
+defines.
 
 ## The clauses
 
@@ -38,20 +71,16 @@ has reached 0 and been converted to a lock. `julia --project=. test/parity_ratch
 with the per-clause status. A clause is never closed by argument.
 
 - **C1 · One path.** Every construct has exactly one lowering; every fact has exactly one
-  source (one inference path, one numbering, one consult, one type chain, one IR reader).
-  Legacy (WT1's checks, retired with the rebuild's switch: they measured WT1's source, which
-  `legacy/` keeps only as the agreement oracle): L1 L3 L5 L10 L11 L12 L17 L24 L25 L26 L34 L36
-  L40 L41 L45 L47 L61 L67 L68 L69 L80 L91 L97 L98 L100 L102 L103 L104 L112 L113 L114 L115 L117
-  L120 L122 L124 L137 L142 L143 L150 R20 R21 R29a R29b R37 L152 L170 L171 L174 L175 L176 L177
-  L178 L179 L180 L181 L182 L183 L184 L185.
+  source (one inference path, one numbering, one table of runtime ports, one reader of a
+  binding, one reader of where a statement was written, one type chain). The commit adding a
+  source deletes every other path to the fact.
   Planned: dev/MARCH.md 1.A9, 1.C — two translators the only Type-to-wasm methods, Julia's one
   inference, the type chain computed once on the translator.
-- **C2 · dart2wasm 1:1, through and through.** Every definition in `src/` carries an
-  `@parity "<file>.dart:<line> <Symbol>"` anchor to dart-lang/sdk `898a1e4b` that names the
-  structure it copies, or, where dart has none (D42), to llvm/llvm-project `7a941dfb`, or, in
-  `src/julia/`, an `@quarantine "<necessity>" <Julia API>` naming the
-  Julia-only necessity that forces it and the Julia API it relies on. Nothing else may exist: a
-  mechanism dart does not have and Julia does not force is a defect even when every test passes.
+- **C2 · Ported, never invented.** Every definition in `src/` comes from the sources above, in
+  their order, and says so where it is written: `@parity "<file>.dart:<line> <Symbol>"` or an
+  LLVM anchor outside `src/julia/`; `@quarantine pin"<citation>" "<necessity>" <Julia API>` in
+  `src/julia/`, or `unpinned` while the debt list names it. Nothing else may exist: a mechanism
+  dart does not have and Julia does not force is a defect even when every test passes.
   `L210` (a file of `src/` outside `src/julia/` loads only through `include_dart` from the pin
   table, and the files it loaded are the directory's, checked at load) `L211` (every definition
   outside `src/julia/` carries `@parity`, its anchor, file and Julia name checked where it is
@@ -62,66 +91,57 @@ with the per-clause status. A clause is never closed by argument.
   `L226` (every dart2wasm test file at the pin has one entry of test/dart_tests.toml: ported to
   named smoke cases, structural with its property, not portable with its reason, or a helper; a
   check over a map).
-  Legacy (retired with the switch): L2 L20 L21 L23 L28 L30 L31 L32 L43 L44 L46 L50 L55 L77 L83
-  L84 L86 L88 L95 L110 L132 L149 R32 R40.
   Planned: dev/MARCH.md 1.A4, 1.A5, 1.A6, 1.E, 1.T — `src/` generated file for file from
   the pinned SDK and never drifting from it, dispatch by signature in the quarantine, dart's tests
   ported with Julia's answers.
-- **C3 · Julia is the ground truth.** When Julia's compiler answers a question (a hash, a
-  predicate, a layout, a dispatch result, an exception payload), the answer is ported, never
-  approximated; Julia's own bodies compile instead of bespoke re-implementations.
+- **C3 · Julia is the ground truth.** When Julia answers a question (a hash, a predicate, a
+  layout, a dispatch result, an exception and its payload, a runtime function's effect), the
+  answer is ported from Julia's own source, never approximated; Julia's own bodies compile
+  instead of bespoke re-implementations, and an expected value in a test is native Julia's.
   `L225` (each mirror of a Julia form names the form it mirrors, checked at load by converting a
   sample built by Julia's own constructors).
-  Legacy (retired with the switch): L42 L52 L53 L54 L56 L57 L59 L62 L70 L81 L82 L92 L123 L133
-  L138 L140 L141 R38.
-  Planned: dev/MARCH.md 1.C, 1.E, 1.T — Julia's
-  answers for layouts and dispatch, each quarantined definition naming its Julia API, and the
-  expected value of every ported dart test native Julia's.
+  Planned: dev/MARCH.md 1.C, 1.E, 1.T — Julia's answers for layouts and dispatch, each
+  quarantined definition naming its Julia API, and the expected value of every ported dart test
+  native Julia's.
 - **C4 · Strict in every regard.** Typed internal APIs: return types annotated, no `Any`
   outside named heterogeneous seams, every emitted value typed at its emission, and a
   constant's static type the type its emission pushes.
   `L214` (every parameter of a ported definition's methods declared, checked at load) `L215` (no
   field of a ported struct holds `Any`, and one holds `nothing` only where dart declares it `T?`,
   checked at load).
-  Legacy (retired with the switch): L9 L35 L49 L74 L136 R17 R30 R31.
   Planned: dev/MARCH.md 1.B, 1.D — every emitted value typed at its emission and a constant's
   static type the type its emission pushes, on the typed builder and the typed stack.
 - **C5 · Wrong choices cannot land.** The Rust analogy: a wrong implementation is rejected at
   the edit site (load-time typing, the enforcing builder, a closed sum matched exhaustively when
-  the package loads; a lock that scans is a stopgap, C0) or by the minute-scale
-  lanes, never first by an hour-long run. Every lowering-registry entry is exercised by a lane
-  case; a new entry without one fails; no known failure hides behind a skipped test or a
-  missing wasm runtime.
+  the package loads; a lock that scans is a stopgap, C0) or by the minute-scale landing check,
+  never first by an hour-long run. Every lowering-registry entry is exercised by a case; no known
+  failure hides behind a skipped test or a missing wasm runtime.
   `L219` (no open hierarchy passes for a closed one: every abstract type in src a registered
   construction or a dart abstract class's mirror, refused at load otherwise) `L217` (every Union
   a `@closed` sum, every match over one `@exhaustive`, its arms checked where it is written and
-  again at load).
-  `L221` `L222` (NIR's statements and operands closed sums of Julia's optimized IR forms, each
-  kind handled, checked at load).
-  Legacy (retired with the switch): L16 L94 L134 L155 R33 R36 L190 L191 L192 R42 R43 R44.
+  again at load) `L221` `L222` (NIR's statements and operands closed sums of Julia's optimized IR
+  forms, each kind handled, checked at load).
   Planned: dev/MARCH.md 1.D — the lowering on the typed stack.
-- **C6 · Correct or loud, and located.** No silent value, default, substitution or fabricated
-  result; every rejection is attributed to its statement with the inline chain innermost-first.
-  `L218` (the rejections a closed sum: a `Union` of concrete kinds, each handled, checked at load).
+- **C6 · Correct or loud, and located.** WasmTarget compiles the strict subset Julia's own trim
+  verifier defines. Inside it, every program's answer is native Julia's; outside it, a rejection
+  located at its statement with the inline chain innermost-first. No silent value, default,
+  substitution or fabricated result; a path the program cannot take at compile time ends at a
+  located run-time fatal, never a plausible value.
+  `L218` (the rejections a closed sum: a `Union` of concrete kinds, each handled, checked at load)
   `L220` (the strict subset's typestate: every stage after Julia's trim verifier takes the
   ClosedWorld only a holder of its token makes, its sole constructor checked at load) `L224` (no
   method of WasmTarget but check_subset makes one, a stopgap read of lowered code, Julia having no
   module privacy).
-  Legacy (retired with the switch): L8 L15 L18 L19 L37 L38 L39 L48 L51 L58 L60 L63 L64 L66 L71
-  L72 L73 L75 L76 L78 L79 L85 L89 L90 L93 L96 L101 L118 L119 L127 L135 L139 L146 L147 L156 R34
-  R39.
   Planned: dev/MARCH.md 1.D, 1.Q — every unported path a located rejection, the smoke
   ladder derived from them, and no case going from passing back to loud.
 - **C7 · Valid by construction.** The builder models everything wasm validates and throws at
   the emitting line; nothing repairs, truncates or bypasses emitted bytes; wasm-tools is only
   the disagreement alarm.
-  Legacy (retired with the switch): L6 L7 L13 L14 L22 L27 L29 L65 L87 L99 L151 L164 L165 L166
-  L167 L168 L169 L172 L173 R41.
   Planned: dev/MARCH.md 1.A4, 1.B — wasm_builder's ir, typestate builders and serializer, 1:1.
 - **C8 · Formal methods through and through.** Every algorithmic component carries a TLA+
-  model with a Broken variant TLC must reject; a change to a modeled algorithm changes the
-  model first; a counterexample is a finding, never a reason to weaken an invariant.
-  Legacy (retired with the switch): L111 L131.
+  model with a Broken variant TLC must reject, and the definition that implements it names its
+  model; a change to a modeled algorithm changes the model first; a counterexample is a finding,
+  never a reason to weaken an invariant.
   Planned: dev/MARCH.md 1.C, 1.D, 1.E — each phase's models re-pointed at the definitions it fills.
 - **C9 · Nothing stale, nothing bloated, nothing re-derived — anywhere in the repository.** No
   dead definition, fossil comment, retired name, campaign narration, or second computation of
@@ -129,28 +149,35 @@ with the per-clause status. A clause is never closed by argument.
   entries; every tracked file outside `src/` is consumed — by the build, a test, a lane, CI or
   the docs site, by path or by the loader that walks its directory — and none records finished
   work. Checks: `L129` `L130`.
-  Legacy (retired with the switch): L4 L106 L107 L108 L109 L121 R35 R3 R5 R7 R14 R15 R27.
   Planned: dev/MARCH.md 1.A6, 1.F — the skeleton derived and never drifting, `legacy/` deleted
   by its rule.
-- **C10 · Fast, precise feedback.** Fast is first, strict is final (Dale, 2026-10-20): a
-  landing is a commit landed by the climb's lander alone, from the commit that brings the lander in (itself one direct push on Dale's word, with its row in the landing log), through `bash dev/ship.sh` on this machine, which rebases onto the march branch, runs
-  `bash dev/check.sh` on every commit it lands, its evidence, about a minute of wall (a 60-s
-  target, red past 180 s, or past 300 s for a check whose ratchet runs the L228 behaviour harness, the band the lead's to set, reasonably (Dale, 2026-11-14: "just widen the 140s benchmark as needed but be reasonable -- you are the guide for a reason!! you make the decsions now , not me"): WasmTarget loads, so every construction checks itself; the ratchet
-  passes; every test file of the set the lander wrote before the check passes, each with exactly one row across the shards (the set: the change's own test files and its hold's located reds; the files the last score did not read passed, other than located known reds; the flaky known reds; the files carried from the landing before; and the ring's window, as far as D14's packing ceiling (140 s) less the margin and no larger than the largest set that margin was measured on, plus one file, the margin measured from the prediction errors of the recent checks of the landing's shape, on AC, that landed or read red on D14's band alone; each row written by a process whose canary read right after each file and last, whose canary's row is its last line, whose records keep their block grammar and whose exit status agrees with its rows, a file a shard skipped as claimed started by another shard; a row whose failing tests (`file:line kind`, each counted) are among those its known red's entry lists is that red's, and the change still lands); TLC checks every model the change touches), and
-  pushes fast-forward, logging each landing's seconds from its first commit to landed, the median
-  of the last five inside its band (a 300-s target, red past 600 s: Dale 2026-10-21); while origin's head has no score's record nothing lands, and a set that cannot be made leaves its item waiting; every test of ported code runs at each score of the march branch's head, where a red is located to its landing and fixed first, and the lander lands nothing while a file other than a located known red has gone `src_unverified_max` landings without a green run; the full CI matrix runs at clause
-  closure and never holds a landing (its red is the next batch's first item), and once, blocking,
-  on PR #128's merge head; a failure names its site. Checks: `L153` (the full matrix runs every
-  test family CI runs, at clause closure, non-blocking; a landing pushes the march branch alone)
-  `L162` (the full matrix, every lane of `dev/lanes.sh` on CI's runners, gives its verdict within
-  its 20-minute budget per lane job; `bash dev/gate.sh` pushes nothing, it reads the run a wt2
-  push started) `L227` (a change that deletes a test file or drops a smoke or probe case names
-  each in its message, `Removes-test: <what> — <reason>`) `L228` (a landing's check runs the test set the
-  climb's lander chose before it, from origin's code and state, and nothing else; its target is derived from
-  measured checks, never set by hand).
-  Legacy (retired with the switch): L144 L145 L157 L158 L159 L160 L161 L196.
+- **C10 · Fast, precise feedback.** Fast is first, strict is final (Dale, 2026-10-20). A
+  landing is a commit the climb's lander lands after its blocking check on this machine passes
+  on the exact head that lands: WasmTarget loads, so every construction checks itself; the
+  ratchet passes; the test files the lander chose before the check pass; TLC checks every model
+  the change touches. The check targets about a minute of wall, its band set by the lead from
+  measured checks (its band in dev/check.sh, the lander's rules in dev/climb/HILL.md), and a known red
+  is located to its landing and fixed first. The full CI matrix runs at clause closure and never
+  holds a landing, and once, blocking, on PR #128's merge head; a failure names its site.
+  Checks: `L153` (the full matrix runs every test family CI runs, at clause closure,
+  non-blocking; a landing pushes the march branch alone) `L162` (the full matrix, every lane of
+  `dev/lanes.sh` on CI's runners, gives its verdict within its 20-minute budget per lane job)
+  `L227` (a change that deletes a test file or drops a smoke or probe case names each in its
+  message, `Removes-test: <what> — <reason>`) `L228` (a landing's check runs the test set the
+  climb's lander chose before it, from origin's code and state, and nothing else; its target is
+  derived from measured checks, never set by hand).
   Planned: dev/MARCH.md 1.Q — each case's derived outcome recorded, and a landing never turns a
   passing case loud.
+- **C11 · The port is complete.** Done means 100% ported (Dale, 2026-10-28): every in-scope
+  definition of dart2wasm and wasm_builder at the pin ported with a body, and every supplementary
+  port dart has no counterpart for; a definition whose body only rejects is a stub and is never
+  counted ported (2026-10-29); every climbable case of the corpus (test/smoke_corpus.jl and
+  dart's ported tests) passes against native Julia, with 0 wrong and 0 errored, and every case
+  outside the strict subset is a located rejection naming its reason. Then, in order and never
+  before it: robust native-versus-wasm fuzzing, full drift re-audits, and only then anything
+  bespoke to Julia. The rebuild's src progress line, which L208 prints after every landing,
+  counts the port: ported with a body, stubs, guards and gaps apart. The work is the plan's rows
+  for the 100% port, then fuzzing, then the drift re-audits.
 - **C0 · The charter holds.** Strict means by construction (Dale, 2026-10-21): a clause of C0
   to C8 is CLOSED only when its guarantees hold by construction, WT's own interfaces unable to
   express the wrong choice (a type that cannot hold the wrong value; an interface with no
@@ -158,32 +185,33 @@ with the per-clause status. A clause is never closed by argument.
   builder refusing at the emitting line), each check naming the definition that is its
   construction, its assertion the check src registers beside that definition, the precedent it
   follows (another language's mechanism: Rust, dart, wasm, …) and how Julia's differs; a
-  construction with no precedent anywhere is an invention, which waits for Dale. A check that finds the wrong choice at gate time (a
-  scan of WT's source, an allowlist of exceptions, a ratchet at 0 or not, or a test that must
-  reach it) is a stopgap, which keeps its clause OPEN with the Planned construction that
-  retires it; the differential lanes stay the soundness gate and close no clause. Calling a check, a clause or a
-  batch strict or CLOSED on a stopgap is a red flag. Dale's requirements are the rows of
-  `dev/LEDGER.md`, each in his words with its why and the checks that enforce it; a requirement no
-  check enforces yet names the MARCH row of its planned check. Checks: `L125` (this file and the enforcement stack cite each
-  other completely) `L126` (no ratchet declares a floor) `L128` (AGENTS.md, the one
-  instructions file, stays current and lean) `L148` (every change is audited against this
-  charter beside the work, `dev/AUDIT.md`, its entries chained, the lag past 5 commits a printed
-  note, never a held landing) `L154` (Planned text cites MARCH
-  rows, never findings, every row naming its clauses; every finding the latest audit entry
-  leaves open sits on the row it names until a commit's `Fixes:` line names it) `L201` (no clause reads CLOSED citing no check; no clause of
-  C0 to C8 without Planned text cites a check test/parity_ratchet.jl's STRICT_KINDS does not
-  classify as a construction, with its
-  precedent, whose lock only calls the check src registers beside its definition; every lock C0 and
-  C4 to C8 cite is classified) `L202` (every closed sum or construction in src, an @enum, a `@closed` sum or a
-  definition a construction names, carries its `precedent(<ecosystem>: <mechanism>)`) `L203`
-  (each audit entry over src carries its `stopgap in disguise:` and `precedent:` lines) `L204`
-  (every ledger row cites a check, a clause, a test or its planned MARCH row, and every check serves
-  a row) `L205` (a number in a check states its intent and band, and the check fails only outside
-  the band) `L206` (AGENTS.md carries every live requirement, generated from the ledger) `L207`
-  (every lock's negative runs in every gate, inside the ratchet stage) `R45` (the locks that owe
-  theirs) `L208` (after every landing `dev/ship.sh` prints the rebuild's src progress; landings that change
-  nothing under src/ draw a note from the fifth in a row, never a failure) `L209` (a commit carries one
-  Co-Authored-By trailer, the hook and CI refusing a second).
+  construction with no precedent anywhere is an invention, which waits for Dale. A check that
+  finds the wrong choice at gate time (a scan of WT's source, an allowlist of exceptions, a
+  ratchet at 0 or not, or a test that must reach it) is a stopgap, which keeps its clause OPEN
+  with the Planned construction that retires it; the differential lanes stay the soundness gate
+  and close no clause. Calling a check, a clause or a batch strict or CLOSED on a stopgap is a
+  red flag. Dale's requirements are the rows of `dev/LEDGER.md`, each in his words with its why
+  and the checks that enforce it; a requirement no check enforces yet names the MARCH row of its
+  planned check. Checks: `L125` (this file and the enforcement stack cite each other completely)
+  `L126` (no ratchet declares a floor) `L128` (AGENTS.md, the one instructions file, stays
+  current and lean) `L148` (every change is audited against this charter beside the work,
+  `dev/AUDIT.md`, its entries chained, the lag past 5 commits a printed note, never a held
+  landing) `L154` (Planned text cites MARCH rows, never findings, every row naming its clauses;
+  every finding the latest audit entry leaves open sits on the row it names until a commit's
+  `Fixes:` line names it) `L201` (no clause reads CLOSED citing no check; no clause of C0 to C8
+  without Planned text cites a check test/parity_ratchet.jl's STRICT_KINDS does not classify as a
+  construction, with its precedent, whose lock only calls the check src registers beside its
+  definition; every lock C0 and C4 to C8 cite is classified) `L202` (every closed sum or
+  construction in src, an @enum, a `@closed` sum or a definition a construction names, carries
+  its `precedent(<ecosystem>: <mechanism>)`) `L203` (each audit entry over src carries its
+  `stopgap in disguise:` and `precedent:` lines) `L204` (every ledger row cites a check, a
+  clause, a test or its planned MARCH row, and every check serves a row) `L205` (a number in a
+  check states its intent and band, and the check fails only outside the band) `L206` (AGENTS.md
+  carries every live requirement, generated from the ledger) `L207` (every lock's negative runs
+  in every gate, inside the ratchet stage) `R45` (the locks that owe theirs) `L208` (after every
+  landing `dev/ship.sh` prints the rebuild's src progress; landings that change nothing under src/
+  draw a note from the fifth in a row, never a failure) `L209` (a commit
+  carries one Co-Authored-By trailer, the hook and CI refusing a second).
   Planned: dev/MARCH.md 1.R, 1.S — the ledger's planned checks; each of these checks a
   construction, or Dale's ruling that a prose clause is checked by behavior.
 
@@ -195,27 +223,15 @@ with the per-clause status. A clause is never closed by argument.
    legitimate leaves a ratchet by moving into an exact, per-site allowlist carrying its dart
    anchor or quarantine reason — a reviewable diff — never by relabeling the ratchet a
    "floor" or its sites "legitimate" (L126).
-3. **Every landing names what it closes.** Each commit after this charter carries a
-   `Charter: C<n> …` trailer; `dev/hooks/commit-msg` refuses a commit without one and CI
-   (`message-hygiene`) fails the PR.
+3. **Every landing names what it closes.** Each commit carries a `Charter: C<n> …` trailer;
+   `dev/hooks/commit-msg` refuses a commit without one and CI (`message-hygiene`) fails the PR.
 4. **Correct ≠ parity.** A green differential never closes a C2 gap; a dart-faithful shape
    never excuses a wrong value.
 5. **No parking.** A charter gap found during the work joins the plan; moving it out of
-   the rewrite ("next march", "post-march finding") needs Dale's explicit decision.
+   the rebuild needs Dale's explicit decision.
 6. **Evidence, not claims.** An agent's report counts only with the command and its output;
-   the orchestrator re-measures, and `bash dev/check.sh` on the exact head that lands is the
+   the orchestrator re-measures, and the landing check on the exact head that lands is the
    landing's evidence (C10).
 7. **Root causes only.** A fix is at the source the fault comes from; a workaround that
-   leaves the cause in place is not a fix and does not close anything.
-
-## Drift found on 2026-09-22 (the audit that produced this file)
-
-| Intent | What had happened | Now |
-|---|---|---|
-| dart 1:1 through and through | 1,099 of 1,134 top-level definitions carried no anchor; L110 checked only an anchor's syntax | C2, `R32` |
-| Targets reached, not settled | R3, R5, R14, R15, R17 relabeled "legitimate floors" in their own descriptions while the plan said 0 | rule 2, `L126` |
-| Fails fast and loud | 116 of 247 lowering-registry entries exercised by no fast-lane case (all 35 bespoke invoke lowerings among them); a broken lowering passed smoke and probes | C5, `R33`, the coverage lane |
-| Correct or loud | 52 catch clauses in `src` swallowed a failure into a default, unmeasured | C6, `R34` |
-| Every failure located | marked done while IR from `get_typed_ir` (outside the closed-world cache) carried no DebugInfo — every NIR line 0 | C6, `L127` |
-| Nothing dart doesn't do | a runtime type object for every numbered type, parked as "post-march" | rule 5, C2 |
-| The goal decides | a task list judged by its own exit checks | rule 1, this file |
+   leaves the cause in place is not a fix and does not close anything. A check that crashes or
+   misreads valid code is fixed in the check, never routed around.
