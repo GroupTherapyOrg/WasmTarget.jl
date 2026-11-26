@@ -978,6 +978,18 @@ end
         # literal's its value's, read with no body (a static field's initializer has none); a
         # statement's the type its caller passes
         node isa NirValue && (value_type = node isa NirConst ? nir_const_type(node) : dart_type_of(self, node))
+        # an invoke's value is its callee's own return type where that is concrete (julia/src/codegen.cpp
+        # emit_call_specfun_other's mark_julia_type(ctx, call, false, jlretty), which update_julia_type keeps
+        # where it is concrete), which the statement's inferred type may be wider than (an invoke the inliner
+        # union-split, `invoke _un_pass(%6::Int64)::Union{Nothing,Int64}`, or a callable struct's
+        # `invoke %1(%7::Int64)::Union{Nothing,Int64}`): one rule for every visitor of an invoke (a static
+        # call, an instance call), so a primitive value is boxed by its own class. A member the intrinsifier
+        # lowers at its call has no body of its own (nir_intrinsified, dart's external member), its value boxed
+        # by the statement's type
+        if node isa NirInvoke && result_type isa WasmBuilder.IR.NumType && !nir_intrinsified(nir_invoke_target(node))
+            local callee_returns = type_of_return_value(self.translator, nir_invoke_target(node))
+            callee_returns isa DataType && isconcretetype(callee_returns) && (value_type = callee_returns)
+        end
         convert_type(self.translator, self.b[], result_type, expected_type; boxed_class = value_type isa DataType ? value_type : nothing)
         return expected_type
     catch
@@ -1709,17 +1721,7 @@ end
     target.def isa Method && target.def.module === Runtime && target.def.name in (:_is_type_subtype, :_TypeUniverse_is_subtype, :_is_subtype, :_as_subtype, :_Type__check_instance) &&
         run_time_type_test!(self.translator, "$(julia_text(self.enclosing_member))")
     _visit_arguments(self, node, signature_for_direct_call(self.translator, target), param_info_for_direct_call(self.translator, target), 0)
-    local result = output_or_void(self.translator, call(self, target))
-    # Julia types an invoke's value by its callee's own return type (julia/src/codegen.cpp
-    # emit_call_specfun_other's mark_julia_type(ctx, call, false, jlretty), which update_julia_type keeps
-    # where it is concrete), which the statement's inferred type may be wider than (an invoke the inliner
-    # union-split, `invoke _un_pass(%6::Int64)::Union{Nothing,Int64}`): a primitive result is boxed by
-    # that class (convertType's boxed_class), never by the statement's Union
-    if result isa WasmBuilder.IR.NumType && expected_type isa WasmBuilder.IR.RefType
-        convert_type(self.translator, self.b[], result, expected_type; boxed_class = let rt = type_of_return_value(self.translator, target); rt isa DataType ? rt : nothing end)
-        return expected_type
-    end
-    return result
+    return output_or_void(self.translator, call(self, target))
 end
 
 # a call Julia left unresolved: a builtin or an intrinsic, Julia's own operations, which the
