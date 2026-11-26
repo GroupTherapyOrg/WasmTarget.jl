@@ -57,12 +57,13 @@ end
 @testset "translator.dart: translateStorageType's located rejections" begin
     local W = WasmTarget
     local t = D.Translator(WasmTarget.build_nir(W.check_subset(TranslatorCases.f_add, (Int, Int), "translator", Base.get_world_counter()), "test"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
-    # a UnionAll and a type as a value of a type Julia left open are no class: located rejections,
-    # before any wasm type is made
+    # an open instance of one parametric type is its instances' common superclass, here Any; an open
+    # Type{<:T} is no class: a located rejection, before any wasm type is made
     for ty in (Vector, AbstractVector{<:Integer})
-        local e = try; D.translate_storage_type(t, ty); nothing; catch x; x; end
-        @test e isa W.RejectionError && e.rejection isa W.Unquarantined
+        @test D.to_most_specific_interface_type(t, ty) === Any
     end
+    local e = try; D.translate_storage_type(t, Type{<:Integer}); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Unquarantined
     # a type as a value of a type Julia left open (`Type`, `Type{T}`) is the open Type{T} above every
     # kind, supertype(DataType): its class info comes from collect, missing here, a located rejection
     for ty in (Type, Base.unwrap_unionall(Type{T} where T))
@@ -298,6 +299,14 @@ end
     # superclass on Julia's supertype chain, Function (dart_generic/instantiate_tearoff)
     local mkc(::Type{X}) where {X} = (x::X) -> x
     @test D.to_most_specific_interface_type(t, Union{typeof(mkc(Any)),typeof(mkc(String))}) === Function
+    # an open instance of one parametric type, dart's generic C<T>: its instances' common superclass, the
+    # first type on Julia's supertype chain with no free type variable (dart_call/method_as_cast,
+    # dart_function/type); an open Type{<:T} has no class and rejects, located
+    @test D.to_most_specific_interface_type(t, Base.Fix1{typeof(+)}) === Function
+    @test D.to_most_specific_interface_type(t, Union{Nothing,Base.Fix1{typeof(+)}}) == Union{Nothing,Function}
+    @test D.to_most_specific_interface_type(t, Vector{<:Integer}) === Any
+    @test D.class_for_type(t, Base.Fix1{typeof(+)}) === Function
+    @test_throws W.RejectionError D.to_most_specific_interface_type(t, Type{<:Integer})
     @test D.class_for_type(t, Union{ModuleCases.Circle,ModuleCases.Square}) === ModuleCases.Shape && D.class_for_type(t, Type{Int64}) === DataType
     @test D.class_for_type(t, Nothing) === Any && D.class_for_type(t, Union{Int64,Nothing}) === Int64
     # Julia's wasm types are its wasm arrays; at the boundary a reference is translateExternalType's

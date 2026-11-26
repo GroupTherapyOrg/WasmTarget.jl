@@ -885,26 +885,34 @@ The most specific class type of a Julia type, nullable where the type admits `no
 Null and dynamic are its Object, as Julia's `Union{}`, `Nothing` and `Any` are `Any`; a `Union` of
 classes is Julia's `typejoin` of its members (dart has no union types), and where that join is no class
 (two instances of one parametric type, `F{Any}` and `F{String}`, join to the `UnionAll` `F`) their
-nearest common superclass by Julia's `supertype`, the chain the class walk numbers; a type as a value is its kind
+nearest common superclass by Julia's `supertype`, the chain the class walk numbers; so is an open instance
+of one parametric type (`F{A} where B`, dart's generic `C<T>`, whose class is `C`): its instances are each
+a class, and the first type on the chain with no free type variable holds them all; a type as a value is its kind
 (`typeof(X)`), and of a type Julia left open (`Type`, `Type{T}`) the open `Type{T}` every kind is
-under. Any other `UnionAll` rejects, located: Julia's inference left its class open. Julia's types
+under. Any other `UnionAll` (an open `Type{<:T}`) rejects, located: Julia's inference left its class open. Julia's types
 carry no free type variable here, so dart's walk to a type parameter's bound has nothing to walk.
 """
 @parity "dart2wasm/lib/translator.dart:940 Translator.toMostSpecificInterfaceType" function to_most_specific_interface_type(self::Translator, original_type::Type)::Type
     local at = "dart2wasm/lib/translator.dart:940 Translator.toMostSpecificInterfaceType"
     (original_type === Union{} || original_type === Nothing || original_type === Any) && return Any
     local cls = original_type isa Union ? Base.nonnothingtype(original_type) : original_type
+    # no class: the members' nearest common superclass on Julia's supertype chain, the first type on it
+    # with no free type variable that holds every member
+    local common_superclass(members::Vector{Any})::DataType = begin
+        local c = Base.unwrap_unionall(members[1])::DataType
+        while Base.has_free_typevars(c) || !all(m -> m <: c, members)
+            c = supertype(c)
+        end
+        c
+    end
     if cls isa Union
         local members = Base.uniontypes(cls)
         cls = typejoin(members...)
-        if cls isa UnionAll && all(m -> m isa DataType, members)
-            # no class: the nearest common superclass on Julia's supertype chain
-            local c = members[1]::DataType
-            while !all(m -> m <: c, members)
-                c = supertype(c)
-            end
-            cls = c
-        end
+        cls isa UnionAll && all(m -> m isa DataType, members) && (cls = common_superclass(members))
+    elseif cls isa UnionAll && !(cls <: Type) && Base.unwrap_unionall(cls) isa DataType
+        # dart's generic interface type C<T> is the class C; Julia's open instance F{A} where B is no class
+        # (its instances are each a class of their own), so it is its instances' common superclass
+        cls = common_superclass(Any[cls])
     end
     # a type as a value: its kind, or, of a type Julia left open, the open Type{T} above every kind
     (cls === Type || (cls isa DataType && Base.isType(cls) && cls.parameters[1] isa TypeVar)) && (cls = supertype(DataType))
