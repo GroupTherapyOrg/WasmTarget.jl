@@ -841,11 +841,7 @@ end
     local args = NirValue[nir_foreign_operands(node)...]
     length(args) == 2 ||
         reject!(Unquarantined("julia/src/julia.h:1903 jl_types_equal: called with $(length(args)) arguments, not two"), at)
-    # an operand's value where compile time knows it, a literal or a constant binding, else the type
-    # Julia inferred for it
-    local operands = Any[a isa NirConst ? Some(a.c.val) :
-                         a isa NirGlobal && nir_binding_is_constant(a.binding) ? Some(nir_binding_value(a.binding, at).c.val) :
-                         dart_type_of(self, a) for a in args]
+    local operands = generate_static_intrinsic(self, Val(:cache_operands), args, at)
     local cache = types_equal_cache(t, operands, at)
     cache === nothing || return generate_static_intrinsic(self, Val(:bool_cases), args, operands, cache, at)
     # no key splits the operands: the runtime's port (src/julia/runtime/jltypes.jl jl_types_equal, in the closed world
@@ -2493,6 +2489,13 @@ end
      f === Core.memoryrefnew && nargs in (2, 3)) &&
     !(RT isa DataType && RT <: GenericMemoryRef && isconcretetype(RT))
 
+# the operands of a statement split at compile time (the apply_type, applicable and jl_types_equal arms), each as
+# its cache keys it: its value where compile time knows it (nir_compile_time_operand), a key never emitted, else
+# the type Julia inferred for it
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:cache_operands}, args::Vector{NirValue}, at::String)::Vector{Any}
+    return Any[(c = nir_compile_time_operand(a, at); c === nothing ? dart_type_of(self, a) : c) for a in args]
+end
+
 # A type made at run time: Julia's apply_type with an operand only run time knows (Julia folds it where
 # its operands are known, so every call reaching here makes its type at run time; typeof, a read of a
 # value's tag, is the to_typeof arm's). WasmTarget holds each type as one constant, canonical by
@@ -2516,9 +2519,7 @@ end
     local t = translator(self)
     local b = code_gen.b[]
     local at = "$(julia_text(code_gen.enclosing_member)): Julia's $(nameof(f)) on $(join((dart_type_of(self, a) for a in args), ", "))"
-    # an operand's value where compile time knows it (nir_compile_time_operand), a key never emitted, else
-    # the type Julia inferred for it
-    local operands = Any[(c = nir_compile_time_operand(a, at); c === nothing ? dart_type_of(self, a) : c) for a in args]
+    local operands = generate_static_intrinsic(self, Val(:cache_operands), args, at)
     local cache = apply_type_cache(t, operands, at)
     local result = translate_type(t, Union{Any[Core.Typeof(r) for (_, r) in cache]...})
     local eq = WasmBuilder.IR.RefType_eq(; nullable = true)
@@ -2559,9 +2560,7 @@ end
     local code_gen = self.code_gen
     local t = translator(self)
     local at = "$(julia_text(code_gen.enclosing_member)): Julia's $(nameof(f)) on $(join((dart_type_of(self, a) for a in args), ", "))"
-    # an operand's value where compile time knows it (nir_compile_time_operand), a key never emitted, else
-    # the type Julia inferred for it
-    local operands = Any[(c = nir_compile_time_operand(a, at); c === nothing ? dart_type_of(self, a) : c) for a in args]
+    local operands = generate_static_intrinsic(self, Val(:cache_operands), args, at)
     local cache = applicable_cache(t, operands, at)
     return generate_static_intrinsic(self, Val(:bool_cases), args, operands, cache, at)
 end

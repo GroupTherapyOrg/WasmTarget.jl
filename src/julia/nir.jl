@@ -1198,8 +1198,8 @@ end
 
 An operand's value where compile time knows it, Julia's Const of it: a literal, or a constant binding's
 value at the program's world (nir_binding_value, abstract_eval_globalref's Const); `nothing` where only
-run time knows it. The one reading of such an operand: the apply_type and applicable arms key their
-caches by it and emit no such operand (src/intrinsics.jl), so the link-time check of the program's type
+run time knows it. The one reading of such an operand: the apply_type, applicable and jl_types_equal arms
+key their caches by it (src/intrinsics.jl Val(:cache_operands)) and emit no such operand, so the link-time check of the program's type
 values (check_run_time_type_values) passes over an apply_type operand it answers, one no run-time
 value holds.
 """
