@@ -38,6 +38,7 @@ include("julia/js_parser.jl")
 include("julia/runtime/rtutils.jl")
 include("julia/runtime/hashing.jl")
 include("julia/runtime/jltypes.jl")
+include("julia/runtime/iddict.jl")
 include("julia/packages.jl")
 include("julia/serializable.jl")
 

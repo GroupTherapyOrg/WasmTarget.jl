@@ -553,6 +553,7 @@ ports of what Julia forces are anchored at the C that defines it, as the stackif
     "julia/base/dict", "julia/base/reinterpretarray", "julia/src/staticdata",
     "julia/src/ast", "julia/src/flisp/julia_extensions", "julia/src/flisp/julia_opsuffs", "julia/src/support/utf8",
     "julia/src/julia-parser", "julia/src/support/strtod", "julia/src/jltypes", "julia/src/llvm-late-gc-lowering",
+    "julia/src/iddict", "julia/src/support/htable", "julia/base/iddict",
 )
 
 """
@@ -600,7 +601,7 @@ differs: `include` takes any path, so the overlays' file map is a table too, bes
 """
 @quarantine pin"julia/base/experimental.jl:421 consistent_overlay" "julia/base/experimental.jl:421 consistent_overlay defines a method in an overlay table, from any file; the overlay table's files are a table, each one include_patch loads" Core.String const PATCH_FILES::Tuple{Vararg{String}} = (
     "patch/string.jl", "patch/substring.jl", "patch/genericmemory.jl", "patch/hashing.jl", "patch/floatfuncs.jl", "patch/io.jl", "patch/ryu.jl", "patch/reinterpretarray.jl",
-    "patch/unicode.jl", "patch/runtime_internals.jl", "patch/strtod.jl", "patch/pointer.jl",
+    "patch/unicode.jl", "patch/runtime_internals.jl", "patch/strtod.jl", "patch/pointer.jl", "patch/iddict.jl",
 )
 
 # the patch files include_patch has loaded, in order
