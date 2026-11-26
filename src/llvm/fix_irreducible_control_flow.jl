@@ -267,32 +267,28 @@ end
 After a dispatch block is added, a use may be reached on a path without its definition (a PHI's
 IncomingReg, copied in the predecessors of one entry, read where the dispatch enters it from a routing
 block of another): an IMPLICIT_DEF at the start of the entry block for every register with a use, each
-inserted at the block's beginning as LLVM's BuildMI(Entry, Entry.begin(), ...) does. The registers,
-LLVM's virtual registers here: each statement's value some operand reads (nir_used_statements, the use
-list MachineRegisterInfo keeps), but an Upsilon's, which defines no register (Julia's codegen stores its
-value into its PhiC's slot, emit_upsilonnode); each PHI's IncomingReg, which the PHI reads; each label
-register, which its BR_TABLE reads. No register has an ARGUMENT definition, so LLVM's hasArgumentDef
-skips none and its move of the ARGUMENT instructions to the entry's top moves none: a Julia argument is
-no statement (NirArgument), its local a parameter of the function.
+inserted at the block's beginning as LLVM's BuildMI(Entry, Entry.begin(), ...) does, in register order.
+A register's uses are MachineRegisterInfo's use list, the uses of the instructions left in the
+function (reg_operands over the layout): UnreachableMachineBlockElim has removed a block no path
+reaches and, before PHIElimination, a dead predecessor's PHI operands, so a use there is none. Each
+statement's value some instruction reads, but a token: a try region's leave reads no register
+(Julia's codegen reads its EnterNode's statement, never its value, emit_stmtpos's :leave), nor does
+an exception pop, WasmTarget's exception stack being the CATCHes' locals, nor a preservation region's
+end (julia/src/llvm-late-gc-lowering.cpp:2010 LateLowerGCFrame::CleanupIR erases each gc_preserve_begin
+and gc_preserve_end); each PHI's IncomingReg, which the PHI reads; each label register, which its BR_TABLE reads.
+No register has an ARGUMENT definition, so LLVM's hasArgumentDef skips none and its move of the
+ARGUMENT instructions to the entry's top moves none: a Julia argument is no statement (NirArgument),
+its local a parameter of the function.
 
 formal(dev/formal/ImplicitDefs.tla): every use has a definition on every path of the rewritten CFG
 """
 @parity "llvm/lib/Target/WebAssembly/WebAssemblyFixIrreducibleControlFlow.cpp:521 addImplicitDefs" function add_implicit_defs(mf::MachineFunction)::Nothing
     local entry = mf.layout[1]
-    local regs = Tuple{Int,Int}[]
-    for k in nir_used_statements(mf.stmts)
-        mf.stmts[k] isa NirUpsilon || push!(regs, (REGISTER_VALUE, k))
-    end
+    local used = Set{Tuple{Int,Int}}()
     for mbb in mf.layout, mi in mf.blocks[mbb].instrs
-        mi.opcode == STMTS || continue
-        for k in (mi.operands[1]::MOImm).imm:(mi.operands[2]::MOImm).imm
-            mf.stmts[k] isa NirPhi && push!(regs, (REGISTER_INCOMING, k))
-        end
+        reg_operands((def, kind, id) -> (def || push!(used, (kind, id)); nothing), mf, mi)
     end
-    for r in 1:mf.label_registers
-        push!(regs, (REGISTER_LABEL, r))
-    end
-    for (kind, id) in regs
+    for (kind, id) in sort!(collect(used))
         pushfirst!(mf.blocks[entry].instrs, MachineInstr(IMPLICIT_DEF, MachineOperand[MOImm(kind), MOImm(id)], entry))
     end
     return nothing

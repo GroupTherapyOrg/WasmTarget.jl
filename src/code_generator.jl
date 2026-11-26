@@ -1216,27 +1216,28 @@ end
     # uninitialized again (a use Julia's dominance allows, a def in a try region read after it). Each
     # such value's local is defaultable, each read converted to the type it expects (translateExpression's convertType), Binaryen's
     # TypeUpdating::handleNonDefaultableLocals over its LocalStructuralDominance: the scopes open at
-    # each set, a read outside the set's innermost one not dominated
+    # each set, a read outside the set's innermost one not dominated. The sets and reads are each
+    # instruction's value registers, its defs and uses (reg_operands, the one list of them)
     local def_scope = Dict{Int,Int}()
     local escaping = Base.IdSet{Int}()
     let open = Int[0], next = 0
-        local read(v::Union{NirValue,Nothing}) = v isa NirSSA && haskey(def_scope, v.id) && !(def_scope[v.id] in open) && push!(escaping, v.id)
+        local operand(def::Bool, kind::Int, id::Int) = begin
+            kind == REGISTER_VALUE || return nothing
+            if def
+                def_scope[id] = open[end]
+            elseif haskey(def_scope, id) && !(def_scope[id] in open)
+                push!(escaping, id)
+            end
+            return nothing
+        end
         for mbb in mf.layout, mi in mf.blocks[mbb].instrs
             local op = mi.opcode
             if op == BLOCK || op == LOOP || op == TRY_TABLE
                 push!(open, next += 1)
             elseif op == END_BLOCK || op == END_LOOP || op == END_TRY_TABLE
                 pop!(open)
-            elseif op == STMTS
-                for k in imm(mi, 1):imm(mi, 2)
-                    local st = node.stmts[k]
-                    st isa NirPhi || st isa NirPhiC || foreach(read, nir_value_operands(st))
-                    def_scope[k] = open[end]
-                end
-            elseif op == COPY
-                read((node.stmts[imm(mi, 1)]::NirPhi).values[imm(mi, 2)])
-            elseif op == BR_IF || op == BR_UNLESS
-                read((node.stmts[imm(mi, 2)]::NirGotoIfNot).cond)
+            else
+                reg_operands(operand, mf, mi)
             end
         end
     end

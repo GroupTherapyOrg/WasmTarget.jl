@@ -1334,14 +1334,18 @@ end
 The operands of a NIR statement that are values of the program, dart's expressions: its operands
 (nir_operands) less those that name what the statement acts on or only annotate it, as Kernel names a
 node's target rather than evaluating it. A call's callee and an invoke's are its target (dart's
-Member); an allocation's type is its class (a ConstructorInvocation's target); a foreigncall's name,
+Member), but an invoke's callee a statement computes (a closure the body made, its receiver, which
+visitInstanceInvocation reads) is a value, as Julia's emit_invoke evaluates it as its first argument
+(julia/src/codegen.cpp:5282 emit_invoke); an allocation's type is its class (a ConstructorInvocation's target); a foreigncall's name,
 return type, argument types, required count and calling convention precede its arguments, and a
 cfunction's operands are all such (Julia's Expr(:foreigncall) and Expr(:cfunction) forms); a literal a
 builtin takes where it names a field, a module binding or a memory ordering (_builtin_name_operands)
 is that name, as an InstanceGet names its Field and a StaticSet its static Field, and a literal
 anywhere else is data (`x === :a`, `tuple(:k, x)`); an undefined
 variable check names the variable before its condition; and a loop hint, a bounds-check flag, a try
-region's leave and an exception pop hold no value.
+region's leave, an exception pop and a preservation region's end hold no value (the end's token is no
+value of the program: Julia's codegen reads it only as an LLVM token, which LateLowerGCFrame erases with
+the end, julia/src/llvm-late-gc-lowering.cpp:2010 LateLowerGCFrame::CleanupIR).
 """
 @quarantine pin"precedent(julia: Compiler/src/abstractinterpretation.jl:3736 abstract_eval_globalref)" "Julia's IR passes a call's target, a builtin's names and a statement's annotations as operands; dart's Kernel names them in the node" Core.Builtin function nir_value_operands(st::NirStmt)::Vector{NirValue}
     local ops = nir_operands(st)
@@ -1351,7 +1355,7 @@ region's leave and an exception pop hold no value.
             names = callee isa Core.Builtin ? _builtin_name_operands(callee) : ()
             NirValue[ops[i] for i in 2:length(ops) if !(i - 1 in names && ops[i] isa NirConst)]
         end
-        NirInvoke => ops[2:end]
+        NirInvoke => ops[1] isa NirSSA ? ops : ops[2:end]
         NirNew => ops[2:end]
         NirForeignCall => ops[6:end]
         NirCFunction => NirValue[]
@@ -1361,7 +1365,7 @@ region's leave and an exception pop hold no value.
         NirLeave => NirValue[]
         NirPopException => NirValue[]
         NirGCPreserveBegin => ops
-        NirGCPreserveEnd => ops
+        NirGCPreserveEnd => NirValue[]
         NirTheException => ops
         NirInvokeModify => ops
         NirGoto => ops

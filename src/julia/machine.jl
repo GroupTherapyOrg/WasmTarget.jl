@@ -315,6 +315,57 @@ MachineBasicBlock::terminators)."""
     return i === nothing ? MachineInstr[] : instrs[i:end]
 end
 
+"""
+    reg_operands(f, mf, mi) -> Nothing
+
+The registers `mi` reads and defines, in its operands' order, each passed to `f(def, kind, id)`: `def`
+false for a use and true for a definition, `kind` REGISTER_VALUE, REGISTER_INCOMING or REGISTER_LABEL
+and `id` the register's index in that kind, as LLVM's MachineInstr holds its register operands, each a
+use or a def, the operands MachineRegisterInfo's use and def lists index. STMTS is the block's Julia
+statements, each an instruction of its own, in order: a PHI reads its IncomingReg (PHIElimination's
+rewrite) and defines its value; a PhiC defines its value, from its register the Upsilons naming it
+write, which no kind indexes; an Upsilon reads its value and defines no register (Julia's codegen
+stores its value into its PhiC's slot, emit_upsilonnode); any other statement reads the statement
+values among its value operands (nir_value_operands, the values the code generator reads: a try
+region's leave, an exception pop and a preservation region's end read none) and defines its value.
+COPY reads the PHI's value on its edge and defines the PHI's IncomingReg; BR_IF and BR_UNLESS read their
+GotoIfNot's condition; BR_TABLE reads its label register, which CONST_I32 defines; IMPLICIT_DEF
+defines its register.
+"""
+@quarantine pin"precedent(llvm: llvm/lib/Target/WebAssembly/WebAssemblyFixIrreducibleControlFlow.cpp:521 addImplicitDefs)" "LLVM's MachineInstr holds its register operands, each a use or a def, which MachineRegisterInfo's use and def lists index by register, the lists addImplicitDefs reads (use_nodbg_empty); Julia differs: a statement names a value by SSAValue and the passes' instructions name a register by its kind and index, so the operands are read from each instruction as it is walked" Base.foreach function reg_operands(f::Function, mf::MachineFunction, mi::MachineInstr)::Nothing
+    local imm(k::Int) = (mi.operands[k]::MOImm).imm
+    local use_value(v::Union{NirValue,Nothing}) = (v isa NirSSA && f(false, REGISTER_VALUE, v.id); nothing)
+    local op = mi.opcode
+    if op == STMTS
+        for k in imm(1):imm(2)
+            local st = mf.stmts[k]
+            if st isa NirPhi
+                f(false, REGISTER_INCOMING, k)
+                f(true, REGISTER_VALUE, k)
+            elseif st isa NirPhiC
+                f(true, REGISTER_VALUE, k)
+            elseif st isa NirUpsilon
+                foreach(use_value, nir_value_operands(st))
+            else
+                foreach(use_value, nir_value_operands(st))
+                f(true, REGISTER_VALUE, k)
+            end
+        end
+    elseif op == COPY
+        use_value((mf.stmts[imm(1)]::NirPhi).values[imm(2)])
+        f(true, REGISTER_INCOMING, imm(1))
+    elseif op == BR_IF || op == BR_UNLESS
+        use_value((mf.stmts[imm(2)]::NirGotoIfNot).cond)
+    elseif op == BR_TABLE
+        f(false, REGISTER_LABEL, imm(1))
+    elseif op == CONST_I32
+        f(true, REGISTER_LABEL, imm(1))
+    elseif op == IMPLICIT_DEF
+        f(true, imm(1), imm(2))
+    end
+    return nothing
+end
+
 """    post_order(mf, entry) -> Vector{Int}
 
 The blocks reachable from `entry` in a depth-first postorder over successors (LLVM's po_iterator,
