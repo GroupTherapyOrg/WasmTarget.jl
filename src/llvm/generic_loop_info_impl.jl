@@ -88,6 +88,12 @@ end
 Builds the loop tree of `mf` from Julia's dominator tree: in reverse preorder of the tree (an inner
 loop discovered before its outer loop), each block with predecessors it dominates heads a loop of
 those back edges, discovered backward; then one forward walk fills the loops' vectors.
+
+A node's children are in the order of Julia's construct_domtree, not LLVM's, and a block's
+predecessors in Julia's CFG's; neither order changes the tree (test/src/llvm_loop_info_order.jl):
+any reverse preorder reaches every header a header dominates first, natural loops of distinct
+headers are nested or disjoint, so each loop's blocks and parent are its back edges' alone, and the
+order of each loop's blocks and subloops is the CFG postorder of PopulateLoopsDFS.
 """
 @parity "llvm/include/llvm/Support/GenericLoopInfoImpl.h:578 LoopInfoBase::analyze" function analyze(li::LoopInfoBase, mf::MachineFunction)::Nothing
     local domtree = mf.domtree
