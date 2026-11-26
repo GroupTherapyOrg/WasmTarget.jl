@@ -40,7 +40,6 @@ end
     ((), :jl_egal),
     ((), :jl_egal_host_references),
     ((), :jl_error),
-    ((), :jl_gc_add_finalizer_),
     ((), :jl_subtype_typeof),
     ((), :jl_to_typeof),
     ((), :jl_type_error),

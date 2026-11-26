@@ -272,17 +272,19 @@ end
     return node
 end
 
+# ---- end of Julia's runtime ----
+
 # Julia's registration of a finalizer, which the builtin Core.finalizer makes (julia/src/builtins.c:2078
 # jl_f_finalizer calls jl_gc_add_finalizer_ with the object and the function, ignoring the two operands
 # Julia's inlining pass may append): julia/src/gc-common.c:423 jl_gc_add_finalizer_ appends the object and
-# then the function to the thread's finalizer list (ptls_finalizers), arraylist_push's growth Base's push!
+# then the function to the thread's finalizer list (ptls_finalizers), arraylist_push's growth Base's push!. In a
+# closed world exactly where a statement of the program calls the builtin (src/julia/subset.jl reached_runtime_ports),
+# never a root of every program: its push! would enter every closed world
 @quarantine pin"julia/src/builtins.c:2078 jl_f_finalizer" "the builtin Core.finalizer registers an object's finalizer, julia/src/gc-common.c:423 jl_gc_add_finalizer_ appending the object and its finalizer to the thread's finalizer list" Base.push! @noinline function jl_gc_add_finalizer_(@nospecialize(v::Any), @nospecialize(f::Any))::Nothing
     push!(ptls_finalizers, v)
     push!(ptls_finalizers, f)
     return nothing
 end
-
-# ---- end of Julia's runtime ----
 
 # Julia's symbol table (julia/src/symbol.c:19 `static _Atomic(jl_sym_t*) symtab = NULL`): the root of the
 # binary tree of every symbol, ordered by hash and then by name (symtab_lookup), none before the first

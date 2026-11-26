@@ -149,13 +149,22 @@ end
 # for it (src/intrinsics.jl), and jl_egal_unionall, the egal of the UnionAlls it makes at run time, which the egal
 # arm calls (Julia's jl_egal's unionall arm, builtins.c:167 egal_types); `:jl_types_equal` (Base's == of two types,
 # base/operators.jl:295) the port jl_types_equal, which the types_equal arm calls where no key splits the operands;
-# `:jl_type_hash` (Base's hash of a type, base/hashing.jl:32) the port jl_type_hash. Each port as its function, queued as a
-# runtime root is (_runtime_roots), its one method's specialization
+# `:jl_type_hash` (Base's hash of a type, base/hashing.jl:32) the port jl_type_hash. A call of the builtin Core.finalizer,
+# which Julia's codegen emits as its runtime's jl_f_finalizer (julia/src/builtins.c:2078), reaches the port
+# src/julia/runtime/rtutils.jl jl_gc_add_finalizer_, which the code generator calls for it (src/intrinsics.jl, the
+# finalizer arm). Each port as its function, queued as a runtime root is (_runtime_roots), its one method's
+# specialization
 @quarantine pin"julia/src/ccall.cpp:1419 emit_ccall" "Julia's codegen calls its runtime's function for a foreign call of a libjulia symbol; a WasmTarget module holds the port where a statement reaches it, as dart compiles a runtime member its program reaches" Core.CodeInfo function reached_runtime_ports(codeinfos::Vector{Any})::Vector{Function}
     local out = Function[]
     for x in codeinfos
         x isa Core.CodeInfo || continue
         for st in x.code
+            if Meta.isexpr(st, :call)
+                local f = st.args[1]
+                (f === Core.finalizer || f isa GlobalRef && f.mod === Core && f.name === :finalizer) &&
+                    !(jl_gc_add_finalizer_ in out) && push!(out, jl_gc_add_finalizer_)
+                continue
+            end
             Meta.isexpr(st, :foreigncall) || continue
             local name = st.args[1]
             name isa QuoteNode && (name = name.value)
