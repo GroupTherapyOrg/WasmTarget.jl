@@ -2532,7 +2532,6 @@ end
 @parity "dart2wasm/lib/code_generator.dart:2434 AstCodeGenerator.visitInstanceSet" function visit_instance_set(self::AstCodeGenerator, f::ClassField, receiver::NirValue, value::NirValue, order::Symbol, preserved::Bool; inline::Bool = false)::WasmBuilder.IR.ValueType
     local where_ = "$(julia_text(self.enclosing_member))"
     local t = self.translator
-    local b = self.b[]
     local cls = f.cls
     local after = preserved ? translate_type(t, dart_type_of(self, value)) : void_marker(self)
     local julia_field = 1 <= f.index <= fieldcount(cls)
@@ -2545,6 +2544,8 @@ end
     local ft = f.type
     local type_checked() = begin
         own <: ft && return value
+        # the builder, read where the check emits: a write needing no check reaches _directSet first
+        local b = self.b[]
         local raiser = nir_runtime_member(t.component, jl_type_error, where_)
         local raiser_inputs = signature_for_direct_call(t, raiser).inputs
         local narrowed = typeintersect(own, ft)

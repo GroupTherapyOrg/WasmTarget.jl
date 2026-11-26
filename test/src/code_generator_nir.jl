@@ -172,6 +172,9 @@ end
 module SetGenCases
 mutable struct M; a::Int32; const c::Int32; end
 seta(m::M, v::Int32) = (m.a = v; nothing)
+# a write of the const field: Julia's codegen raises ErrorException (julia/src/codegen.cpp:3817), its message read back
+setc(v::Int32)::Int64 = (m = M(Int32(1), Int32(2)); try; setfield!(m, :c, v); 0; catch e
+    e isa ErrorException && e.msg === "setfield!: const field .c of type M cannot be changed" ? 1 : 2; end)
 end
 
 @testset "code_generator.dart: a field write" begin
@@ -182,9 +185,11 @@ end
     # setfield! routes to visitInstanceSet, which reaches the class table no collect filled here
     local e = rejection(() -> D.translate_expression(g, sf, D.void_marker(g)))
     @test e.rejection isa W.Internal && occursin("_directSet: no class info", e.rejection.site)
-    # a const field does not change in Julia: a located rejection before any lookup
-    local sc = W.NirCall(W.NirValue[sf.args[1], sf.args[2], W.NirConst(Core.Const(:c)), sf.args[4]])
-    @test rejection(() -> D.visit_instance_set(g, sc, D.void_marker(g))).rejection isa W.Unquarantined
+    # a const field does not change in Julia: its write raises Julia's ErrorException (setfield!'s codegen arm),
+    # compiled and run against native
+    local cb = W.compile(SetGenCases.setc, (Int32,); optimize = false)
+    @test cb[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d] && SetGenCases.setc(Int32(5)) == 1
+    queue_native!("setc", cb, SetGenCases.setc, [(Int32(5),), (Int32(-3),)])
 end
 
 @testset "symbols.dart: Symbols" begin
