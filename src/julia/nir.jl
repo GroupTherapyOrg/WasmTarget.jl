@@ -409,17 +409,25 @@ end
 
 # a foreigncall's name operand, read as Julia's codegen reads it (ccall.cpp:571 interpret_symbol_arg):
 # its value when static_eval knows it (_nir_static_eval), among them Julia 1.12's `(name, library)` a
-# call of Core.tuple whose library is a constant binding (base/gmp.jl's libgmp); Julia 1.13 writes a
-# constant name tuple as tuple syntax, Expr(:tuple, :memmove) for (:memmove,), read as that tuple. A
-# name static_eval does not know is computed at run time: a `(name, library)` call whose library
-# codegen loads when first called (lib_expr, jl_lazy_load_and_lookup), or a function pointer, each of
-# which rejects, located, with Julia's reading
+# call of Core.tuple whose library is a constant binding (base/gmp.jl's libgmp). Julia 1.13 writes the
+# name as tuple syntax, Expr(:tuple, QuoteNode(:memmove)) for (:memmove,) and Expr(:tuple, QuoteNode(:sin),
+# GlobalRef(M, :L)) for (:sin, L), and its codegen reads each element by the same static_eval (julia
+# v1.13.1 src/ccall.cpp:682 interpret_ccall_symbol_arg: one element the name, two the name and the
+# library), so the tuple's elements are read by _nir_static_eval, the one reading of a known value. A
+# name static_eval does not know is computed at run time: a `(name, library)` whose library codegen
+# loads when first called (lib_expr, jl_lazy_load_and_lookup), or a function pointer, each of which
+# rejects, located, with Julia's reading; a name tuple of another length names no function (1.13's
+# codegen reads none from it) and rejects, located
 @quarantine pin"precedent(julia: src/ccall.cpp:571 interpret_symbol_arg)" "Julia's codegen reads a foreigncall's name by static_eval, a tuple when known; a library computed at run time it loads lazily, and any other name is a pointer" Core.Expr function _nir_ccall_name(x, bindings::NirBindings, at::String)::NirValue
     if x isa Expr && x.head === :tuple
-        local vals = Any[a isa QuoteNode ? a.value : a for a in x.args]
-        any(v -> v isa Union{Expr, Core.SSAValue, Core.Argument, GlobalRef, Core.SlotNumber}, vals) &&
-            reject!(Unquarantined("src/julia/nir.jl: a foreigncall whose name is computed at run time"), at)
-        return NirConst(Core.Const(Tuple(vals)))
+        1 <= length(x.args) <= 2 ||
+            reject!(Unquarantined("src/julia/nir.jl: a foreigncall name tuple of $(length(x.args)) elements, from which Julia's codegen reads no name (julia v1.13.1 src/ccall.cpp:682 interpret_ccall_symbol_arg)"), at)
+        local vals = Any[_nir_static_eval(a, bindings) for a in x.args]
+        vals[1] === nothing &&
+            reject!(Unquarantined("src/julia/nir.jl: a foreigncall whose name is computed at run time, $(x.args[1])"), at)
+        length(vals) == 2 && vals[2] === nothing &&
+            reject!(Unquarantined("src/julia/nir.jl: the foreigncall $(something(vals[1])) of a library computed at run time, $(x.args[2]), which Julia's codegen loads when first called (julia v1.13.1 src/ccall.cpp:682 interpret_ccall_symbol_arg, f_lib_expr)"), at)
+        return NirConst(Core.Const(Tuple(something(v) for v in vals)))
     end
     # a literal or an SSA value is the operand it is (static_eval's answer for a literal; an SSA value's
     # pointer a call through it reads at run time)
