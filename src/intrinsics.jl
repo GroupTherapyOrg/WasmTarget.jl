@@ -1998,8 +1998,8 @@ end
 end
 
 # A gap WasmTarget defers to run time ends the program, never an exception a catch of the program observes: the
-# message to the host's console (the JS runtime's printToConsole, dart's debugRuntimePrint, code_generator.dart:3390;
-# a standalone module's embedder print, the runtime's jl_safe_printf, Julia's own fatal report) and then the trap (`unreachable`), which no try_table's catch or catch_all takes and after which no
+# message to the host's console (dart's debugRuntimePrint, code_generator.dart:3390, its callee the target's
+# printToConsole: the JS runtime's, or a standalone module's embedder print) and then the trap (`unreachable`), which no try_table's catch or catch_all takes and after which no
 # finally runs. The message is made ASCII, each other character its `\u{...}` escape, as the standalone
 # printToConsole reads its bytes as ASCII. precedent(rust: panic=abort on wasm32, the panic hook reporting through the
 # host and core::intrinsics::abort the `unreachable` instruction; julia: src/task.c:727 jl_no_exc_handler, a runtime
@@ -2011,14 +2011,7 @@ end
     # of the same definition names it, its run-time location in `at`
     local message = sprint(showerror, RejectionError(rejection, at))
     local text = join(isascii(c) ? string(c) : "\\u{" * string(UInt32(c); base = 16) * "}" for c in message)
-    if is_standalone(t)
-        # the embedder's console, as Julia's runtime prints a fatal (the runtime's jl_safe_printf)
-        local printer = nir_runtime_member(t.component, jl_safe_printf, "the fatal arm")
-        translate_expression(self.code_gen, NirConst(Core.Const(text)), signature_for_direct_call(t, printer).inputs[1])
-        call(self.code_gen, printer)
-    else
-        debug_runtime_print(self.code_gen, text)
-    end
+    debug_runtime_print(self.code_gen, text)
     WasmBuilder.unreachable(self.code_gen.b[])
     return nothing
 end

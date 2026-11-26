@@ -115,13 +115,6 @@ Natively Julia's `===`.
 @quarantine "julia/src/subtype.c:1348 subtype_tuple tests a tuple's fields by their types, each field's jl_typeof, so a type value in a field by its kind" Core.Bool @noinline jl_subtype_typeof(@nospecialize(o::Any), t::Type)::Bool =
     jl_typetagis(o, Type) ? Runtime._TypeUniverse_is_subtype(jl_to_typeof(Runtime.ClassID_get_id(o)), t) : Runtime._is_subtype(o, t)
 
-# Julia's runtime prints a fatal's report where no exception reaches a handler (julia/src/jl_uv.c:816
-# jl_safe_printf, as src/task.c:727 jl_no_exc_handler prints then exits): in a standalone module, the message to the
-# embedder's console, the embedder's string of its bytes (dart's EmbedderStringImpl.fromAsciiBytes) given to its
-# print. The code generator's fatal arm calls it before the trap (src/intrinsics.jl), its message ASCII
-@quarantine "julia/src/jl_uv.c:816 jl_safe_printf prints a runtime fatal's report; a standalone module's console is its embedder's print (sdk/lib/_internal/wasm/standalone/embedder.dart:437 print)" Base.print @noinline jl_safe_printf(msg::String)::Nothing =
-    print(Runtime.EmbedderStringImpl_from_ascii_bytes(msg, 0, ncodeunits(msg)))
-
 # jl_egal of two host references, a field of a class the egal arm compares (src/intrinsics.jl): wasm
 # reads no externref's bits, so the two are compared as dart compares two JS values, JSValue's ==, by
 # areEqualInJS, JS's === (Runtime.are_equal_in_js)

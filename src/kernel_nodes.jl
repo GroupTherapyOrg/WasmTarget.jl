@@ -153,12 +153,12 @@ end
 @parity "dart2wasm/lib/kernel_nodes.dart:753 KernelNodes.checkClosureType" check_closure_type(self::KernelNodes)::Union{} =
     reject!(Internal("dart2wasm/lib/kernel_nodes.dart:753 KernelNodes.checkClosureType: _checkClosureType (sdk/lib/_internal/wasm/common/type.dart:1855), a dynamic closure call's type check; dart calls it at translator.dart:3411 (a closure called with its arguments in arrays) and dynamic_dispatchers.dart:649, each a dynamic closure call, which Julia's trim verifier admits none of (D32)"), "KernelNodes.checkClosureType")
 
-# dart:_internal's printToConsole, as the target's patch defines it: the JS patch's
-# (src/runtime/js_common/print_patch.jl), its method in the closed world; the standalone patch's
-# (embedder.print) not ported: Unported there
+# dart:_internal's printToConsole, as the target's patch defines it: the standalone patch's
+# (src/runtime/standalone/print_patch.jl, embedder.print), its method in every closed world (check_subset queues it,
+# debugRuntimePrint's callee); the JS patch's (src/runtime/js_common/print_patch.jl), its method in the closed world
+# where the program reaches it
 @parity "dart2wasm/lib/kernel_nodes.dart:845 KernelNodes.printToConsole" function print_to_console(self::KernelNodes)::Core.MethodInstance
-    is_standalone(self) &&
-        reject!(Unported("sdk/lib/_internal/wasm/standalone/print_patch.dart:9 printToConsole"), "KernelNodes.printToConsole")
+    is_standalone(self) && return nir_runtime_member(self.component, Runtime.printToConsole, "KernelNodes.printToConsole")
     return nir_runtime_member(self.component, Runtime.print_to_console, "KernelNodes.printToConsole")
 end
 

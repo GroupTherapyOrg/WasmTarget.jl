@@ -360,7 +360,11 @@ formal(dev/formal/NirHandoff.tla): every reached ccallable's record queued and j
     # the runtime's roots, every one queued beside the entry (RUNTIME_ROOTS), before it, so Julia's
     # inference returns the program's bodies first and the closed world keeps program order (its classes
     # met from the entry's callable on)
-    local roots = _runtime_roots(world)
+    # and the standalone patch's printToConsole, dart's debugRuntimePrint's callee (code_generator.dart:3390,
+    # kernel_nodes.dart:845 KernelNodes.printToConsole), which the code generator's fatal arm calls: dart's translator
+    # compiles a member it calls during codegen (functions.dart getFunction), while WasmTarget's closed world is fixed
+    # before codegen, so the port is queued with the roots in every program, as Julia's runtime holds its printer
+    local roots = Any[_runtime_roots(world); something(_entry_specialization(only(methods(Runtime.printToConsole)).sig, world))]
     local codeinfos, notes, parents = _infer_verified(Any[roots; entry], world, at)
     # the ccallables the entry reaches, queued beside it as juliac queues each, so the verifier judges
     # each declared signature and return (CCallableMissing); the inference's cache answers the rest
