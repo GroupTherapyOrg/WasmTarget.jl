@@ -13,7 +13,19 @@ using Test
 
 module CorpusLoaderNegatives
 const LOADER = normpath(joinpath(@__DIR__, "..", "corpus_loader.jl"))
-const LIMIT = 60   # seconds; the run takes about 2 (1.12 and 1.13, on AC)
+# A child's limits. A unit whose code runs at load (a loop, a sleep) never returns, so the child is stopped, never
+# waited for. Its own CPU seconds are what such a unit spends, so CPU_LIMIT is the check: the kernel's RLIMIT_CPU
+# (POSIX setrlimit, `ulimit -S -t` in the shell that execs the child) signals the child (SIGXCPU) once it has computed for
+# that long, whatever runs beside it. Target: a child computes for 9-12 s (hpc3, an idle node, 2026-11-26:
+# src-78cf9d5a-1126-084359-327b, run_child 11.5 s, the digest pair 19.2 s, the load pair 17.3 s); band: up to CPU_LIMIT,
+# 60 s, five times that. WALL_LIMIT is only the backstop for a child that waits without computing (a unit blocked at
+# load): a child's wall seconds are its CPU seconds plus its waits for a core, which the load beside it sets, ~62-68 s
+# a child in the score's full runs on the Mac (the file's 309-339 s for five, src-26e0bcac, -97f735ad, -6f1ba528,
+# -89e7c460), where the old 60 s wall limit fired once (26e0bcac); band: up to WALL_LIMIT, 300 s, about 4.5 times
+# that, the cost a blocked child alone pays before the file is red.
+const CPU_LIMIT = 60
+const WALL_LIMIT = 300
+const SIGXCPU = 24   # signal.h on Linux and macOS
 
 # the child: the judge's stand-in names (Main's `_started`, `_judged`, `_g`, `_xf`, as test/smoke.jl defines them
 # before its world), the loader, judge!, a stand-in snapshot, then each unit alone in landing order; one line a unit
@@ -170,16 +182,24 @@ function run_child()
     write(child, CHILD)
     return _child(`$(Base.julia_cmd()) --startup-file=no $child $LOADER $paths`, dir)
 end
-# a child process, its output, under the hard limit
-function _child(cmd::Cmd, dir::AbstractString)
+# a child process, its output, under its limits: its CPU seconds by the kernel (CPU_LIMIT), its wall seconds as the
+# backstop (WALL_LIMIT); past either the child ends and the file is red, naming which
+function _child(cmd::Cmd, dir::AbstractString; cpu_limit::Int = CPU_LIMIT)
     local log = joinpath(dir, "child.out")
-    local proc = run(pipeline(Cmd(cmd; dir), stdout = log, stderr = log); wait = false)
-    # a hard limit, never a hang (a loader that runs a unit's loop at load would never return): LIMIT seconds against
-    # the ~2 s the run takes; past it the child is killed and the file is red, naming it
-    local done = timedwait(() -> process_exited(proc), LIMIT) === :ok
+    local limited = Cmd(Cmd(String["/bin/sh", "-c", "ulimit -S -t $(cpu_limit) && exec \"\$@\"", "sh", cmd.exec...]);
+                        env = cmd.env, dir = dir)
+    local proc = run(pipeline(limited, stdout = log, stderr = log); wait = false)
+    local done = timedwait(() -> process_exited(proc), WALL_LIMIT) === :ok
     done || (kill(proc); wait(proc))
     local out = read(log, String)
-    return done && success(proc), done ? out : out * "\nthe child passed its $(LIMIT) s limit and was killed (a unit ran at load)"
+    done || return false, out * "\nthe child passed its $(WALL_LIMIT) s wall limit and was killed (a unit blocked at load)"
+    # the soft limit's SIGXCPU, whose default action ends the process (Julia neither handles nor waits on it:
+    # julia/src/signals-unix.c:785 sigwait_sigs and its sigaction calls name no SIGXCPU). Only the soft limit is set
+    # (`ulimit -S -t`): Linux checks a CPU-time hard limit before the soft one and sends SIGKILL there, so with both equal
+    # (`ulimit -t`) a busy loop on hpc3 ended by another signal than SIGXCPU (src-62de92f1-1126-085723-5e0e)
+    proc.termsignal == SIGXCPU &&
+        return false, out * "\nthe child passed its $(cpu_limit) s CPU limit and was stopped (a unit ran at load)"
+    return success(proc), out
 end
 
 # ---- spec v13 R1: a unit's load is the same program in every process. Two children that differ in what a load could
@@ -288,6 +308,12 @@ function run_pair_children()
     local beside = _child(`$(Base.julia_cmd()) --startup-file=no $child $LOADER $(paths["ua"]) $(paths["ub"])`, mkpath(joinpath(dir, "beside")))
     return alone, beside
 end
+end
+
+@testset "a child's CPU limit: the kernel stops a child that computes past it, whatever runs beside it" begin
+    local dir = mktempdir()
+    local ok, out = CorpusLoaderNegatives._child(`$(Base.julia_cmd()) --startup-file=no -e "while true end"`, dir; cpu_limit = 1)
+    @test !ok && occursin("passed its 1 s CPU limit and was stopped", out)
 end
 
 @testset "the corpus loader's negatives, one fresh process" begin
