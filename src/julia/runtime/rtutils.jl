@@ -449,12 +449,17 @@ end
     emit_phi_incoming!(self, value, phi_type, reg, at)
 
 One incoming value of a phi written into its register, Julia's emit_function's phi edges
-(julia/src/codegen.cpp:9504-9511), visit_block's COPY (src/code_generator.jl): a value whose run-time type may not be the phi's ("must be careful to emit
-undef here (rather than a bitcast or load of val) if the runtime type of val isn't phiType") is stored only where
-emit_isa_and_defined holds (emit_guarded_test), the phi undef on this edge otherwise: no value of it is observed
-there. A type of none of the phi's values stores nothing, as an Upsilon with no value does (codegen.cpp:6060);
-one that may be either is stored under Julia's isa test (types.dart emitIsTest), the register keeping what it held
-where the test fails, never a checked cast that traps; a subtype's is translated to the register's type and stored.
+(julia/src/codegen.cpp:9504-9511), visit_block's COPY and an Upsilon's store into its PhiC (src/code_generator.jl;
+emit_upsilonnode's emit_varinfo_assign with allow_mismatch, where a mismatch does not trap): a value whose run-time
+type may not be the phi's ("must be careful to emit undef here (rather than a bitcast or load of val) if the runtime
+type of val isn't phiType") is stored only where emit_isa_and_defined holds (emit_guarded_test), the phi undef on
+this edge otherwise: no value of it is observed there, since inference may type the phi below the value on an edge
+where the phi is never read (`φ (#15 => %25)::Int64`, %25::Union{Nothing,Int64}). A type of none of the phi's values
+stores nothing, as an Upsilon with no value does (codegen.cpp:6060); one that may be either is held in a local and
+stored under Julia's isa test (types.dart emitIsTest), converted by the phi's own type (emit_unbox(ctx,
+VN->getType(), val, phiType): convertType's boxed_class the phi's class, so a register of a wasm value type unboxes
+it), the register keeping what it held where the test fails, never a checked cast or unbox that traps; a subtype's
+is translated to the register's type and stored.
 """
 @quarantine pin"julia/src/cgutils.cpp:2018 emit_isa_and_defined" "Julia's emit_function, its phi edges (julia/src/codegen.cpp:9490-9511), stores an incoming value whose run-time type may not be the phi's only where emit_isa_and_defined holds, the phi undef on that edge otherwise; WasmTarget's register keeps what it held there" Base.typeintersect function emit_phi_incoming!(self, value::NirValue, phi_type, reg, at::String)::Nothing
     local b = self.b[]
@@ -463,10 +468,13 @@ where the test fails, never a checked cast that traps; a subtype's is translated
         Dart2Wasm.translate_expression(self, value, reg.type)
         WasmBuilder.local_set(b, reg)
     elseif typeintersect(vt, phi_type) !== Union{}
-        Dart2Wasm.translate_expression(self, value, Nothing <: vt ? self.translator.top_type[] : self.translator.top_type_non_nullable[])
+        local held = Dart2Wasm.add_local(self, Nothing <: vt ? self.translator.top_type[] : self.translator.top_type_non_nullable[])
+        Dart2Wasm.translate_expression(self, value, held.type)
+        WasmBuilder.local_tee(b, held)
         Dart2Wasm.emit_is_test(self.translator.types[], self, phi_type, vt; location = at)
         WasmBuilder.if_(b)
-        Dart2Wasm.translate_expression(self, value, reg.type)
+        WasmBuilder.local_get(b, held)
+        Dart2Wasm.convert_type(self.translator, b, held.type, reg.type; boxed_class = phi_type isa DataType ? phi_type : nothing)
         WasmBuilder.local_set(b, reg)
         WasmBuilder.var"end"(b)
     end

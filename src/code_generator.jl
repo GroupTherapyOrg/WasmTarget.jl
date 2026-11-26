@@ -1273,8 +1273,7 @@ end
                     # of type Union{}, an undefined one, likewise (:6065)
                     local unobserved = st.val === nothing || nir_value_type(self.body, something(st.val)) === Union{}
                     for p in (unobserved ? Int[] : get(upsilon_phics, k, Int[]))
-                        translate_expression(self, something(st.val), incoming_reg(p).type)
-                        WasmBuilder.local_set(b, incoming_reg(p))
+                        emit_phi_incoming!(self, something(st.val), node.types[p], incoming_reg(p), at)
                     end
                 elseif st isa NirPhiC
                     # the PhiC's destination, a copy of its register, which its Upsilons wrote
@@ -1694,7 +1693,17 @@ end
     target.def isa Method && target.def.module === Runtime && target.def.name in (:_is_type_subtype, :_TypeUniverse_is_subtype, :_is_subtype, :_as_subtype, :_Type__check_instance) &&
         run_time_type_test!(self.translator, "$(julia_text(self.enclosing_member))")
     _visit_arguments(self, node, signature_for_direct_call(self.translator, target), param_info_for_direct_call(self.translator, target), 0)
-    return output_or_void(self.translator, call(self, target))
+    local result = output_or_void(self.translator, call(self, target))
+    # Julia types an invoke's value by its callee's own return type (julia/src/codegen.cpp
+    # emit_call_specfun_other's mark_julia_type(ctx, call, false, jlretty), which update_julia_type keeps
+    # where it is concrete), which the statement's inferred type may be wider than (an invoke the inliner
+    # union-split, `invoke _un_pass(%6::Int64)::Union{Nothing,Int64}`): a primitive result is boxed by
+    # that class (convertType's boxed_class), never by the statement's Union
+    if result isa WasmBuilder.IR.NumType && expected_type isa WasmBuilder.IR.RefType
+        convert_type(self.translator, self.b[], result, expected_type; boxed_class = let rt = type_of_return_value(self.translator, target); rt isa DataType ? rt : nothing end)
+        return expected_type
+    end
+    return result
 end
 
 # a call Julia left unresolved: a builtin or an intrinsic, Julia's own operations, which the
