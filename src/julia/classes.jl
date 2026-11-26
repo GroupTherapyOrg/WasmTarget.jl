@@ -1578,41 +1578,86 @@ end
     names
 end
 
+# jltypes.c's own macros over a type cache (julia/src/jltypes.c:26-27), each a function of the port
+@quarantine pin"julia/src/jltypes.c:26 max_probe" "the C's macro max_probe(size), a type cache's probe bound, is a function of the port" Base.:>> typecache_max_probe(size::Int)::Int =
+    size <= 1024 ? 16 : size >> 6
+@quarantine pin"julia/src/jltypes.c:27 h2index" "the C's macro h2index(hv, sz), a hash's home slot in a type cache of sz slots, is a function of the port" Base.:& typecache_h2index(hv::UInt64, sz::Int)::Int =
+    Int(hv & UInt64(sz - 1))
+
+"""
+    cache_insert_type_set!(tab, val, hv) -> Bool
+
+Julia's insert of the type `val`, its hash `hv`, into the hash table `tab` (julia/src/jltypes.c:1149
+cache_insert_type_set_, its non-atomic store): from the home slot (h2index), the first empty slot within max_probe
+steps, linear and wrapping, or false where none is.
+"""
+@quarantine pin"julia/src/jltypes.c:1149 cache_insert_type_set_" "a TypeName's hash cache is an open-addressed table of types, linear probing from each type's hash" Core.DataType function cache_insert_type_set!(tab::Vector{Any}, val::DataType, hv::UInt64)::Bool
+    local sz = length(tab)
+    sz <= 1 && return false
+    local iter = 0
+    local index = typecache_h2index(hv, sz)
+    local orig = index
+    local maxprobe = typecache_max_probe(sz)
+    while true
+        if tab[index + 1] === nothing
+            tab[index + 1] = val
+            return true
+        end
+        index = (index + 1) & (sz - 1)
+        iter += 1
+        (iter <= maxprobe && index != orig) || return false
+    end
+end
+
+"""
+    cache_rehash_set(a, newsz) -> Vector{Any}
+
+Julia's rehash of a type hash table (julia/src/jltypes.c:1203 cache_rehash_set): a table of `newsz` slots rounded up
+to a power of two (next_power_of_two, julia/src/support/dtypes.h:212), each type of `a` inserted in `a`'s slot order
+by its own hash (cache_insert_type_set!); a table one insert cannot fit doubles and starts over.
+"""
+@quarantine pin"julia/src/jltypes.c:1203 cache_rehash_set" "a TypeName's hash cache is rebuilt at a new size by inserting its types again, in slot order" Core.DataType function cache_rehash_set(a::Vector{Any}, newsz::Int)::Vector{Any}
+    newsz = newsz == 0 ? 0 : nextpow(2, newsz)
+    while true
+        local newa = Any[nothing for _ in 1:newsz]
+        local all_in = true
+        for val in a
+            val === nothing && continue
+            if !cache_insert_type_set!(newa, val::DataType, UInt64(val.hash))
+                all_in = false
+                break
+            end
+        end
+        all_in && return newa
+        newsz <<= 1
+    end
+end
+
 """
     typename_cache_pruned(held, tn, f) -> Core.SimpleVector
 
 A TypeName constant `tn`'s type cache, its field `f` (`TYPENAME_CACHES`), as Julia's image writer leaves it: an
-entry the program does not otherwise reach is `nothing` (julia/src/staticdata.c:3311-3316). The program's reach is
+entry the program does not otherwise reach is dropped (julia/src/staticdata.c:3311-3316). The program's reach is
 `held`, its type values (`type_value_entries`, the typeof table's, the one list of the type values a program holds), as
-Julia's is the serialization order. The hash table keeps its slots, each unreached entry `nothing`
-(jl_prune_type_cache_hash, :2544); the list keeps its reached entries in order, then `nothing`
-(jl_prune_type_cache_linear, :2572). So the constant holds no type the session made and the program never names: its
-module is the same whatever the compiling process made before it.
-
-How it differs from Julia: jl_prune_type_cache_hash then rehashes the table to the kept count (cache_rehash_set); this
-keeps the slots, so a read of `cache` would see another table than Julia's image: such a read rejects, located
-(`typename_cache_unread`).
+Julia's is the serialization order. The hash table is jl_prune_type_cache_hash's (:2544): each unreached entry
+`nothing`, then the table rehashed to the kept count, at least HT_N_INLINE (cache_rehash_set), so its length and each
+type's slot follow from the kept types alone. The list is jl_prune_type_cache_linear's (:2572): its reached entries
+in order, then `nothing`. So the constant holds no type the session made and the program never names, and its module
+is the same whatever the compiling process made before it.
 """
 @quarantine pin"julia/src/staticdata.c:2544 jl_prune_type_cache_hash" "a TypeName's type caches are pruned to the types the image reaches otherwise (julia/src/staticdata.c:2572 jl_prune_type_cache_linear), so a constant holds no type the session made and the program never names" Core.TypeName function typename_cache_pruned(held::Base.IdSet{DataType}, tn::Core.TypeName, f::Symbol)::Core.SimpleVector
     f in TYPENAME_CACHES || reject!(Internal("src/julia/classes.jl typename_cache_pruned: $f, no type cache of a TypeName"), "typename_cache_pruned")
     local cache = getfield(tn, f)::Core.SimpleVector
     local reached(@nospecialize(e))::Bool = e isa DataType && e in held
-    f === :cache && return Core.svec(Any[reached(e) ? e : nothing for e in cache]...)
+    if f === :cache
+        length(cache) == 0 && return cache
+        local pruned = Any[reached(e) ? e : nothing for e in cache]
+        local sz = count(e -> e !== nothing, pruned)
+        sz < HT_N_INLINE && (sz = HT_N_INLINE)
+        return Core.svec(cache_rehash_set(pruned, sz)...)
+    end
     local kept = Any[e for e in cache if reached(e)]
     return Core.svec(kept..., ntuple(_ -> nothing, length(cache) - length(kept))...)
-end
-
-"""
-    typename_cache_unread(field) -> Union{Rejection,Nothing}
-
-Why a program's read of the field `field` gives no value of Julia's image, or `nothing`: a TypeName's `cache`, its hash
-table of types, which a constant holds pruned in place (`typename_cache_pruned`) where Julia's image rehashes it to the
-kept count (julia/src/staticdata.c:2544 jl_prune_type_cache_hash, cache_rehash_set): Unquarantined, located at the read.
-(`linearcache` is refused at its read already, declared_type_unheld.)
-"""
-@quarantine pin"julia/src/staticdata.c:2544 jl_prune_type_cache_hash" "a TypeName's pruned hash cache is rehashed by Julia's image writer (cache_rehash_set), which WasmTarget's constant does not do, so a read of it is refused, located" Core.TypeName function typename_cache_unread(field::ClassField)::Union{Rejection,Nothing}
-    field.cls === Core.TypeName && field.name == "cache" || return nothing
-    return Unquarantined("src/julia/classes.jl typename_cache_pruned: a read of a TypeName's cache, its type hash table, which Julia's image rehashes when it prunes it (julia/src/staticdata.c:2544 jl_prune_type_cache_hash) and WasmTarget's constant does not")
 end
 
 """
@@ -1809,14 +1854,6 @@ reads it where dart reads TFA's selector ids. A receiver of a concrete type is a
             local fs = class_instance_fields(c, "src/julia/classes.jl field_selector_calls")
             local k = findfirst(x -> x.name == name, fs)
             local unread = k === nothing ? nothing : memoryref_address_unread(fs[k])
-            unread === nothing || reject!(unread, "$(b.ci.def) statement $index")
-        end
-        # a getter of a TypeName's pruned hash cache rejects at this site, as _directGet's read does (typename_cache_unread)
-        is_setter || for c in admitted
-            c === Core.TypeName || continue
-            local fs = class_instance_fields(c, "src/julia/classes.jl field_selector_calls")
-            local k = findfirst(x -> x.name == name, fs)
-            local unread = k === nothing ? nothing : typename_cache_unread(fs[k])
             unread === nothing || reject!(unread, "$(b.ci.def) statement $index")
         end
         # a field whose type Julia's inference reads as another than the one it holds rejects at a getter's or a

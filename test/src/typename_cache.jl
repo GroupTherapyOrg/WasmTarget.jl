@@ -38,17 +38,47 @@ end
 @testset "typename_cache_pruned: an entry the program does not otherwise reach is nothing, and every one it reaches is kept" begin
     local tn = Base.unwrap_unionall(Base.RefValue).name
     local held = Base.IdSet{DataType}([Base.RefValue{Int64}, Int64])
-    # the hash table keeps its slots, each unreached entry nothing (jl_prune_type_cache_hash)
+    # the hash table: each unreached entry dropped, the kept ones rehashed to their count, at least HT_N_INLINE
+    # (jl_prune_type_cache_hash, cache_rehash_set): a power of two, each kept type within max_probe of its home slot
     local c = W.typename_cache_pruned(held, tn, :cache)
-    @test length(c) == length(tn.cache)
-    @test all(i -> c[i] === (tn.cache[i] in held ? tn.cache[i] : nothing), eachindex(c))
-    @test any(e -> e === Base.RefValue{Int64}, c) && all(e -> e === nothing || e in held, c)
+    local kept_types = Set(e for e in tn.cache if e isa DataType && e in held)
+    @test Set(e for e in c if e !== nothing) == kept_types && Base.RefValue{Int64} in kept_types
+    @test ispow2(length(c)) && length(c) >= W.HT_N_INLINE
+    @test all(eachindex(c)) do i
+        local e = c[i]
+        e === nothing && return true
+        local home = W.typecache_h2index(UInt64(e.hash), length(c))
+        mod(i - 1 - home, length(c)) <= W.typecache_max_probe(length(c))
+    end
     # the list keeps its reached entries in order, then nothing (jl_prune_type_cache_linear)
     local l = W.typename_cache_pruned(held, tn, :linearcache)
     local kept = [e for e in getfield(tn, :linearcache) if e isa DataType && e in held]
     @test length(l) == length(getfield(tn, :linearcache)) && collect(l)[1:length(kept)] == kept && all(x -> x === nothing, collect(l)[length(kept)+1:end])
     # a field that is no type cache is refused
     @test try; W.typename_cache_pruned(held, tn, :names); false; catch e; e isa W.RejectionError; end
+end
+
+# A session that grows a TypeName's hash table between two compiles: 200 RefValue types take RefValue's cache past its
+# capacity, so Julia rehashes it to a larger table (cache_insert_type_set's growth). The constant is the kept types
+# rehashed to their own count (cache_rehash_set), so its length and slots, and the module, do not move (audit A126E2)
+module TNGrow
+named(x::Int64) = Int64((x > 0 ? Int64 : Base.RefValue{Int64}).name.name === :Int64)
+end
+
+@testset "a TypeName's hash cache, grown by the session between two compiles, is the same constant: the module is its program's" begin
+    local tn = Base.unwrap_unionall(Base.RefValue).name
+    local held = Base.IdSet{DataType}([Base.RefValue{Int64}, Int64])
+    local c1 = W.typename_cache_pruned(held, tn, :cache)
+    local m1 = W.compile(TNGrow.named, (Int64,))
+    local before = length(tn.cache)
+    for i in 1:200
+        Base.RefValue{Val{(:a126e2, i)}}
+    end
+    @test length(tn.cache) > before
+    local c2 = W.typename_cache_pruned(held, tn, :cache)
+    @test length(c1) == length(c2) && all(i -> c1[i] === c2[i], eachindex(c1))
+    local m2 = W.compile(TNGrow.named, (Int64,))
+    @test m1 == m2
 end
 
 end # module
