@@ -1353,7 +1353,11 @@ flight finish and a ship.sh at its push or after it completes (`core.power_stops
 status line). With `battery_runs` false the climb runs on AC alone, as before, the floor holding a weak adapter's
 discharge there too. One reading of the power source, Low Power Mode, the battery's charge and, on AC with a battery,
 the adapter's watts (`pmset -g adapter`) and the direction of charge (ioreg's AppleSmartBattery `Amperage`, negative
-while discharging) (`core.power_read`, at most once a second, a missing word a ClimbError; `core.power_ok` the rule
+while discharging) (`core.power_read`, at most once a second; a reading not given whole, `PowerUnread`, is read again
+`power_read_tries` times `power_read_gap_s` apart (the instant of an unplug names AC beside an adapter with no
+wattage, 2026-11-15 19:19:34Z, where it ended a slot's move as a driver error) and, still unread, is the power
+rule's wait, one `power-unread` event and one alarm, never a guess and never a move's or a landing's failure;
+`core.power_ok` the rule
 over it) is taken at every tick where the disk is asked and by each loop before it starts work, and the status line
 (`core.power_line`) says which it reads: work runs, or held at the floor until the margin or a full adapter. A change
 of (source, Low Power Mode, whether the floor holds) counts only once the new reading has held `power_settle_s` (O9-2: the adapter flapped 117 times in six minutes on 2026-11-08): the reading that
@@ -1451,14 +1455,14 @@ The driver's numbers, generated from dev/climb/defaults.py, where each states it
 `queue_cap` 4 (locked), `task_wall_s` 5400, `audit_every` 5 (locked), `score_every_landings` 3, `score_every_s` 7200,
 `retry_backoff_s` 1800, `backoff_cap_s` 28800, `driver_fault_backoff_s` 300, `stop_tries` 3, `alarm_s` 21600,
 `power_settle_s` 60, `battery_runs` true, `battery_floor_pct` 20, `battery_resume_margin_pct` 10,
-`adapter_full_watts` 60, `oracle_audit_k` 8, `oracle_background` false, `measure_background` false,
-`score_background` false, `src_near_band` 0.85, `src_cost_jump` 4, `lock_wait_s` 3600, `score_loss_band` 0.02,
-`judge_n` 10, `judge_lines` 150, `judge_recall` 0.8, `judge_approval` 0.5, `judge_per_tick` 4, `wall_factor` 3,
-`case_min_s` 900, `case_factor` 20, `watch_s` 5, `compare_module_s` 10, `kaimon_port` 2840, `kaimon_http_s` 120,
-`kaimon_start_s` 900, `session_warm_s` 1800, `p_idle` 85, `e_idle` 60, `probe_s` 15, `swapins_max` 2000,
-`decompressions_max` 400000, `near_band` 0.85, `near_band_step` 5, `d14_backoff_s` 1200, `d14_share` [10, 0.6],
-`other_tries` 3, `d14_tries` 3, `gap_admit_max_s` 259200, `l228_sweep_wall_s` 900, `ship_kill_s` 3600,
-`watch_stale_s` 600, `disk_free_gb` 20, `file_cap_bytes` 4294967296, `cases_cap_bytes` 268435456,
+`adapter_full_watts` 60, `power_read_tries` 3, `power_read_gap_s` 1, `oracle_audit_k` 8, `oracle_background` false,
+`measure_background` false, `score_background` false, `src_near_band` 0.85, `src_cost_jump` 4, `lock_wait_s` 3600,
+`score_loss_band` 0.02, `judge_n` 10, `judge_lines` 150, `judge_recall` 0.8, `judge_approval` 0.5, `judge_per_tick` 4,
+`wall_factor` 3, `case_min_s` 900, `case_factor` 20, `watch_s` 5, `compare_module_s` 10, `kaimon_port` 2840,
+`kaimon_http_s` 120, `kaimon_start_s` 900, `session_warm_s` 1800, `p_idle` 85, `e_idle` 60, `probe_s` 15,
+`swapins_max` 2000, `decompressions_max` 400000, `near_band` 0.85, `near_band_step` 5, `d14_backoff_s` 1200,
+`d14_share` [10, 0.6], `other_tries` 3, `d14_tries` 3, `gap_admit_max_s` 259200, `l228_sweep_wall_s` 900,
+`ship_kill_s` 3600, `watch_stale_s` 600, `disk_free_gb` 20, `file_cap_bytes` 4294967296, `cases_cap_bytes` 268435456,
 `answer_cap_bytes` 16777216, `fetch_tries` [5, 3, 4], `tail_chunk` 6, `base_keep_s` 172800, `fixfirst_lines` 3,
 `fixfirst_max_landings` 6, `src_unverified_max` 6, `src_shape_checks_min` 2,
 `src_prior_g` {"src": 11.0, "outside": 10.7}, `src_prior_start_g` 375, `src_prior_load_s` {"src": 17, "outside": 0},

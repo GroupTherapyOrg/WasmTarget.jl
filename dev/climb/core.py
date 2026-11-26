@@ -18,6 +18,12 @@ REVIEW_TOOLS = ["Bash", "Read", "Grep", "Glob"]   # a reviewer's, an auditor's a
 class ClimbError(Exception):
     """A failed step of the driver: an event, never a dead process (SystemExit is not an Exception)."""
 
+class PowerUnread(ClimbError):
+    """A power reading pmset or ioreg did not give whole (core.power_read): no source named, a battery source with no
+    charge, an AC source with a battery and no adapter's wattage or no current. Read again by power_ok, power_read_tries
+    times power_read_gap_s apart (the instant of an unplug reads AC beside no adapter: 2026-11-15 19:19:34Z), and, still
+    unread, the power rule's wait, never a guess (D9) and never a move's or a landing's failure."""
+
 class PowerCut(Exception):
     """A measurement or a landing check ended, or could not start, because the power rule stops work (power_works):
     never a failure, a verdict or a learned time (O8-3). Not a ClimbError, so no handler of the driver's failures books
@@ -927,25 +933,39 @@ def power_read():
     are None (power_held reads no adapter there), and a Mac with no battery reads on AC with no charge and neither."""
     b, g = sh(["pmset", "-g", "batt"]).stdout, sh(["pmset", "-g"]).stdout
     if "'AC Power'" not in b and "'Battery Power'" not in b:
-        raise ClimbError(f"pmset names no power source: {b.strip()[:120]!r}")
+        raise PowerUnread(f"pmset names no power source: {b.strip()[:120]!r}")
     m = re.search(r"^\s*lowpowermode\s+(\d+)", g, re.M)
     pct = re.search(r"\t(\d+)%;", b)
     if "'Battery Power'" in b and not pct:
-        raise ClimbError(f"pmset names the battery as the source and no charge: {b.strip()[:160]!r}")
+        raise PowerUnread(f"pmset names the battery as the source and no charge: {b.strip()[:160]!r}")
     ac, watts, ma = "'AC Power'" in b, None, None
     if ac and pct:
         a, i = sh(["pmset", "-g", "adapter"]).stdout, sh(["ioreg", "-rn", "AppleSmartBattery"]).stdout
         w = re.search(r"^\s*Wattage\s*=\s*(\d+)\s*W\s*$", a, re.M)
         c = re.search(r'^[\s|]*"Amperage"\s*=\s*(-?\d+)\s*$', i, re.M)
         if not w:
-            raise ClimbError(f"pmset names AC with a battery and no adapter's wattage: {a.strip()[:160]!r}")
+            raise PowerUnread(f"pmset names AC with a battery and no adapter's wattage: {a.strip()[:160]!r}")
         if not c:
-            raise ClimbError(f"ioreg names no battery current (AppleSmartBattery's Amperage) on AC: {i.strip()[:160]!r}")
+            raise PowerUnread(f"ioreg names no battery current (AppleSmartBattery's Amperage) on AC: {i.strip()[:160]!r}")
         watts, ma = int(w.group(1)), int(c.group(1))
         ma = ma - 2 ** 64 if ma >= 2 ** 63 else ma   # ioreg prints a negative current as its unsigned 64-bit word
     return ac, bool(m and m.group(1) != "0"), int(pct.group(1)) if pct else None, watts, ma
 
 POWER = [power_read, 0.0, None]   # the reader (a probe stubs it), when last read, what it read
+POWER_UNREAD = [None]   # why the last reading stayed unread (power_reread), or None: power_ok's wait
+
+def power_reread():
+    """THE power reading power_ok takes: POWER's reader, read again power_read_tries times power_read_gap_s apart while it
+    is unread (PowerUnread: pmset names AC with a battery beside no adapter in the instant of an unplug, and reads
+    plainly a second later), the first whole reading returned; still unread, the last PowerUnread raised."""
+    for n in range(cfg()["power_read_tries"]):
+        try:
+            return POWER[0]()
+        except PowerUnread as e:
+            last = e
+            if n + 1 < cfg()["power_read_tries"]:
+                time.sleep(cfg()["power_read_gap_s"])
+    raise last
 
 def power_held(ac, pct, watts, ma, held):
     """Whether the floor holds work (P, 2026-11-14: a 30 W adapter discharged the battery 81% to 5% while the source read
@@ -1039,9 +1059,10 @@ def _power_note(ac, low, above, pct, watts=None, ma=None):
         "so an emptying battery is never held awake.")
 
 def power_low():
-    """Whether Low Power Mode is on now: the one reading power_ok() keeps (POWER), for lander.quiet (throughput P0)."""
+    """Whether Low Power Mode is on now: the one reading power_ok() keeps (POWER), for lander.quiet (throughput P0); an
+    unread reading is read as on (a check's time unjudged, never judged quiet on a reading no one took)."""
     power_ok()
-    return bool(POWER[2][1])
+    return POWER_UNREAD[0] is not None or POWER[2] is None or bool(POWER[2][1])
 
 def judged_check(e):
     """A `ship` event's check is evidence of D14's cost (throughput P0): not ended by the power rule (probe.battery) and
@@ -1063,8 +1084,23 @@ def power_ok():
     whether work runs) and, at most once per direction per alarm_s, one note for Dale (_power_note). When it is
     false no move, measurement, score or landing check starts (ac_wait), and one in flight ends, never a failure
     (on_ac); a change that leaves it true (AC to battery with Low Power Mode off above the floor) ends nothing."""
-    if time.time() - POWER[1] >= 1 or POWER[2] is None:
-        POWER[2], POWER[1] = POWER[0](), time.time()
+    if time.time() - POWER[1] >= 1 or POWER[2] is None and POWER_UNREAD[0] is None:
+        try:
+            POWER[2], POWER[1] = power_reread(), time.time()
+        except PowerUnread as e:   # still unread after power_read_tries: the power rule waits, never a failure
+            POWER[1] = time.time()
+            if POWER_UNREAD[0] is None:
+                event("power-unread", why=str(e)[:300])
+                alarm("power-unread", "the power reading does not read", f"{e}, read {cfg()['power_read_tries']} times "
+                      f"{cfg()['power_read_gap_s']} s apart. Default taken: no move, measurement, score or landing check "
+                      "starts and one in flight ends, redone when the reading reads again (the power rule's wait).")
+            POWER_UNREAD[0] = str(e)
+        else:
+            if POWER_UNREAD[0] is not None:
+                event("power-read", after=POWER_UNREAD[0][:120])
+            POWER_UNREAD[0] = None
+    if POWER_UNREAD[0] is not None:
+        return False   # the power rule waits while the reading stays unread
     ac, low, pct, watts, ma = POWER[2]
     rec = state_json("power.json", {})
     # the floor's hold from the settled reading's (power_held: held until the margin or a full adapter)

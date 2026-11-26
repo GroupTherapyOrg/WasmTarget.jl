@@ -3462,6 +3462,16 @@ const BOUNDED_BREAKS = (
      "    return item[\"kind\"] == \"hand\" and bool(item.get(\"fixfirst\"))", 48),
     ("the stall note of a parked overdue red without its command first", "dev/climb/climb.py",
      "f\"Do: `python3 dev/climb/climb.py enqueue <the fix's sha> --fixes {shlex.quote(h['key'])}` (the lander \"", "f\"(the lander \"", 48),
+    # a torn power reading read again; one that stays unread the power rule's wait (2026-11-15 19:19:34Z)
+    ("a torn power reading not read again", "dev/climb/core.py", "    for n in range(cfg()[\"power_read_tries\"]):", "    for n in range(1):", 49),
+    ("an unread power reading raised to its caller", "dev/climb/core.py",
+     "        except PowerUnread as e:   # still unread after power_read_tries", "        except ZeroDivisionError as e:   # still unread after power_read_tries", 49),
+    ("an unread power reading read as work runs", "dev/climb/core.py",
+     "        return False   # the power rule waits while the reading stays unread", "        return True   # the power rule waits while the reading stays unread", 49),
+    ("AC beside no wattage a plain ClimbError", "dev/climb/core.py",
+     "            raise PowerUnread(f\"pmset names AC with a battery and no adapter's wattage", "            raise ClimbError(f\"pmset names AC with a battery and no adapter's wattage", 49),
+    ("Low Power Mode read as off on an unread reading", "dev/climb/core.py",
+     "    return POWER_UNREAD[0] is not None or POWER[2] is None or bool(POWER[2][1])", "    return bool(POWER[2] and POWER[2][1])", 49),
     # a measurement's own directory is its holder's (L1)
     ("measurements of one base sharing one directory (L1)", "dev/climb/measure.py",
      "    w = tempfile.mkdtemp(prefix=f\"{role}-{task}@{os.getpid()}-{door.BOOT}-\", dir=root)",

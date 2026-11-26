@@ -113,6 +113,14 @@ DEFAULTS = {
     # 30 W USB-C adapter took the battery from 81% to 5% under the climb (the lead's reading); the lead's line is 60 W.
     # Band 31-140: over the 30 W adapter that discharged, at most the largest adapter Apple sells for a MacBook
     "adapter_full_watts": 60,
+    # a power reading pmset or ioreg does not give whole (core.PowerUnread) is read again this many times, power_read_gap_s
+    # apart, before it is the power rule's wait. Derivation: 2026-11-15 19:19:34Z, in the instant of an unplug `pmset -g
+    # batt` named 'AC Power' while `pmset -g adapter` already gave no wattage ("Family Code = 0x0000"), and the next
+    # reading, about a second later, read plainly 'Battery Power'; 3 reads 1 s apart span 2 s. Bands: 2-5 tries (one read
+    # again at least; over 5 a tick waits past 4 s on a reading that stays unread), 1-2 s apart (pmset's own state
+    # change took about 1 s)
+    "power_read_tries": 3,
+    "power_read_gap_s": 1,
     # the oracle's audit (climb.py oracle-audit) replays this many stored answers, each in a process of its own at its
     # unit's commit. Derivation: a process pays the corpus's load, 60-90 s at normal priority (v8-report: native parts
     # of 66 s and 91 s) and about 7.5 min at background QoS, where the driver's Julia runs (the bootstrap of 2026-11-10:

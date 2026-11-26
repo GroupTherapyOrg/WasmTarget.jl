@@ -2721,3 +2721,61 @@ finally:
     core.for_dale = real48["for_dale"]
     with contextlib.suppress(Exception):
         g("update-ref", "-d", f"refs/remotes/origin/{core.MARCH}")
+
+# 49. a power reading that does not read whole is read again, and one that stays unread is the power rule's wait
+# (core.power_reread, core.power_ok, core.PowerUnread): the instant of an unplug (pmset naming AC beside an adapter that
+# gives no wattage, twice) then a whole reading: work runs, no unread event; a reading that stays unread: power_ok is
+# false (the wait: no move or check starts, one in flight ends as a power cut), one `power-unread` event, never a
+# ClimbError to its caller, and Low Power Mode read as on; read whole again: work runs. 2026-11-15 19:19:34Z: climb-1's
+# move, in its third review round since 16:49:41Z, died as a driver error on that one inconsistent reading
+#: limit 30
+real49 = {"sh": core.sh, "cfg": core.cfg, "POWER": list(core.POWER), "unread": list(core.POWER_UNREAD)}
+try:
+    batt49 = {"ac": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1)\t99%; charged; 0:00 remaining present: true\n",
+              "bat": "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1)\t99%; discharging; (no estimate) present: true\n"}
+    seq49 = []   # each read's answer: "torn" (AC beside no wattage), "ac", "bat"
+    def sh49(cmd, **k):
+        w = seq49[0] if seq49 else "bat"
+        if tuple(cmd) == ("pmset", "-g", "batt"):
+            out = batt49["bat" if w == "bat" else "ac"]
+        elif tuple(cmd) == ("pmset", "-g"):
+            out = " lowpowermode         0\n"
+        elif tuple(cmd) == ("pmset", "-g", "adapter"):
+            out = " Family Code = 0x0000\n" if w == "torn" else " Wattage = 96W\n"
+        else:
+            out = '  |   "Amperage" = 0\n'
+            seq49.pop(0)   # ioreg is a whole AC read's last call
+        if tuple(cmd) == ("pmset", "-g", "adapter") and w == "torn":
+            seq49.pop(0)   # a torn read stops at the adapter
+        if w == "bat" and tuple(cmd) == ("pmset", "-g") and seq49:
+            seq49.pop(0)   # a battery read's last call
+        return subprocess.CompletedProcess(cmd, 0, out, "")
+    core.sh = sh49
+    core.cfg = lambda: dict(real49["cfg"](), power_settle_s=0, power_read_gap_s=0)
+    core.POWER[0], core.POWER[1], core.POWER[2] = core.power_read, 0.0, None
+    core.POWER_UNREAD[0] = None
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(f"{state}/power.json")
+    n49 = lambda: sum(1 for e in core.events() if e["kind"] == "power-unread")
+    u0 = n49()
+    seq49[:] = ["torn", "torn", "ac"]
+    ok49 = core.power_ok()
+    if ok49 is not True or n49() != u0 or seq49:
+        fault(f"a torn reading twice, then a whole one: power_ok {ok49}, unread events {n49() - u0}, reads left {seq49} (True, 0, none)")
+    seq49[:] = ["torn"] * 10; core.POWER[1] = 0.0
+    try:
+        ok49b = core.power_ok()
+    except core.ClimbError as e:
+        ok49b = f"raised {e}"
+    low49 = core.power_low()
+    if ok49b is not False or n49() != u0 + 1 or low49 is not True:
+        fault(f"a reading that stays torn: power_ok {ok49b!r}, unread events {n49() - u0}, Low Power Mode read {low49} (False, 1, True)")
+    seq49[:] = ["ac"] * 3; core.POWER[1] = 0.0
+    if core.power_ok() is not True or core.POWER_UNREAD[0] is not None:
+        fault("a reading whole again after a stretch unread: work does not run")
+except Exception as e:
+    import traceback
+    fault(f"the power reading raised {type(e).__name__}: {str(e)[:240]} {traceback.format_exc()[-300:]}")
+finally:
+    core.sh, core.cfg = real49["sh"], real49["cfg"]
+    core.POWER[:] = real49["POWER"]; core.POWER_UNREAD[:] = real49["unread"]
