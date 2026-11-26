@@ -112,6 +112,13 @@ the history and the changelog name files without consuming them), when a loader 
 directory, or when it is a repository convention file or a directory's README.
 """
 function unconsumed_files_outside_src()::Vector{String}
+    local files = String.(split(readchomp(Cmd(`git ls-files`; dir=ROOT)), '\n'))
+    local texts = Dict(f => _text(joinpath(ROOT, f)) for f in files if isfile(joinpath(ROOT, f)))
+    return unconsumed_files(files, texts)
+end
+
+# L130's rule over a file list and the files' texts: the files outside src/ that nothing consumes
+function unconsumed_files(files::AbstractVector{<:AbstractString}, texts::AbstractDict)::Vector{String}
     convention = Set(["Project.toml", "LICENSE.md", "CHANGELOG.md", "AGENTS.md",
         ".gitignore", ".gitattributes", "release-please-config.json",
         ".release-please-manifest.json", "docs/Project.toml", "docs/input.css"])
@@ -123,18 +130,33 @@ function unconsumed_files_outside_src()::Vector{String}
     walked = ("dev/formal/" => r"\.(tla|cfg)$", "docs/src/" => r"", "ext/" => r"\.jl$", ".github/workflows/" => r"\.ya?ml$",
               "test/src/" => r"\.jl$", "test/corpus/" => r"\.jl$", "legacy/" => r"")
     not_consumers = Set(["dev/MARCH.md", "dev/HISTORY.md", "CHANGELOG.md"])
-    files = String.(split(readchomp(Cmd(`git ls-files`; dir=ROOT)), '\n'))
-    texts = Dict(f => _text(joinpath(ROOT, f)) for f in files
-                 if !(f in not_consumers) && isfile(joinpath(ROOT, f)))
+    local consumers = [(g, t) for (g, t) in texts if !(g in not_consumers)]
     bad = String[]
     for f in files
         startswith(f, "src/") && continue
         (f in convention || basename(f) == "README.md" ||
          any(((d, rx),) -> startswith(f, d) && occursin(rx, f), walked)) && continue
         needle = endswith(f, ".md") ? f : basename(f)
-        any(((g, t),) -> g != f && !endswith(g, ".md") && occursin(needle, t), texts) || push!(bad, f)
+        any(((g, t),) -> g != f && !endswith(g, ".md") && occursin(needle, t), consumers) || push!(bad, f)
     end
     return bad
+end
+
+# L130's negative test: planted file lists and texts each answer as stated
+function unconsumed_negatives_missed()::Vector{String}
+    local cases = [("a file a script names", ["dev/a.sh", "dev/data.txt"], Dict("dev/a.sh" => "cat dev/data.txt\n# names a.sh too: a.sh", "dev/data.txt" => "x"), 1),
+                   ("a file nothing names", ["dev/orphan.txt", "dev/a.sh"], Dict("dev/orphan.txt" => "x", "dev/a.sh" => "echo"), 2),
+                   ("a .md named by its basename only", ["dev/NOTES.md", "dev/a.sh", "dev/b.sh"], Dict("dev/NOTES.md" => "n", "dev/a.sh" => "see NOTES.md; b.sh", "dev/b.sh" => "a.sh"), 1),
+                   ("a .md named by its path", ["dev/NOTES.md", "dev/a.sh", "dev/b.sh"], Dict("dev/NOTES.md" => "n", "dev/a.sh" => "see dev/NOTES.md; b.sh", "dev/b.sh" => "a.sh"), 0),
+                   ("a file named only by the plan", ["dev/x.txt", "dev/MARCH.md"], Dict("dev/x.txt" => "x", "dev/MARCH.md" => "x.txt"), 2),
+                   ("a file named only by prose", ["dev/x.txt", "dev/P.md"], Dict("dev/x.txt" => "x", "dev/P.md" => "x.txt"), 2),
+                   ("walked, convention, README and src", ["test/src/t.jl", "dev/formal/M.tla", "Project.toml", "docs/README.md", "src/a.jl"], Dict{String,String}(), 0),
+                   ("a walked directory's other file", ["test/src/notes.txt"], Dict{String,String}(), 1)]
+    local out = String[]
+    for (what, files, texts, want) in cases
+        length(unconsumed_files(files, texts)) == want || push!(out, "negative missed: $what")
+    end
+    return out
 end
 
 
@@ -2727,6 +2749,274 @@ function reaches_negative(thunk::AbstractString, defs::AbstractDict{String,Strin
     return false
 end
 
+# L153's rule over the files it reads (dev/lanes.sh, AGENTS.md, .github/workflows/{gate,ci,formal,downstream}.yml,
+# dev/ship.sh, dev/hooks/commit-msg, dev/gate.sh, by path), the count of its conditions that fail
+function gate_matrix_misses(files::AbstractDict{String,String})::Int
+    _code(path) = join(filter(l -> !startswith(lstrip(l), "#"), split(files[path], '\n')), '\n')
+    # the script's code, its comment lines dropped (a commented-out lane runs nothing)
+    local lanes = _code("dev/lanes.sh")
+    local gated = lanes
+    local agents = files["AGENTS.md"]
+    local wf = ".github/workflows"
+    local gate = haskey(files, "$wf/gate.yml") ? _code("$wf/gate.yml") : ""
+    # gate.yml's matrix (lane => its parts) against every lane the default run has: a
+    # lane missing, a lane the script does not have, or a split lane missing a part
+    local runs = Set(m[1] for m in eachmatch(r"(?:^|\s)lane ([a-z][a-z0-9.-]*)\s+(?:\$JULIA|julia|bash|suite)\b"m, lanes))
+    local jobs = Dict{String,Vector{String}}()
+    for m in eachmatch(r"^\s*- \{ lane: ([a-z0-9.-]+), part: '([0-9/]*)' \}\s*$"m, gate)
+        push!(get!(jobs, m[1], String[]), m[2])
+    end
+    local whole = parts -> parts == [""] || (all(p -> occursin(r"^[0-9]+/[1-9][0-9]*$", p), parts) &&
+        length(unique(map(p -> split(p, '/')[2], parts))) == 1 &&
+        sort(map(p -> parse(Int, split(p, '/')[1]), parts)) == collect(0:parse(Int, split(parts[1], '/')[2]) - 1))
+    local matrix_ok = length(runs) == 8 && keys(jobs) == runs && all(whole, values(jobs))
+    # the closure predicate (A23E4, A23E6): a dispatch or schedule, or a pushed head
+    # with a line `Closes: C<digit>…`, grep's '^Closes: C[0-9]+' spelt for an expression (the
+    # message after a newline holds a newline, `Closes: C` and a digit), one text in gate.yml's
+    # run-name, its closure job and every job with no `needs:` of ci.yml, formal.yml and downstream.yml
+    # the march branch, dev/ship.sh's MARCH, the one branch whose push triggers the workflows (one
+    # branch on origin: Dale 2026-10-28), each run of its push in that head's own concurrency group
+    local ship = files["dev/ship.sh"]
+    local mm = match(r"^MARCH=([A-Za-z0-9._-]+)$"m, ship)
+    local march = mm === nothing ? "?" : String(mm[1])
+    local trig = "\non:\n  push:\n    branches: ['$march']\n  workflow_dispatch:\n"
+    local own_group = "\${{ github.ref == 'refs/heads/$march' && github.sha || github.ref }}\n  cancel-in-progress: true\n"
+    local P = "github.event_name != 'push' || " *
+        join(("contains(format('{0}{1}', fromJSON('\"\\n\"'), github.event.head_commit.message), format('{0}Closes: C$d', fromJSON('\"\\n\"')))" for d in 0:9), " || ")
+    local pinned_push = map(("ci.yml", "formal.yml", "downstream.yml")) do f
+        local c = _code("$wf/$f")
+        local js = split(last(split(c, "\njobs:\n"; limit = 2)), r"(?m)^(?=  [A-Za-z0-9_-]+:\s*$)"; keepempty = false)
+        local roots = filter(j -> occursin(r"^  [A-Za-z0-9_-]+:\s*$"m, j) && !occursin(r"^    needs:"m, j), js)
+        occursin(trig, c) && occursin(own_group, c) &&
+            !occursin(r"^\s*(pull_request|pull_request_target|workflow_run|workflow_call):"m, c) &&
+            count(r"^\s*push:"m, c) == 1 && !occursin("branches-ignore", c) && !occursin(r"^on:[ \t]*\S"m, c) &&
+            !isempty(roots) && all(j -> occursin(r"^  [A-Za-z0-9_-]+:\n    if: >-\n      \$\{\{ "m * P * " }}\n", j), roots)
+    end
+    count(!, [occursin("lane suite suite", gated),
+              occursin(raw"shards=\"0,2 1,2\"; [ \"$only\" = suite ] && [ -n \"$part\" ] && shards=\"$pi,$pn\"", lanes),
+              occursin(raw"  for s in $shards; do" * "\n" * raw"    WT_VALIDATE=1 WT_SHARD=\"$s\" $JULIA --project=. -e 'using Pkg; Pkg.test()' > \"$d/shard$s.log\" 2>&1 &", lanes),
+              occursin("lane smoke-1.13 julia +1.13 --project=. test/smoke.jl", gated),
+              occursin("\n| full matrix at clause closure (`Closes: C<n>`), #128's merge head, dispatch | `bash dev/gate.sh` |\n", agents),
+              # the full matrix only at clause closure (Dale 2026-10-21): the closure job decides, every other job waits on it,
+              # a `Closes: C<n>` line only on a tree whose ratchet reads C<n> CLOSED (the commit hook and the landing)
+              occursin("\n  closure:\n", gate) &&
+                  occursin("          RUN: >-\n            \${{ " * P * " }}\n        run: |\n          if [ \"\$RUN\" = true ]; then\n", gate) &&
+                  occursin("\nrun-name: >-\n  \${{ (" * P * ") && 'Gate closure' || 'Gate (no closure)' }}\n", gate) &&
+                  count("    needs: closure\n    if: needs.closure.outputs.run == 'true'\n", gate) == 1,
+              occursin(raw"        printf '%s\n' \"$status\" | grep -qE \"^$c +.* CLOSED( |$)\" ||", files["dev/hooks/commit-msg"]),
+              # a landed head reaches gate.yml by a push of the march branch's: no other ref
+              # every push is the march branch's (each green commit of a landing pushed as it passes, 2320c60d), never another ref
+              count(r"\bgit\b[^\n]*\bpush\b", ship) >= 1 &&
+              count(r"\bgit\b[^\n]*\bpush\b", ship) == count(r"\bgit push -q origin HEAD:(\$MARCH|'\"\$MARCH\"')", ship) &&
+              occursin(r"^if git push -q origin HEAD:\$MARCH; then$"m, ship) && !occursin("refs/heads/", ship),
+              # the first red lane ends the run (batch 111: a 1.13 failure surfaced at minute 29)
+              occursin(raw"stop() { [ $fail -eq 0 ] || { echo \"LANES red\"; exit 1; }; }", lanes),
+              occursin(join([raw"lane ratchet  $JULIA --project=. test/parity_ratchet.jl", "stop"], '\n'), lanes),
+              occursin(join([raw"join_bg \"$d/s113\" \"$d/formal\"; rm -rf dev/formal/states", "stop"], '\n'), lanes),
+              occursin(join([raw"stop", raw"lane suite suite"], '\n'), gated),
+              # --lane runs one lane of the same run: every other lane is a no-op
+              occursin(raw"want() { [ -z \"$only\" ] || [ \"$only\" = \"$1\" ]; }", lanes),
+              occursin(join([raw"  local name=$1; shift", raw"  want \"$name\" || return 0"], '\n'), lanes),
+              # each skip fails the gate (A12P6): a default julia that is not 1.12 ...
+              occursin(join([
+                  raw"if ! want probes && ! want suite; then :",
+                  raw"elif $JULIA -e 'exit(VERSION.major == 1 && VERSION.minor == 12 ? 0 : 1)'; then",
+                  raw"  lane probes $JULIA --project=. test/probe_bytes.jl",
+                  raw"else",
+                  raw"  printf '  FAIL probes         (the default julia is not 1.12: the probes and the suite are 1.12 lanes; juliaup default 1.12)\n'; fail=1",
+                  raw"fi"], '\n'), gated),
+              # ... no working java ...
+              occursin(join([
+                  raw"if ! want formal; then :",
+                  raw"elif java -version >/dev/null 2>&1; then bg \"$d/formal\" lane formal bash dev/formal/run_tlc.sh",
+                  raw"else printf '  FAIL formal         (no working java: TLC needs one, brew install openjdk@17)\n'; fail=1; fi"], '\n'), gated),
+              # ... and a JULIA= override or no julia +1.13
+              occursin(join([
+                  raw"if ! want smoke-1.13; then :",
+                  raw"elif [ \"$JULIA\" != \"julia\" ]; then",
+                  raw"  printf '  FAIL smoke-1.13     (the gate runs on the default julia, not %s)\n' \"$JULIA\"; fail=1",
+                  raw"elif julia +1.13 -e 'exit(0)' >/dev/null 2>&1; then",
+                  raw"  bg \"$d/s113\" lane smoke-1.13 julia +1.13 --project=. test/smoke.jl",
+                  raw"else",
+                  raw"  printf '  FAIL smoke-1.13     (julia +1.13 is not installed: juliaup add 1.13)\n'; fail=1",
+                  raw"fi"], '\n'), gated),
+              # the wasm engine is CI's: ci.yml's node-version, a Node of another major fails
+              occursin(join([
+                  raw"NODE_MAJOR=$(sed -n \"s/^ *node-version: *'\{0,1\}\([0-9][0-9]*\).*/\1/p\" .github/workflows/ci.yml | head -1)",
+                  raw"ci_node=\"$(brew --prefix \"node@$NODE_MAJOR\" 2>/dev/null)/bin\"",
+                  raw"[ -x \"$ci_node/node\" ] && export PATH=\"$ci_node:$PATH\"",
+                  raw"node_major=$(node --version 2>/dev/null | sed 's/^v\([0-9]*\).*/\1/')",
+                  raw"printf '  node %s (CI: %s)\n' \"$(node --version 2>/dev/null)\" \"$NODE_MAJOR\"",
+                  raw"if [ -z \"$NODE_MAJOR\" ] || [ \"$node_major\" != \"$NODE_MAJOR\" ]; then",
+                  raw"  printf '  FAIL node           (the wasm engine is not CI'\"'\"'s Node %s: brew install node@%s)\n' \"$NODE_MAJOR\" \"$NODE_MAJOR\"; fail=1",
+                  raw"fi"], '\n'), lanes),
+              # gate.yml: the default run's lanes, each part of each split lane, one job each ...
+              matrix_ok,
+              occursin(raw"          bash dev/lanes.sh --lane ${{ matrix.lane }}${{ matrix.part != '' && format(' --part {0}', matrix.part) || '' }}${{ matrix.lane == 'formal' && ' --all' || '' }}", gate),
+              # ... the first red job cancels the rest ...
+              occursin("      fail-fast: true\n", gate) && !occursin("fail-fast: false", gate),
+              # ... `julia` 1.12 and `julia +1.13` as the script calls them ...
+              # (in every job that installs Julia)
+              count("      - name: Julia (juliaup)\n", gate) >= 1 &&
+                  count(raw"          channel 1.12 && \"$J\" default 1.12" * "\n", gate) == count("      - name: Julia (juliaup)\n", gate),
+              occursin(raw"          if [ \"${{ matrix.lane }}\" = smoke-1.13 ] || [ \"${{ matrix.lane }}\" = legacy-1.13 ]; then channel 1.13; fi", gate),
+              # ... and WT1's smoke, the agreement oracle legacy/'s deletion rule reads, on both versions
+              occursin(join([raw"  bg \"$d/l113\" lane legacy-1.13 julia +1.13 --project=legacy legacy/test/smoke.jl",
+                             raw"  lane legacy julia --project=legacy legacy/test/smoke.jl",
+                             raw"  join_bg \"$d/l113\""], '\n'), gated),
+              # ... CI's Node major, read from ci.yml's node-version ...
+              # (every job's: a job of its own Node passed while another kept the line)
+              let majors = count("      - name: CI's Node major\n", gate),
+                  reads = count(raw"          echo \"node=$(sed -n \"s/^ *node-version: *'\{0,1\}\([0-9][0-9]*\).*/\1/p\" .github/workflows/ci.yml | head -1)\" >> \"$GITHUB_OUTPUT\"", gate),
+                  versions = filter(l -> occursin(r"^\s*node-version:", l), split(gate, '\n'))
+                  majors >= 1 && reads == majors && length(versions) == majors &&
+                      all(==(raw"          node-version: ${{ steps.ci.outputs.node }}"), versions)
+              end,
+              # ... no lane variable set by the workflow (the script sets them) ...
+              !occursin(r"\b(WT|TLC)_[A-Z_]+", gate),
+              # ... and on the march branch alone
+              occursin(trig * "\n", gate) && occursin(own_group, gate) &&
+                  !occursin(r"^\s*(pull_request|schedule|workflow_run|workflow_call):"m, gate),
+              # ci.yml's, formal.yml's and downstream.yml's triggers are gate.yml's (march
+              # branch pushes, a dispatch; no pull request, no branches-ignore, no inline push),
+              # each job with no `needs:` under the closure predicate
+              pinned_push...,
+              occursin("\n| CI, Formal models, Downstream: the same triggers, never a plain landing | `.github/workflows` |\n", agents),
+              # dev/gate.sh pushes nothing: it finds the run a wt2 push started; no gate-fast workflow
+              !occursin(r"\bgit\b[^\n]*\bpush\b", _code("dev/gate.sh")) &&
+                  occursin(raw"  run=$(api gh run list --branch \"$MARCH\"", files["dev/gate.sh"]) &&
+                  !haskey(files, "$wf/gate-fast.yml"),
+              smoke_dealing_faults() == 0])
+end
+
+# the files L153 reads, each by its path, a workflow only where it exists
+function gate_matrix_files()::Dict{String,String}
+    local out = Dict{String,String}()
+    for f in ("dev/lanes.sh", "AGENTS.md", "dev/ship.sh", "dev/hooks/commit-msg", "dev/gate.sh",
+              ".github/workflows/gate.yml", ".github/workflows/ci.yml", ".github/workflows/formal.yml",
+              ".github/workflows/downstream.yml", ".github/workflows/gate-fast.yml")
+        isfile(joinpath(ROOT, f)) && (out[f] = read(joinpath(ROOT, f), String))
+    end
+    return out
+end
+
+# L153's negative test: the repository's own files read 0, and each planted break of them fires
+function gate_matrix_negatives_missed()::Vector{String}
+    local real = gate_matrix_files()
+    local out = String[]
+    gate_matrix_misses(real) == 0 || return ["negative missed: the repository's own files, its base, read faults"]
+    local with(f, g) = (d = copy(real); d[f] = g(get(d, f, "")); d)
+    local first_matrix_line(t) = (m = match(r"(?m)^\s*- \{ lane: [^\n]*\n", t); m === nothing ? t : replace(t, m.match => ""; count = 1))
+    local cases = [("the 1.13 smoke lane dropped", with("dev/lanes.sh", t -> replace(t, "lane smoke-1.13 julia +1.13" => "lane smoke-1.13 julia"))),
+                   ("a matrix lane dropped from gate.yml", with(".github/workflows/gate.yml", first_matrix_line)),
+                   ("a push of another ref", with("dev/ship.sh", t -> t * "\ngit push origin HEAD:elsewhere\n")),
+                   ("a gate-fast workflow beside the gate", with(".github/workflows/gate-fast.yml", _ -> "on: push\n")),
+                   ("AGENTS.md without the full matrix's row", with("AGENTS.md", t -> replace(t, "| full matrix at clause closure" => "| a matrix"))),
+                   ("ci.yml triggered by another branch", with(".github/workflows/ci.yml", t -> replace(t, "    branches: ['" => "    branches: ['x"))),
+                   ("the commit hook without the closure check", with("dev/hooks/commit-msg", t -> replace(t, "CLOSED( |\$)" => "OPEN")))]
+    for (what, files) in cases
+        gate_matrix_misses(files) >= 1 || push!(out, "negative missed: $what")
+    end
+    return out
+end
+
+# L162's rule over the files it reads (.github/workflows/gate.yml, dev/gate.sh, AGENTS.md, by path), the count of its
+# conditions that fail
+function gate_budget_misses(files::AbstractDict{String,String})::Int
+    local gate = files[".github/workflows/gate.yml"]
+    local sh = files["dev/gate.sh"]
+    local agents = replace(files["AGENTS.md"], r"\s+" => " ")
+    local job(name) = (m = match(Regex("(?s)\\n  " * name * ":\\n(.*?)(?=\\n  [a-z][a-z-]*:\\n|\\z)"), gate); m === nothing ? "" : m.captures[1])
+    local lane_t = [parse(Int, m[1]) for m in eachmatch(r"^    timeout-minutes: (\d+)\b"m, job("lane"))]
+    count(!, [lane_t == [20],
+              length(collect(eachmatch(r"timeout-minutes:", gate))) == 1,
+              occursin("| full matrix at clause closure (`Closes: C<n>`), #128's merge head, dispatch | `bash dev/gate.sh` |", agents),
+              occursin(raw"budget=$(awk '/^  lane:$/ { inlane = 1; next } /^  [a-z][a-z-]*:$/ { inlane = 0 }", sh) &&
+                  occursin(raw"inlane && /^    timeout-minutes:/ { print $2; exit }' .github/workflows/gate.yml)", sh) &&
+                  occursin(raw"-v B=\"$budget\"", sh) && occursin("PAST THE %d-MINUTE BUDGET", sh)])
+end
+
+gate_budget_files()::Dict{String,String} =
+    Dict(f => read(joinpath(ROOT, f), String) for f in (".github/workflows/gate.yml", "dev/gate.sh", "AGENTS.md"))
+
+# L162's negative test: the repository's own files read 0, and each planted break of them fires
+function gate_budget_negatives_missed()::Vector{String}
+    local real = gate_budget_files()
+    gate_budget_misses(real) == 0 || return ["negative missed: the repository's own files, its base, read faults"]
+    local with(f, g) = (d = copy(real); d[f] = g(d[f]); d)
+    local cases = [("the lane job's budget raised", with(".github/workflows/gate.yml", t -> replace(t, r"(?m)^(    timeout-minutes: )20\b" => s"\g<1>30"))),
+                   ("a second timeout", with(".github/workflows/gate.yml", t -> t * "\n  other:\n    timeout-minutes: 5\n")),
+                   ("AGENTS.md without the full matrix's row", with("AGENTS.md", t -> replace(t, "| full matrix at clause closure" => "| a matrix"))),
+                   ("gate.sh not reading the budget", with("dev/gate.sh", t -> replace(t, "PAST THE %d-MINUTE BUDGET" => "PAST THE BUDGET")))]
+    local out = String[]
+    for (what, files) in cases
+        gate_budget_misses(files) >= 1 || push!(out, "negative missed: $what")
+    end
+    return out
+end
+
+# L125: the charter's citations against the ratchet's checks: a cited check that does not exist, a check cited twice,
+# a check no clause cites, and a charter with no clauses, one fault each
+function charter_cite_faults(clauses, have::AbstractSet{String})::Vector{String}
+    isempty(clauses) && return ["dev/CHARTER.md has no clauses"]
+    local cited = String[]
+    for (_, (_, ids)) in clauses; append!(cited, ids); end
+    local v = String["dev/CHARTER.md cites $c, which is no check" for c in unique(cited) if !(c in have)]
+    append!(v, ["dev/CHARTER.md cites $c twice" for c in unique(cited) for _ in 2:count(==(c), cited)])
+    append!(v, ["$h is cited by no clause of dev/CHARTER.md" for h in sort!(collect(have)) if !(h in Set(cited))])
+    return v
+end
+
+# L125's negative test: planted clause tables and check sets each answer as stated
+function charter_cite_negatives_missed()::Vector{String}
+    local cl(ps...) = Pair{String,Tuple{String,Vector{String}}}[c => ("t", ids) for (c, ids) in ps]
+    local cases = [("each check cited once", cl("C1" => ["L1"], "C2" => ["L2", "R3"]), Set(["L1", "L2", "R3"]), 0),
+                   ("no clauses", cl(), Set(["L1"]), 1),
+                   ("a cited check that does not exist", cl("C1" => ["L1", "L9"]), Set(["L1"]), 1),
+                   ("a check cited by two clauses", cl("C1" => ["L1"], "C2" => ["L1"]), Set(["L1"]), 1),
+                   ("a check cited by none", cl("C1" => ["L1"]), Set(["L1", "L2"]), 1)]
+    local out = String[]
+    for (what, clauses, have, want) in cases
+        length(charter_cite_faults(clauses, have)) == want || push!(out, "negative missed: $what")
+    end
+    return out
+end
+
+# L129: the plan's finished work and the history's long entries: dev/MARCH.md at most 60 lines, no `| done |` row and
+# no results heading; dev/HISTORY.md at most 160 lines, each `## ` entry at most 25
+function plan_faults(plan::AbstractVector{<:AbstractString}, hist::AbstractVector{<:AbstractString})::Vector{String}
+    local v = String[]
+    length(plan) <= 60 || push!(v, "dev/MARCH.md has $(length(plan)) lines (cap 60)")
+    for (i, l) in enumerate(plan)
+        (occursin(r"\|\s*done\s*\|"i, l) || occursin(r"^#+ .*\bresults?\b"i, l)) &&
+            push!(v, "dev/MARCH.md:$i holds finished work: $(first(l, 60))")
+    end
+    length(hist) <= 160 || push!(v, "dev/HISTORY.md has $(length(hist)) lines (cap 160)")
+    local starts = [i for (i, l) in enumerate(hist) if startswith(l, "## ")]
+    for (k, i) in enumerate(starts)
+        local n = (k < length(starts) ? starts[k + 1] : length(hist) + 1) - i
+        n <= 25 || push!(v, "dev/HISTORY.md entry at line $i is $n lines (cap 25)")
+    end
+    return v
+end
+
+# L129's negative test: planted plans and histories each answer as stated
+function plan_negatives_missed()::Vector{String}
+    local entry(n) = vcat(["## an entry"], fill("a line", n - 1))
+    local cases = [("an open plan and short entries", ["# Plan", "| 1.A | open |"], vcat(entry(25), entry(3)), 0),
+                   ("a done row", ["| 1.A | done |"], String[], 1),
+                   ("a DONE row, spaced", ["|1.B|  Done  |"], String[], 1),
+                   ("a results heading", ["## Results of the run"], String[], 1),
+                   ("a plan past 60 lines", fill("| 1.A | open |", 61), String[], 1),
+                   ("an entry past 25 lines", String[], vcat(entry(26), entry(2)), 1),
+                   ("a history past 160 lines", String[], vcat([entry(20) for _ in 1:8]..., ["## x", "y"]), 1)]
+    local out = String[]
+    for (what, plan, hist, want) in cases
+        length(plan_faults(plan, hist)) == want || push!(out, "negative missed: $what")
+    end
+    return out
+end
+
 # L126: the ratchets whose description declares a floor or its sites legitimate or reclassified, a terminal state
 # other than 0 (dev/CHARTER.md rule 2), one fault each
 function ratchet_floor_faults(metrics)::Vector{String}
@@ -2751,7 +3041,7 @@ end
 # the locks that owe their always-run negative, exactly; R45 counts them, so the list only shrinks: a
 # lock leaves it in the commit that gives it its negative, and a lock added after it never joins it
 const NEGATIVE_OWED = Set{String}(split("""
-    L125 L129 L130 L153 L162
+    
 """))
 
 # the faults of the lock table against NEGATIVE_OWED: a lock outside it with no always-run negative,
@@ -4748,171 +5038,31 @@ const LOCKS = [
     # ── dev/CHARTER.md (2026-09-22): the charter and the enforcement stack cite each other ──
     "L125_charter_is_the_definition_of_done" => ("dev/CHARTER.md exists; every check a clause cites exists here, and every lock and ratchet here is cited by exactly one clause (an uncited check is either obsolete or a clause is missing; a cited check that does not exist is a promise nobody keeps)",
         () -> begin
-            clauses = charter_clauses()
-            isempty(clauses) && return 1
-            cited = String[]
-            for (_, (_, ids)) in clauses; append!(cited, ids); end
-            have = Set(_short_id(first(p)) for p in vcat(METRICS, LOCKS))
-            missing_ = count(c -> c ∉ have, unique(cited))
-            dup = length(cited) - length(unique(cited))
-            uncited = count(h -> h ∉ Set(cited), have)
-            missing_ + dup + uncited
+            local v = vcat(charter_cite_faults(charter_clauses(), Set(_short_id(first(p)) for p in vcat(METRICS, LOCKS))),
+                           charter_cite_negatives_missed())
+            foreach(x -> println("    ✗ ", x), v)
+            length(v)
         end),
     "L128_agents_md_current_and_lean" => ("AGENTS.md is the ONE agent-instructions file (no CLAUDE.md), at most 60 hand-written lines (the ledger block's markers among them), its ledger block (L206) at most one line per requirement of dev/LEDGER.md, so the whole at most 60 plus one line per requirement, a bound that grows with the ledger and still shows a stale or duplicated row (A33E6), every line at most 100 chars, names only paths, checks and WT_* switches that exist, pins the oracle commit dev/PARITY_MASTER.md pins, and carries no status vocabulary (dates, phase names, currently/as of/remaining) — status is measured here and planned in dev/MARCH.md, never remembered in the instructions; intent: every agent reads AGENTS.md whole and finds nothing stale or bloated (Dale 2026-09-22); band: at most 60 hand-written lines, 60 plus one per live requirement in all, and 100 chars a line, the caps the band's edge; the ledger block grows with the requirements, a line each, so leanness never fights the ledger. Behavior, run here: five planted files answer as stated (dev/CHARTER.md C0)",
         () -> (v = vcat(agents_md_violations(), agents_size_negatives_missed()); foreach(x -> println("    ✗ ", x), v); length(v))),
     "L130_every_file_outside_src_consumed" => ("every tracked file outside src/ is consumed: a tracked file that is not prose names it (a .md only by its path), a loader walks its directory, or it is a repository convention file or README (dev/CHARTER.md C9)",
-        () -> length(unconsumed_files_outside_src())),
+        () -> begin
+            local v = vcat(unconsumed_files_outside_src(), unconsumed_negatives_missed())
+            foreach(x -> println("    ✗ ", x), v)
+            length(v)
+        end),
     "L153_the_gate_runs_what_ci_runs" => ("the full matrix runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), and smoke on 1.13, at clause closure (Dale 2026-10-21: large-scale runs happen only when a full clause is closed out: a push of the march branch, wt2, whose head commit carries `Closes: C<n>`, which dev/hooks/commit-msg refuses unless the ratchet reads C<n> CLOSED; workflow_dispatch; gate.yml's closure job decides and every other job waits on it), never holding a landing (fast is first, strict is final: Dale 2026-10-20; a landing's evidence is `bash dev/check.sh`, run by `bash dev/ship.sh`): dev/lanes.sh's default run (its comment lines not counted) stops at the first red lane (both smokes and TLC side by side first) and has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2), smoke on Julia 1.13, and WT1's smoke over the one corpus on both versions (legacy/test/smoke.jl, the agreement oracle legacy/'s deletion rule reads, dev/MARCH.md 1.G). No lane of that run is skipped green: it runs the probes and the suite only when the default `julia` is 1.12, the formal lane only when `java` runs, and smoke on 1.13 only without a JULIA= override and with `julia +1.13` installed, and each of those skips prints FAIL and sets the run red; and every lane runs on CI's wasm engine, the Node major ci.yml's node-version names (batch 108 passed on Node 25 and trapped on CI's Node 22). `dev/lanes.sh --lane <name> [--part i/N]` runs one lane of that same run, every other lane a no-op, its skips still red; .github/workflows/gate.yml is that run on CI's runners, one job per lane through it: every lane the default run has, each split lane with every part 0..N-1 of one N, `julia` 1.12 and `julia +1.13` from juliaup as the script calls them, Node from ci.yml's node-version, fail-fast, every TLC instance (--all), none of the lanes' own variables (WT_*, TLC_*) set by the workflow, and triggered exactly by a push of the march branch (dev/ship.sh's MARCH, wt2) or workflow_dispatch, the one branch on origin (Dale 2026-10-28): `dev/ship.sh` pushes the march branch and no other ref, each green commit of a landing as it passes (so a landed head whose commit carries `Closes: C<n>` gets the run, in its head's own concurrency group in each workflow, which a later landing's push never cancels; no march/<branch> per landing, Dale 2026-10-21), and `bash dev/gate.sh` pushes nothing: it finds the Gate run of a wt2 commit and prints its verdict (the final full gate before PR #128 merges, on the merge head landed with `Closes: C<n>`), and no gate-fast workflow exists; ci.yml, formal.yml and downstream.yml trigger exactly as gate.yml does (a wt2 push, workflow_dispatch, formal.yml's nightly schedule beside; no pull request, whose branch every landing pushes, A23E4; no branches-ignore), each job with no `needs:` under the closure predicate, so a plain landing runs none of them; the closure predicate is one text in gate.yml's run-name, its closure job and those jobs (a dispatch or schedule, or a pushed head with a line `Closes: C<digit>…`, grep's `^Closes: C[0-9]+` spelt for an expression, A23E6); AGENTS.md says so, its table a row of its own; and test/smoke_times.tsv, which deals the smoke parts, lists exactly smoke's groups and xfail groups (smoke.jl's and those of the files it includes), each with a number of seconds for 1.12 and for 1.13 (smoke's dealing errors on a missing file, a duration that is no number and a group with none, dev/AUDIT.md A17P9). Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (2026-10-07); until 2026-10-20 a push waited for this run and CI's (~2 h a landing; dev/CHARTER.md C10)",
         () -> begin
-            _code(path) = join(filter(l -> !startswith(lstrip(l), "#"), split(read(path, String), '\n')), '\n')
-            # the script's code, its comment lines dropped (a commented-out lane runs nothing)
-            local lanes = _code(joinpath(ROOT, "dev", "lanes.sh"))
-            local gated = lanes
-            local agents = read(joinpath(ROOT, "AGENTS.md"), String)
-            local wf = joinpath(ROOT, ".github", "workflows")
-            local gate = isfile(joinpath(wf, "gate.yml")) ? _code(joinpath(wf, "gate.yml")) : ""
-            # gate.yml's matrix (lane => its parts) against every lane the default run has: a
-            # lane missing, a lane the script does not have, or a split lane missing a part
-            local runs = Set(m[1] for m in eachmatch(r"(?:^|\s)lane ([a-z][a-z0-9.-]*)\s+(?:\$JULIA|julia|bash|suite)\b"m, lanes))
-            local jobs = Dict{String,Vector{String}}()
-            for m in eachmatch(r"^\s*- \{ lane: ([a-z0-9.-]+), part: '([0-9/]*)' \}\s*$"m, gate)
-                push!(get!(jobs, m[1], String[]), m[2])
-            end
-            local whole = parts -> parts == [""] || (all(p -> occursin(r"^[0-9]+/[1-9][0-9]*$", p), parts) &&
-                length(unique(map(p -> split(p, '/')[2], parts))) == 1 &&
-                sort(map(p -> parse(Int, split(p, '/')[1]), parts)) == collect(0:parse(Int, split(parts[1], '/')[2]) - 1))
-            local matrix_ok = length(runs) == 8 && keys(jobs) == runs && all(whole, values(jobs))
-            # the closure predicate (A23E4, A23E6): a dispatch or schedule, or a pushed head
-            # with a line `Closes: C<digit>…`, grep's '^Closes: C[0-9]+' spelt for an expression (the
-            # message after a newline holds a newline, `Closes: C` and a digit), one text in gate.yml's
-            # run-name, its closure job and every job with no `needs:` of ci.yml, formal.yml and downstream.yml
-            # the march branch, dev/ship.sh's MARCH, the one branch whose push triggers the workflows (one
-            # branch on origin: Dale 2026-10-28), each run of its push in that head's own concurrency group
-            local ship = read(joinpath(ROOT, "dev", "ship.sh"), String)
-            local mm = match(r"^MARCH=([A-Za-z0-9._-]+)$"m, ship)
-            local march = mm === nothing ? "?" : String(mm[1])
-            local trig = "\non:\n  push:\n    branches: ['$march']\n  workflow_dispatch:\n"
-            local own_group = "\${{ github.ref == 'refs/heads/$march' && github.sha || github.ref }}\n  cancel-in-progress: true\n"
-            local P = "github.event_name != 'push' || " *
-                join(("contains(format('{0}{1}', fromJSON('\"\\n\"'), github.event.head_commit.message), format('{0}Closes: C$d', fromJSON('\"\\n\"')))" for d in 0:9), " || ")
-            local pinned_push = map(("ci.yml", "formal.yml", "downstream.yml")) do f
-                local c = _code(joinpath(wf, f))
-                local js = split(last(split(c, "\njobs:\n"; limit = 2)), r"(?m)^(?=  [A-Za-z0-9_-]+:\s*$)"; keepempty = false)
-                local roots = filter(j -> occursin(r"^  [A-Za-z0-9_-]+:\s*$"m, j) && !occursin(r"^    needs:"m, j), js)
-                occursin(trig, c) && occursin(own_group, c) &&
-                    !occursin(r"^\s*(pull_request|pull_request_target|workflow_run|workflow_call):"m, c) &&
-                    count(r"^\s*push:"m, c) == 1 && !occursin("branches-ignore", c) && !occursin(r"^on:[ \t]*\S"m, c) &&
-                    !isempty(roots) && all(j -> occursin(r"^  [A-Za-z0-9_-]+:\n    if: >-\n      \$\{\{ "m * P * " }}\n", j), roots)
-            end
-            count(!, [occursin("lane suite suite", gated),
-                      occursin(raw"shards=\"0,2 1,2\"; [ \"$only\" = suite ] && [ -n \"$part\" ] && shards=\"$pi,$pn\"", lanes),
-                      occursin(raw"  for s in $shards; do" * "\n" * raw"    WT_VALIDATE=1 WT_SHARD=\"$s\" $JULIA --project=. -e 'using Pkg; Pkg.test()' > \"$d/shard$s.log\" 2>&1 &", lanes),
-                      occursin("lane smoke-1.13 julia +1.13 --project=. test/smoke.jl", gated),
-                      occursin("\n| full matrix at clause closure (`Closes: C<n>`), #128's merge head, dispatch | `bash dev/gate.sh` |\n", agents),
-                      # the full matrix only at clause closure (Dale 2026-10-21): the closure job decides, every other job waits on it,
-                      # a `Closes: C<n>` line only on a tree whose ratchet reads C<n> CLOSED (the commit hook and the landing)
-                      occursin("\n  closure:\n", gate) &&
-                          occursin("          RUN: >-\n            \${{ " * P * " }}\n        run: |\n          if [ \"\$RUN\" = true ]; then\n", gate) &&
-                          occursin("\nrun-name: >-\n  \${{ (" * P * ") && 'Gate closure' || 'Gate (no closure)' }}\n", gate) &&
-                          count("    needs: closure\n    if: needs.closure.outputs.run == 'true'\n", gate) == 1,
-                      occursin(raw"        printf '%s\n' \"$status\" | grep -qE \"^$c +.* CLOSED( |$)\" ||", read(joinpath(ROOT, "dev", "hooks", "commit-msg"), String)),
-                      # a landed head reaches gate.yml by a push of the march branch's: no other ref
-                      # every push is the march branch's (each green commit of a landing pushed as it passes, 2320c60d), never another ref
-                      count(r"\bgit\b[^\n]*\bpush\b", ship) >= 1 &&
-                      count(r"\bgit\b[^\n]*\bpush\b", ship) == count(r"\bgit push -q origin HEAD:(\$MARCH|'\"\$MARCH\"')", ship) &&
-                      occursin(r"^if git push -q origin HEAD:\$MARCH; then$"m, ship) && !occursin("refs/heads/", ship),
-                      # the first red lane ends the run (batch 111: a 1.13 failure surfaced at minute 29)
-                      occursin(raw"stop() { [ $fail -eq 0 ] || { echo \"LANES red\"; exit 1; }; }", lanes),
-                      occursin(join([raw"lane ratchet  $JULIA --project=. test/parity_ratchet.jl", "stop"], '\n'), lanes),
-                      occursin(join([raw"join_bg \"$d/s113\" \"$d/formal\"; rm -rf dev/formal/states", "stop"], '\n'), lanes),
-                      occursin(join([raw"stop", raw"lane suite suite"], '\n'), gated),
-                      # --lane runs one lane of the same run: every other lane is a no-op
-                      occursin(raw"want() { [ -z \"$only\" ] || [ \"$only\" = \"$1\" ]; }", lanes),
-                      occursin(join([raw"  local name=$1; shift", raw"  want \"$name\" || return 0"], '\n'), lanes),
-                      # each skip fails the gate (A12P6): a default julia that is not 1.12 ...
-                      occursin(join([
-                          raw"if ! want probes && ! want suite; then :",
-                          raw"elif $JULIA -e 'exit(VERSION.major == 1 && VERSION.minor == 12 ? 0 : 1)'; then",
-                          raw"  lane probes $JULIA --project=. test/probe_bytes.jl",
-                          raw"else",
-                          raw"  printf '  FAIL probes         (the default julia is not 1.12: the probes and the suite are 1.12 lanes; juliaup default 1.12)\n'; fail=1",
-                          raw"fi"], '\n'), gated),
-                      # ... no working java ...
-                      occursin(join([
-                          raw"if ! want formal; then :",
-                          raw"elif java -version >/dev/null 2>&1; then bg \"$d/formal\" lane formal bash dev/formal/run_tlc.sh",
-                          raw"else printf '  FAIL formal         (no working java: TLC needs one, brew install openjdk@17)\n'; fail=1; fi"], '\n'), gated),
-                      # ... and a JULIA= override or no julia +1.13
-                      occursin(join([
-                          raw"if ! want smoke-1.13; then :",
-                          raw"elif [ \"$JULIA\" != \"julia\" ]; then",
-                          raw"  printf '  FAIL smoke-1.13     (the gate runs on the default julia, not %s)\n' \"$JULIA\"; fail=1",
-                          raw"elif julia +1.13 -e 'exit(0)' >/dev/null 2>&1; then",
-                          raw"  bg \"$d/s113\" lane smoke-1.13 julia +1.13 --project=. test/smoke.jl",
-                          raw"else",
-                          raw"  printf '  FAIL smoke-1.13     (julia +1.13 is not installed: juliaup add 1.13)\n'; fail=1",
-                          raw"fi"], '\n'), gated),
-                      # the wasm engine is CI's: ci.yml's node-version, a Node of another major fails
-                      occursin(join([
-                          raw"NODE_MAJOR=$(sed -n \"s/^ *node-version: *'\{0,1\}\([0-9][0-9]*\).*/\1/p\" .github/workflows/ci.yml | head -1)",
-                          raw"ci_node=\"$(brew --prefix \"node@$NODE_MAJOR\" 2>/dev/null)/bin\"",
-                          raw"[ -x \"$ci_node/node\" ] && export PATH=\"$ci_node:$PATH\"",
-                          raw"node_major=$(node --version 2>/dev/null | sed 's/^v\([0-9]*\).*/\1/')",
-                          raw"printf '  node %s (CI: %s)\n' \"$(node --version 2>/dev/null)\" \"$NODE_MAJOR\"",
-                          raw"if [ -z \"$NODE_MAJOR\" ] || [ \"$node_major\" != \"$NODE_MAJOR\" ]; then",
-                          raw"  printf '  FAIL node           (the wasm engine is not CI'\"'\"'s Node %s: brew install node@%s)\n' \"$NODE_MAJOR\" \"$NODE_MAJOR\"; fail=1",
-                          raw"fi"], '\n'), lanes),
-                      # gate.yml: the default run's lanes, each part of each split lane, one job each ...
-                      matrix_ok,
-                      occursin(raw"          bash dev/lanes.sh --lane ${{ matrix.lane }}${{ matrix.part != '' && format(' --part {0}', matrix.part) || '' }}${{ matrix.lane == 'formal' && ' --all' || '' }}", gate),
-                      # ... the first red job cancels the rest ...
-                      occursin("      fail-fast: true\n", gate) && !occursin("fail-fast: false", gate),
-                      # ... `julia` 1.12 and `julia +1.13` as the script calls them ...
-                      # (in every job that installs Julia)
-                      count("      - name: Julia (juliaup)\n", gate) >= 1 &&
-                          count(raw"          channel 1.12 && \"$J\" default 1.12" * "\n", gate) == count("      - name: Julia (juliaup)\n", gate),
-                      occursin(raw"          if [ \"${{ matrix.lane }}\" = smoke-1.13 ] || [ \"${{ matrix.lane }}\" = legacy-1.13 ]; then channel 1.13; fi", gate),
-                      # ... and WT1's smoke, the agreement oracle legacy/'s deletion rule reads, on both versions
-                      occursin(join([raw"  bg \"$d/l113\" lane legacy-1.13 julia +1.13 --project=legacy legacy/test/smoke.jl",
-                                     raw"  lane legacy julia --project=legacy legacy/test/smoke.jl",
-                                     raw"  join_bg \"$d/l113\""], '\n'), gated),
-                      # ... CI's Node major, read from ci.yml's node-version ...
-                      # (every job's: a job of its own Node passed while another kept the line)
-                      let majors = count("      - name: CI's Node major\n", gate),
-                          reads = count(raw"          echo \"node=$(sed -n \"s/^ *node-version: *'\{0,1\}\([0-9][0-9]*\).*/\1/p\" .github/workflows/ci.yml | head -1)\" >> \"$GITHUB_OUTPUT\"", gate),
-                          versions = filter(l -> occursin(r"^\s*node-version:", l), split(gate, '\n'))
-                          majors >= 1 && reads == majors && length(versions) == majors &&
-                              all(==(raw"          node-version: ${{ steps.ci.outputs.node }}"), versions)
-                      end,
-                      # ... no lane variable set by the workflow (the script sets them) ...
-                      !occursin(r"\b(WT|TLC)_[A-Z_]+", gate),
-                      # ... and on the march branch alone
-                      occursin(trig * "\n", gate) && occursin(own_group, gate) &&
-                          !occursin(r"^\s*(pull_request|schedule|workflow_run|workflow_call):"m, gate),
-                      # ci.yml's, formal.yml's and downstream.yml's triggers are gate.yml's (march
-                      # branch pushes, a dispatch; no pull request, no branches-ignore, no inline push),
-                      # each job with no `needs:` under the closure predicate
-                      pinned_push...,
-                      occursin("\n| CI, Formal models, Downstream: the same triggers, never a plain landing | `.github/workflows` |\n", agents),
-                      # dev/gate.sh pushes nothing: it finds the run a wt2 push started; no gate-fast workflow
-                      !occursin(r"\bgit\b[^\n]*\bpush\b", _code(joinpath(ROOT, "dev", "gate.sh"))) &&
-                          occursin(raw"  run=$(api gh run list --branch \"$MARCH\"", read(joinpath(ROOT, "dev", "gate.sh"), String)) &&
-                          !isfile(joinpath(wf, "gate-fast.yml")),
-                      smoke_dealing_faults() == 0])
+            local v = gate_matrix_misses(gate_matrix_files())
+            local n = gate_matrix_negatives_missed()
+            foreach(x -> println("    ✗ ", x), n)
+            v + length(n)
         end),
     "L162_the_gate_has_a_budget" => ("the full matrix gives its verdict in minutes, though it never holds a landing (L153): every lane of `bash dev/lanes.sh`'s default run on CI's runners (gate.yml, one job each) within a budget of 20 minutes per lane job, the lane job's `timeout-minutes: 20` exactly, so a slow lane and a hung one are both cut at the budget, red, and fail-fast cancels the rest, and gate.yml holds no other timeout; dev/gate.sh reads the budget from gate.yml's lane job (one source), prints the slowest lane job against it and marks a job past it; AGENTS.md's enforcement table names `bash dev/gate.sh` as the full matrix at clause closure (`Closes: C<n>`), on #128's merge head and on dispatch. The budget is admitted by five consecutive green runs on the final matrix, cold-cache runs (a new gate branch) among them, each with every lane job <= 0.95 B = 1140 s; it is lowered only, never raised: a lane past it is rebalanced or split first (Dale 2026-10-09, the gate \"~15-20 min\"); intent: a closure matrix gives its verdict while its red is still the next item; band: 20 minutes per lane job, GitHub's own timeout its edge (dev/CHARTER.md C10)",
         () -> begin
-            local gate = read(joinpath(ROOT, ".github", "workflows", "gate.yml"), String)
-            local sh = read(joinpath(ROOT, "dev", "gate.sh"), String)
-            local agents = replace(read(joinpath(ROOT, "AGENTS.md"), String), r"\s+" => " ")
-            local job(name) = (m = match(Regex("(?s)\\n  " * name * ":\\n(.*?)(?=\\n  [a-z][a-z-]*:\\n|\\z)"), gate); m === nothing ? "" : m.captures[1])
-            local lane_t = [parse(Int, m[1]) for m in eachmatch(r"^    timeout-minutes: (\d+)\b"m, job("lane"))]
-            count(!, [lane_t == [20],
-                      length(collect(eachmatch(r"timeout-minutes:", gate))) == 1,
-                      occursin("| full matrix at clause closure (`Closes: C<n>`), #128's merge head, dispatch | `bash dev/gate.sh` |", agents),
-                      occursin(raw"budget=$(awk '/^  lane:$/ { inlane = 1; next } /^  [a-z][a-z-]*:$/ { inlane = 0 }", sh) &&
-                          occursin(raw"inlane && /^    timeout-minutes:/ { print $2; exit }' .github/workflows/gate.yml)", sh) &&
-                          occursin(raw"-v B=\"$budget\"", sh) && occursin("PAST THE %d-MINUTE BUDGET", sh)])
+            local n = gate_budget_negatives_missed()
+            foreach(x -> println("    ✗ ", x), n)
+            gate_budget_misses(gate_budget_files()) + length(n)
         end),
     "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every row names its clauses: no finding ID in any clause's Planned text; every row it cites exists; each row names in its Clause column exactly the clauses whose Planned cites it, and a row that names none (1.M the merge, 1.P post-merge) is cited by none; and every finding the latest dev/AUDIT.md entry's Resolution leaves open on a row (a MARCH row 1.<x> or a ledger row D<n>) sits on that row, until a commit after the entry's own carries a `Fixes:` line naming it, a line listing finding IDs alone (dev/hooks/commit-msg refuses any other, and a partial fix's `Narrows: <ID> — <what>` frees no row, A81S3), and every row it names exists (A32E3). Audits then lengthen MARCH rows and their own entries, not the charter (A3P4). Behavior, run here: a planted entry's five open findings, read, and four planted rows and fixes answer as stated (dev/CHARTER.md C0)",
         () -> begin
@@ -4964,22 +5114,10 @@ const LOCKS = [
             end
             length(v)
         end),
-    "L129_plan_holds_only_open_work" => ("dev/MARCH.md lists open work only — at most 60 lines, no finished row (`| done |`) and no results section — and dev/HISTORY.md stays an archive of short entries (at most 160 lines, each `## ` entry at most 25). Finished work leaves the plan in the commit that closes it; results live in commit messages and this harness's output; intent: the plan and the history stay short enough to read whole; band: the caps above, their edge (dev/CHARTER.md C9)",
+    "L129_plan_holds_only_open_work" => ("dev/MARCH.md lists open work only — at most 60 lines, no finished row (`| done |`) and no results section — and dev/HISTORY.md stays an archive of short entries (at most 160 lines, each `## ` entry at most 25). Finished work leaves the plan in the commit that closes it; results live in commit messages and this harness's output; intent: the plan and the history stay short enough to read whole; band: the caps above, their edge (dev/CHARTER.md C9) Behavior, run here: planted plans and histories answer as stated",
         () -> begin
-            v = String[]
-            plan = _lines(joinpath(ROOT, "dev", "MARCH.md"))
-            length(plan) <= 60 || push!(v, "dev/MARCH.md has $(length(plan)) lines (cap 60)")
-            for (i, l) in enumerate(plan)
-                (occursin(r"\|\s*done\s*\|"i, l) || occursin(r"^#+ .*\bresults?\b"i, l)) &&
-                    push!(v, "dev/MARCH.md:$i holds finished work: $(first(l, 60))")
-            end
-            hist = _lines(joinpath(ROOT, "dev", "HISTORY.md"))
-            length(hist) <= 160 || push!(v, "dev/HISTORY.md has $(length(hist)) lines (cap 160)")
-            starts = [i for (i, l) in enumerate(hist) if startswith(l, "## ")]
-            for (k, i) in enumerate(starts)
-                n = (k < length(starts) ? starts[k + 1] : length(hist) + 1) - i
-                n <= 25 || push!(v, "dev/HISTORY.md entry at line $i is $n lines (cap 25)")
-            end
+            local v = vcat(plan_faults(_lines(joinpath(ROOT, "dev", "MARCH.md")), _lines(joinpath(ROOT, "dev", "HISTORY.md"))),
+                           plan_negatives_missed())
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
