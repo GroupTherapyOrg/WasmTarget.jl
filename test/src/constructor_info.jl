@@ -35,6 +35,13 @@ end
     D.collect_initializer_usages(init_collector, mi)
     @test isempty(init_collector.variables_captured) && isempty(init_collector.variables_stored_in_fields)
     @test D.visit_type_parameter_type(init_collector, TypeVar(:T)) === nothing && length(init_collector.used_type_parameters) == 1
+    # a root context, which Julia's closure conversion never leaves (Closures._collectContexts makes
+    # none), is WasmTarget's own defect: refused Internal at its statement, never read as captures
+    local planted = D.Closures(Val(:_), t, mi)
+    planted.contexts[mi] = D.Context(Val(:_), mi, nothing, false)
+    local er = try D.collect_initializer_usages(D._UsageCollector(t, planted), mi); nothing catch e; e end
+    @test er isa WasmTarget.RejectionError && er.rejection isa WasmTarget.Internal &&
+          occursin("closure conversion leaves a member no capture", er.rejection.site)
     # ConstructorInfo reads the member's closures (the translator's getClosures), made once by
     # getConstructorInfo
     local info = D.get_constructor_info(t, mi)

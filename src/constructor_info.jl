@@ -106,19 +106,19 @@ end
 The variables a constructor's initializer list uses: the variables its root context holds, captured
 by closures; then each initializer, of which a Julia constructor has none, by construction: its body
 ends in `new`, Julia's struct allocation, and no initializer list precedes it (julia/src/codegen.cpp's
-emit_new_struct takes the fields `new` passes). A root context waits on the capture collection:
-Closures._collectContexts (closures.dart:1524) does not yet collect a Julia constructor's captured
-locals (a closure capturing one, Core.Box or a closure struct), so `closures.contexts` holds none today,
-and the arm adding a root context's variables rejects Unported there, located, until it does.
+emit_new_struct takes the fields `new` passes). A constructor has no root context, by Julia's answer:
+Julia lowering's closure conversion makes each nested function a closure type of its own whose fields
+are the variables it captures, so a member keeps no capture (Closures._findCaptures), and
+Closures._collectContexts (closures.dart:1524, src/closures.jl) refuses any capture, Internal, and
+makes no context: nothing writes `closures.contexts`. dart's arm (constructor_info.dart:120-126, the
+context's variables added to variablesCaptured) has no input in a Julia program; a root context here is
+WasmTarget's own defect, Internal.
 """
 @parity "dart2wasm/lib/constructor_info.dart:119 _UsageCollector.collectInitializerUsages" function collect_initializer_usages(self::_UsageCollector, constructor::Core.MethodInstance)::Nothing
     local root_context = get(self.closures.contexts, constructor, nothing)
-    if root_context !== nothing
-        root_context.parent === nothing ||
-            reject!(Internal("dart2wasm/lib/constructor_info.dart:122 _UsageCollector.collectInitializerUsages: the constructor's root context has a parent"), "_UsageCollector.collectInitializerUsages")
-        # this arm waits on the capture collection (Closures._collectContexts), which makes no context yet
-        reject!(Unported("dart2wasm/lib/closures.dart:1524 Closures._collectContexts"), "_UsageCollector.collectInitializerUsages: the root context of $constructor, its captured variables")
-    end
+    # Julia's closure conversion leaves a member no capture, so _collectContexts makes no context
+    root_context === nothing ||
+        reject!(Internal("dart2wasm/lib/constructor_info.dart:120 _UsageCollector.collectInitializerUsages: a root context of $constructor, where Julia lowering's closure conversion leaves a member no capture and Closures._collectContexts (closures.dart:1524) makes no context"), "_UsageCollector.collectInitializerUsages")
     # a Julia constructor has no initializer list: no initializer to visit
     return nothing
 end

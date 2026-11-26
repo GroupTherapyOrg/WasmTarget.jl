@@ -2637,7 +2637,7 @@ end
     return nothing
 end
 
-# a Julia method is synchronous (tasks are out of scope, rejected by Julia's verifier) and never a
+# a Julia method is synchronous (a Task is a foreign call WasmTarget refuses, nir_foreign_import) and never a
 # constructor or tear-off (a struct's constructor is Expr(:new) in a body, a function a value), and a
 # field's accessor has its generator, so the inlinable generator is always found
 @parity "dart2wasm/lib/code_generator.dart:3463 getMemberCodeGenerator" function get_member_code_generator(translator::Translator, function_builder::WasmBuilder.FunctionBuilder, member_reference::Reference)::CodeGenerator
@@ -2647,8 +2647,8 @@ end
 end
 
 # a lambda's enclosing member is a Julia method, which no class encloses, so dart's cyclic-class test
-# never holds (getInlinableMemberCodeGenerator), and tasks are out of scope, Julia's verifier rejecting them
-# (the Kernel table's AsyncMarker row), so every lambda is synchronous
+# never holds (getInlinableMemberCodeGenerator), and a Julia function has no async or sync* marker (the Kernel
+# table's AsyncMarker row; a Task is a foreign call WasmTarget refuses, nir_foreign_import), so every lambda is synchronous
 @parity "dart2wasm/lib/code_generator.dart:3502 getLambdaCodeGenerator" get_lambda_code_generator(translator::Translator, lambda::Lambda)::CodeGenerator =
     SynchronousLambdaCodeGenerator(translator, lambda)
 
@@ -3334,20 +3334,22 @@ end
     return nothing
 end
 
-# a suspend state is an async or sync* function's (async.dart, sync_star.dart, its only callers), and
-# tasks are out of scope, Julia's verifier rejecting them (the Kernel table's AsyncMarker row)
+# a suspend state is an async or sync* function's (async.dart, sync_star.dart, its only callers), which no
+# Julia function is (the Kernel table's AsyncMarker row): a Julia Task is a foreign call,
+# ccall(:jl_new_task) (julia/base/boot.jl:578), which WasmTarget refuses at its foreign-call gap
+# (nir_foreign_import), not Julia's verifier, whose ccall denylist is :jl_apply alone
+# (Compiler/src/verifytrim.jl:44)
 @parity "dart2wasm/lib/code_generator.dart:5933 MacroAssembler.restoreSuspendStateContext" restore_suspend_state_context(self::WasmBuilder.InstructionsBuilder, suspend_state_local::WasmBuilder.IR.Local, suspend_state_struct::WasmBuilder.IR.StructType, suspend_state_context_field::Int64, closures::Closures, context::Union{Nothing,Context}, this_local::Union{Nothing,WasmBuilder.IR.Local}; clone_context_for::Union{Nothing,NirBody} = nothing)::Union{} =
-    reject!(Internal("dart2wasm/lib/code_generator.dart:5933 MacroAssembler.restoreSuspendStateContext: a suspend state's context; tasks are out of scope, Julia's verifier rejecting them"), "restore_suspend_state_context")
+    reject!(Internal("dart2wasm/lib/code_generator.dart:5933 MacroAssembler.restoreSuspendStateContext: a suspend state's context, which no Julia function has: a Julia Task is a foreign call, ccall(:jl_new_task) (julia/base/boot.jl:578), which WasmTarget refuses at its foreign-call gap (nir_foreign_import), not Julia's verifier, whose ccall denylist is :jl_apply alone (Compiler/src/verifytrim.jl:44)"), "restore_suspend_state_context")
 
 # its one caller, restoreSuspendStateContext, restores an async or sync* function's suspend state,
-# which tasks being out of scope never reaches (the Kernel table's AsyncMarker row): no src caller
+# which no Julia function has (the Kernel table's AsyncMarker row): no src caller
 @parity "dart2wasm/lib/code_generator.dart:5962 MacroAssembler.restoreThisAndContextChain" restore_this_and_context_chain(self::WasmBuilder.InstructionsBuilder, innermost_context::Context, this_local::Union{Nothing,WasmBuilder.IR.Local})::Union{} =
-    reject!(Internal("dart2wasm/lib/code_generator.dart:5962 MacroAssembler.restoreThisAndContextChain: a context chain restored for a suspend state; tasks are out of scope, Julia's verifier rejecting them (the Kernel table's AsyncMarker row)"), "restore_this_and_context_chain")
+    reject!(Internal("dart2wasm/lib/code_generator.dart:5962 MacroAssembler.restoreThisAndContextChain: a context chain restored for a suspend state, which no Julia function has (the Kernel table's AsyncMarker row): a Julia Task is a foreign call, ccall(:jl_new_task) (julia/base/boot.jl:578), which WasmTarget refuses at its foreign-call gap (nir_foreign_import), not Julia's verifier, whose ccall denylist is :jl_apply alone (Compiler/src/verifytrim.jl:44)"), "restore_this_and_context_chain")
 
-# called only while restoring a suspend state (restoreSuspendStateContext), which tasks being out of
-# scope never reaches
+# called only while restoring a suspend state (restoreSuspendStateContext), which no Julia function has
 @parity "dart2wasm/lib/code_generator.dart:5994 MacroAssembler.cloneFunctionLevelContext" clone_function_level_context(self::WasmBuilder.InstructionsBuilder, closures::Closures, context::Context, function_node::NirBody)::Union{} =
-    reject!(Internal("dart2wasm/lib/code_generator.dart:5994 MacroAssembler.cloneFunctionLevelContext: a context cloned for a suspend state; tasks are out of scope, Julia's verifier rejecting them"), "clone_function_level_context")
+    reject!(Internal("dart2wasm/lib/code_generator.dart:5994 MacroAssembler.cloneFunctionLevelContext: a context cloned for a suspend state, which no Julia function has: a Julia Task is a foreign call, ccall(:jl_new_task) (julia/base/boot.jl:578), which WasmTarget refuses at its foreign-call gap (nir_foreign_import), not Julia's verifier, whose ccall denylist is :jl_apply alone (Compiler/src/verifytrim.jl:44)"), "clone_function_level_context")
 
 @parity "dart2wasm/lib/code_generator.dart:6035 MacroAssembler.invoke" function MacroAssembler_invoke(self::WasmBuilder.InstructionsBuilder, target::CallTarget; force_inline::Bool = false)::Vector{WasmBuilder.IR.ValueType}
     if supports_inlining(target)
