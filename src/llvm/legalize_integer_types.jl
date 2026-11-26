@@ -21,7 +21,9 @@
 # does not build. WasmTarget knows a value only as a literal (a constant SDValue), so each branch they
 # decide is taken where the operands are literals and named where it is not taken.
 
-# The halves of a constant: its low bits, and its bits shifted down by the half's width
+# The halves of a constant: its low bits, and its bits shifted down by the half's width. LLVM reads the
+# constant's APInt, its 128 bits whatever Julia class holds them: a caller holding a `primitive type P
+# 128` (Julia's i128 too, src/julia/classes.jl type_expand_integer) passes its bits, reinterpreted
 @parity "llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp:4296 DAGTypeLegalizer::ExpandIntRes_Constant" function expand_int_res_constant(cst::Union{Int128,UInt128})::Tuple{Int64,Int64}
     return (cst % Int64, (cst >>> 64) % Int64)
 end

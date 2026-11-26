@@ -754,11 +754,16 @@ end
 
 Whether LLVM's type legalizer expands a value of Julia's type `T` into two halves: an integer wider than
 the target's largest integer register, i64 on wasm (llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp:64),
-takes TypeExpandInteger. Julia's integers that wide are its 128-bit Base.BitInteger types, Int128 and
-UInt128, whose class is the struct of their two i64 halves (class_instance_fields); another 128-bit
-primitive type has no such class yet and rejects, located, where it is translated."""
-@quarantine "llvm/lib/CodeGen/TargetLoweringBase.cpp:1726 TargetLoweringBase::computeRegisterProperties gives every integer type wider than the largest integer register the action TypeExpandInteger, two halves of the next narrower type" Base.BitInteger function type_expand_integer(@nospecialize(T::Any))::Bool
-    return T isa DataType && T <: Base.BitInteger && 8 * sizeof(T) > 64
+takes TypeExpandInteger. Julia's codegen gives every 128-bit primitive class the LLVM integer i128
+(julia/src/cgutils.cpp:668 bitstype_to_llvm: the integer of `jl_datatype_size` × 8 bits, its float and
+pointer classes being narrower), its 128-bit Base.BitInteger types, Int128 and UInt128, and a `primitive
+type P 128` alike; i128 is the simple type computeRegisterProperties expands into two i64 halves, so each
+such class is the struct of its two i64 halves (class_instance_fields). A wider integer, or one whose width
+is no power of two (an i96, which getTypeConversion's extended-scalar block, :1421-1435, promotes to an
+i128 first, its bits above its own undefined), is no two halves of its own and rejects, located, where it
+is translated."""
+@quarantine pin"julia/src/cgutils.cpp:668 bitstype_to_llvm" "llvm/lib/CodeGen/TargetLoweringBase.cpp:1726 TargetLoweringBase::computeRegisterProperties gives every integer type wider than the largest integer register the action TypeExpandInteger, two halves of the next narrower type; Julia's codegen gives a 128-bit primitive class the integer i128" Base.isprimitivetype function type_expand_integer(@nospecialize(T::Any))::Bool
+    return T isa DataType && isprimitivetype(T) && 8 * sizeof(T) == 128
 end
 
 """    type_promote_integer(T) -> Union{Type{UInt32},Type{UInt64},Nothing}
@@ -774,7 +779,8 @@ TypePromoteInteger (llvm/lib/CodeGen/TargetLoweringBase.cpp:1754 for a simple ty
 rounds an extended one, an i24 or an i40, up to its power of two first), wasm's legal integers being i32
 and i64 (llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp:63-64); a pointer of address space 0 is the
 integer of the data layout's pointer width, the 64 bits native Julia's `sizeof(Ptr{T})` answers on this
-host. An integer wider than i64 is TypeExpandInteger's (type_expand_integer), the half floats are
+host. A 128-bit integer (i128) is TypeExpandInteger's (type_expand_integer); a wider integer, or one
+whose width is no power of two, is not yet ported and rejects; the half floats are
 LLVM's soft-promoted halves and an `LLVMPtr` a pointer of another address space: each `nothing`,
 rejected, located, where it is translated.
 
@@ -845,7 +851,7 @@ allocation may leave undefined whose type admits `nothing`, dart's late lowering
         # mutable array, filled at a run-time length, its elements top-typed
         RunTimeArity => ClassField[ClassField(c, 0, "data", WasmArray{Any}, false)]
     end
-    # a 128-bit integer (Int128, UInt128): its two 64-bit halves, LLVM's legalization of an i128 on a
+    # a 128-bit primitive class (Int128, UInt128, a `primitive type P 128`: type_expand_integer): its two 64-bit halves, LLVM's legalization of an i128 on a
     # 64-bit target (llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp, ExpandIntegerResult:
     # the low and the high i64), each a field of the class's struct, as the value is one wasm value
     isprimitivetype(c) && type_expand_integer(c) &&

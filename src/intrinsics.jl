@@ -3533,11 +3533,11 @@ end
         i === nothing ? reject!(Internal("src/intrinsics.jl generateStaticIntrinsic: the 128-bit class $T has no class info"), at) : i)
     # the halves' field indices, low then high
     local fields(T::DataType) = (local fs = class_instance_fields(T, at); (t.field_index[fs[1]], t.field_index[fs[2]]))
-    local literal(v::NirValue) = v isa NirConst && v.c.val isa Union{Int128,UInt128}
+    local literal(v::NirValue) = v isa NirConst && type_expand_integer(typeof(v.c.val))
     # GetExpandedInteger: the halves of a 128-bit operand
     local read = Tuple{NirValue,Tuple{WasmBuilder.IR.Local,WasmBuilder.IR.Local}}[]
     local expanded(v::NirValue) = begin
-        literal(v) && return LLVM.expand_int_res_constant(v.c.val)
+        literal(v) && return LLVM.expand_int_res_constant(reinterpret(UInt128, v.c.val))
         for (w, h) in read
             w == v && return h
         end
@@ -3672,7 +3672,7 @@ end
         local y = args[2]
         if literal(y)
             # a literal y: x where y is not negative, else 0 less x; both literals, their constant
-            literal(x) && return make(T_, LLVM.expand_int_res_constant(reinterpret(Int128, y.c.val) >= 0 ? x.c.val : -x.c.val))
+            literal(x) && return make(T_, LLVM.expand_int_res_constant(reinterpret(Int128, y.c.val) >= 0 ? reinterpret(Int128, x.c.val) : -reinterpret(Int128, x.c.val)))
             reinterpret(Int128, y.c.val) >= 0 && return make(T_, expanded(x))
             return make(T_, LLVM.expand_int_res_addsub(b, false, (Int64(0), Int64(0)), expanded(x)))
         end

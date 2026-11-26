@@ -984,7 +984,7 @@ its members, their nearest common superclass; a type as a value (`Type{X}`) is i
 A class is a primitive one's builtin type (`unbox`; nullable, its own class, the box), a primitive one
 with none its promoted integer register (`Ptr`, `Core.AddrSpace`, a `primitive type` of its own width:
 type_promote_integer), or the class's representation. A `UnionAll` other than `Type`, a primitive class
-with no wasm representation (`Float16`, an integer wider than i64 but `Int128` and `UInt128`) and a class
+with no wasm representation (`Float16`, an integer wider than i64 but an i128: type_expand_integer) and a class
 collect gave no info reject, located.
 
 The `typejoin` of a Union is its REPRESENTATION only: a value keeps its exact class, an `Int64` in a
@@ -1037,7 +1037,7 @@ the representation here is a reference to the join's struct, each value boxed in
             box === nothing && reject!(Internal("$at: the primitive class $cls has no class info, its box"), at)
             return type_with_nullability(box, nullable)
         end
-        # a 128-bit integer is its class's struct of two i64 halves (src/julia/classes.jl), a regular class
+        # a 128-bit primitive class (Julia's i128) is its class's struct of two i64 halves (src/julia/classes.jl), a regular class
         unbox && !type_expand_integer(cls) &&
             reject!(Unquarantined("src/translator.jl translateStorageType: the primitive class $cls, with no wasm representation"), at)
     end

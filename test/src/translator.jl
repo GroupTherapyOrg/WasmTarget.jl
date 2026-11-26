@@ -83,6 +83,8 @@ f_shapes(n::Int) = n > 0 ? Circle(1.0) : Square(2.0)
 primitive type P24 24 end
 primitive type P40 40 end
 primitive type P256 256 end
+primitive type P96 96 end
+primitive type P128 128 end
 end
 
 @testset "translator.dart: translateType over a class table" begin
@@ -112,8 +114,8 @@ end
         @test D.translate_storage_type(t, T) == w && D.translate_type(t, T) == w
     end
     # one LLVM holds in no integer register rejects, located: the soft-promoted half floats, an integer
-    # wider than i64 that is no 128-bit Base.BitInteger
-    for T in (Float16, Core.BFloat16, TypeCases.P256)
+    # wider than i64 that is no i128 (an i96, an i256)
+    for T in (Float16, Core.BFloat16, TypeCases.P96, TypeCases.P256)
         local e = try; D.translate_type(t, T); nothing; catch x; x; end
         @test e isa W.RejectionError && e.rejection isa W.Unquarantined
     end
@@ -142,9 +144,17 @@ end
     end
     local pi = W.constant_unmade(t, Core.TypeofVararg)
     @test pi isa W.Internal && occursin("visitInstanceConstant: the class Core.TypeofVararg of the constant has no class info", pi.site)
-    # a 128-bit integer is its class's struct of two i64 halves, a regular class: none in this world
-    local e128 = try; D.translate_type(t, Int128); nothing; catch x; x; end
-    @test e128 isa W.RejectionError && e128.rejection isa W.Internal && occursin("Int128 has no class info", e128.rejection.site)
+    # a 128-bit integer is its class's struct of two i64 halves, a regular class: none in this world;
+    # a 128-bit primitive type of its own alike (bitstype_to_llvm's i128, expanded into two i64 halves)
+    for T in (Int128, TypeCases.P128)
+        local e128 = try; D.translate_type(t, T); nothing; catch x; x; end
+        @test e128 isa W.RejectionError && e128.rejection isa W.Internal && occursin("$T has no class info", e128.rejection.site)
+    end
+    # which classes LLVM expands into two i64 halves: the 128-bit primitive classes, Julia's i128; an
+    # i96, which LLVM promotes to an i128 first, a wider one and any narrower one are not
+    @test W.type_expand_integer(Int128) && W.type_expand_integer(UInt128) && W.type_expand_integer(TypeCases.P128)
+    @test !any(W.type_expand_integer, (Int64, TypeCases.P96, TypeCases.P256, Float64, Ptr{Nothing}, Tuple{Int64,Int64}))
+    @test [f.name for f in W.class_instance_fields(TypeCases.P128, "translator")] == ["lo", "hi"]
     # Union{} and Nothing are the nullable none reference; Union{} returned, the non-nullable one
     @test D.translate_type(t, Nothing) == IR.RefType_none(; nullable = true) == D.translate_type(t, Union{})
     @test D.translate_return_type(t, Union{}) == IR.RefType_none(; nullable = false)

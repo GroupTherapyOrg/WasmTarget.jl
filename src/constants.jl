@@ -955,7 +955,7 @@ A field Julia holds no value in (`#undef`) holds the null, its set flag false wh
             local halves = class_instance_fields(cls, at)
             local k = findfirst(==(field), halves)
             k === nothing && reject!(Internal("$at: the field $(field.name) of $cls is neither of its halves"), at)
-            reinterpret(UInt64, LLVM.expand_int_res_constant(v)[k])
+            reinterpret(UInt64, LLVM.expand_int_res_constant(reinterpret(UInt128, v))[k])
         elseif field.index == 0 && cls === Module
             # a module's one field, its name (src/julia/classes.jl _module_instance_fields), the value
             # Julia holds in jl_module_t's name (julia.h:808) and reads with `nameof` (module.c
