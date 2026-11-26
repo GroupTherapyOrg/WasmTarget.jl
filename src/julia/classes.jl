@@ -1253,6 +1253,17 @@ process (each fixed when Julia makes the type; `hash` the compiling process's, a
   jl_datatype_layout_t *`): every entry a gap. No TypeName is a class of the closed world (its layout,
   with Julia's method caches, is not ported) and a WasmGC module has no addresses.
 """
+# The Julia fields of a class its class layout does not hold that a table by class id does (kind_field_table): a
+# DataType's (jl_datatype_t, julia/src/julia.h:605-626) whose type value holds dart's _InterfaceType layout (classId,
+# typeArguments = Julia's parameters), so name, super, types, instance, layout, hash and flags; no other class's.
+# The one statement of which fields those are: getfield's constant arm, its run-time switch and the dispatch
+# table's getter targets each read it
+@quarantine pin"julia/src/julia.h:626 jl_datatype_t" "a DataType's own fields its type value's layout does not hold, each read from its table by class id" Core.DataType function kind_table_fields(c::DataType, at::String)::Vector{ClassField}
+    c === DataType || return ClassField[]
+    local layout = class_instance_fields(c, at)
+    return ClassField[ClassField(c, i, string(fieldname(c, i)), fieldtype(c, i), false) for i in 1:fieldcount(c) if !any(f -> f.index == i, layout)]
+end
+
 @quarantine pin"julia/src/julia.h:626 jl_datatype_t" "a DataType's own fields in the compiling process, each by its class's type value, its #undef kept as Julia's" Core.DataType function kind_field_table(translator, i::Int, at::String)::KindFieldTable
     local f = fieldname(DataType, i)
     local entries = type_value_entries(translator)

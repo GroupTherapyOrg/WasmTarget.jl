@@ -439,6 +439,14 @@ formal(dev/formal/MCFieldSelectorTableSiteCheck.tla): a class without it raises 
             local st = get(selector_id, (field.name, true), nothing)
             field.mutable && st !== nothing && add_member(FieldReference(field, FieldReferenceKind_setter), st)
         end
+        # a field Julia's class has that its class layout does not hold, read from its table by class id (a
+        # DataType's super, types, instance, ...: src/julia/classes.jl kind_table_fields): its getter is a target as
+        # any field's (its accessor's body that table's read); no write of it is one (Julia's DataType fields are
+        # const, a write raising at its site)
+        for field in kind_table_fields(cls, at)
+            local g = get(selector_id, (field.name, false), nothing)
+            g === nothing || add_member(FieldReference(field, FieldReferenceKind_getter), g)
+        end
         selectors_in_class[cls] = selectors
     end
     local selector_targets = LinkedHashMap{SelectorInfo,LinkedHashMap{Int,Reference}}()

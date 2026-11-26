@@ -54,6 +54,16 @@ const_super(x::Int64)::Int64 = (s = _super(_type(x)); s === Signed ? 1 : s === A
 supertype_of(x::Int64)::Int64 = (s = supertype(_type(x)); s === Signed ? 1 : s === AbstractFloat ? 2 : s === Any ? 3 : 4)
 const_instance(x::Int64)::Int64 = try; (_instance(_type(x)) === nothing ? 1 : 2); catch e; e isa UndefRefError ? -1 : -2; end
 const_hash(x::Int64)::Int64 = (v = _hash(_type(x)); v isa Int32 ? Int64(v) : -1)
+# a receiver Julia's inference types Type, not DataType: the read is a get over the kind classes holding the field
+# (the dispatch table's getter targets), DataType's its table by class id; a UnionAll holds no `super`: FieldError
+@noinline _anytype(x::Int64)::Type = x == 1 ? Int64 : x == 2 ? Float64 : x == 3 ? Nothing : x == 4 ? Two : Vector
+type_super(x::Int64)::Int64 = try
+        s = _anytype(x).super; s === Signed ? 1 : s === AbstractFloat ? 2 : s === Any ? 3 : 4
+    catch e
+        e isa FieldError ? -9 : -8
+    end
+type_instance(x::Int64)::Int64 = try; (_anytype(x).instance === nothing ? 1 : 2); catch e; e isa UndefRefError ? -1 : e isa FieldError ? -9 : -2; end
+type_hash(x::Int64)::Int64 = (v = _anytype(x).hash; v isa Int32 ? Int64(v) : -1)
 end
 
 const KC = KindCases
@@ -84,6 +94,21 @@ end
     end
     # native's answers that do not depend on the process: the supertypes and the instances
     @test [c.native for c in cases][1:8] == [1, 2, 3, 1, 2, 3, -1, 1]
+    for r in Main.WTChild.run_cases(cases)
+        @test r.ok || (@info r.label r.why; false)
+    end
+end
+
+@testset "a DataType field read on a receiver inference types Type is a get over the kind classes holding it" begin
+    local cases = Main.WTChild.RunCase[]
+    for (f, xs) in ((KC.type_super, (1, 2, 3, 5)), (KC.type_instance, (1, 3, 5)), (KC.type_hash, (1, 2)))
+        local (p, o) = Main.WTVerdict._modules(WasmTarget.compile, f, (Int64(1),))
+        for x in xs
+            push!(cases, Main.WTChild.RunCase("kind_field_table/$(nameof(f))($x)", p, (Int64(x),), Main.WTChild.native_answer(f, (Int64(x),)); optimized = o))
+        end
+    end
+    # native's answers that do not depend on the process: the supertypes (Vector's FieldError) and the instances
+    @test [c.native for c in cases][1:7] == [1, 2, 3, -9, -1, 1, -9]
     for r in Main.WTChild.run_cases(cases)
         @test r.ok || (@info r.label r.why; false)
     end

@@ -2172,8 +2172,11 @@ end
     end
     # a DataType's field its type value's layout does not hold (`T.super`, supertype's read): its table by class id,
     # the one read the run-time name's arm makes too (kind_field_table)
-    if k === nothing && cls === DataType
-        local got = visit_instance_get(self, node, kind_field_table(self.translator, key isa Symbol ? Base.fieldindex(DataType, key) : key, "$(julia_text(self.enclosing_member))"), receiver)
+    local index = key isa Symbol ? Base.fieldindex(cls, key, false) : key
+    if k === nothing && any(f -> f.index == index, kind_table_fields(cls, at))
+        local where_ = "$(julia_text(self.enclosing_member))"
+        local site = "$where_ (at run time, $(generate_static_intrinsic(self.intrinsifier[], Val(:statement_location), node)))"
+        local got = visit_instance_get(self, kind_field_table(self.translator, index, where_), ty -> translate_expression(self, receiver, ty), site)
         return got === nothing ? expected_type : got
     end
     k === nothing && reject!(Unquarantined("src/julia/classes.jl: the field $key of $cls, which its class layout (a kind's runtime type layout) does not hold"), "$(julia_text(self.enclosing_member))")
@@ -2220,7 +2223,8 @@ end
                 return nothing
             end
             # a DataType's field its type value's layout does not hold: its table by class id
-            local got = visit_instance_get(self, node, f, receiver)
+            local got = visit_instance_get(self, f, ty -> translate_expression(self, receiver, ty),
+                "$where_ (at run time, $(generate_static_intrinsic(self.intrinsifier[], Val(:statement_location), node)))")
             got === nothing || convert_type(t, b, got, result[]; boxed_class = f.type isa DataType ? f.type : nothing)
             return nothing
         end)
@@ -2232,10 +2236,12 @@ end
 # formal(dev/formal/KindFieldTable.tla)), as dart keeps a per-class runtime fact in a table indexed by class id
 # (types.dart:1424 RuntimeTypeInformation._getTypeNames): the receiver's class id, the entry of each table, its
 # state (jl_get_nth_field_checked's #undef raises UndefRefError; a gap is the fatal arm, located), then its value.
-# The one read of such a field, whether its name is a constant (visitInstanceGet's constant arm) or only run time
-# knows it (the run-time switch's arm). Leaves the value's wasm type, or nothing where the field is every entry a
+# The one read of such a field, whether its name is a constant (visitInstanceGet's constant arm), only run time
+# knows it (the run-time switch's arm), or a receiver of a wider type reads it through its getter (the dispatch
+# table's target, ImplicitFieldAccessorCodeGenerator's body). `push_receiver(type)` leaves the receiver at `type`;
+# `site` names the read for the fatal arm. Leaves the value's wasm type, or nothing where the field is every entry a
 # gap and the read ends at the fatal arm
-@parity "dart2wasm/lib/code_generator.dart:2258 AstCodeGenerator.visitInstanceGet" function visit_instance_get(self::AstCodeGenerator, node::NirCall, f::KindFieldTable, receiver::NirValue)::Union{WasmBuilder.IR.ValueType,Nothing}
+@parity "dart2wasm/lib/code_generator.dart:2258 AstCodeGenerator.visitInstanceGet" function visit_instance_get(self::AstCodeGenerator, f::KindFieldTable, push_receiver::Function, site::String)::Union{WasmBuilder.IR.ValueType,Nothing}
     local at = "dart2wasm/lib/code_generator.dart:2258 AstCodeGenerator.visitInstanceGet"
     local where_ = "$(julia_text(self.enclosing_member))"
     local t = self.translator
@@ -2243,9 +2249,8 @@ end
     local info = get(t.class_info, DataType, nothing)
     info === nothing && reject!(Internal("$at: a field of DataType read where DataType has no class info"), where_)
     local id_field = only(c for c in class_instance_fields(DataType, at) if c.name == "classId")
-    local class_id()::Nothing = (translate_expression(self, receiver, info.non_nullable_type);
+    local class_id()::Nothing = (push_receiver(info.non_nullable_type);
                                  WasmBuilder.struct_get(b, info.struct_, t.field_index[id_field]); nothing)
-    local site = "$where_ (at run time, $(generate_static_intrinsic(self.intrinsifier[], Val(:statement_location), node)))"
     local fatal()::Nothing = generate_static_intrinsic(self.intrinsifier[], Val(:fatal), Unquarantined(f.gap), site)
     local table(T::Type, entries::Vector{NirConst})::WasmBuilder.IR.ArrayType = begin
         local array_type = array_type_for_dart_type(t, T; mutable_ = true)
@@ -2316,11 +2321,12 @@ end
     # Julia's fields in Julia's order (jl_field_names), each the field of the class's layout at its index;
     # a DataType's field its type value's layout does not hold is its table by class id (kind_field_table)
     local layout = class_instance_fields(cls, at)
+    local table = kind_table_fields(cls, at)
     local fields = Union{ClassField,KindFieldTable}[]
     local unheld = Symbol[]
     for i in (cls <: Tuple ? (1:0) : 1:fieldcount(cls))
         local k = findfirst(f -> f.index == i, layout)
-        k !== nothing ? push!(fields, layout[k]) : cls === DataType ? push!(fields, kind_field_table(t, i, where_)) :
+        k !== nothing ? push!(fields, layout[k]) : any(f -> f.index == i, table) ? push!(fields, kind_field_table(t, i, where_)) :
             push!(unheld, fieldname(cls, i))
     end
     isempty(unheld) ||
@@ -3587,6 +3593,21 @@ Julia checks no covariant value, so no setter type-checks its argument (needToCh
     # Implicit getter or setter
     local info = get(translator.class_info, field.cls, nothing)
     info === nothing && reject!(Internal("dart2wasm/lib/code_generator.dart:4995 ImplicitFieldAccessorCodeGenerator.generateInternal: no class info for $(field.cls)"), "$(julia_text(self.enclosing_member))")
+    # a field its class layout does not hold, held by a table by class id (src/julia/classes.jl kind_table_fields): the
+    # getter's body is that table's read (visitInstanceGet's), `this` the receiver; the dispatch table makes no
+    # setter of it
+    if any(f -> f == field, kind_table_fields(field.cls, "ImplicitFieldAccessorCodeGenerator"))
+        self.is_implicit_getter ||
+            reject!(Internal("dart2wasm/lib/code_generator.dart:4995 ImplicitFieldAccessorCodeGenerator.generateInternal: a setter of $(field.cls).$(field.name), held by a table by class id, which the dispatch table makes no target of"), "$(julia_text(self.enclosing_member))")
+        local this_local = param_locals[1]
+        local kf = kind_field_table(translator, field.index, "$(julia_text(self.enclosing_member))")
+        local got = visit_instance_get(self, kf,
+            ty -> (WasmBuilder.local_get(b, this_local); convert_type(translator, b, this_local.type, ty); nothing),
+            "$(julia_text(self.enclosing_member)) (the getter of $(field.cls).$(field.name), at run time)")
+        got === nothing || convert_type(translator, b, got, return_type(self); boxed_class = kf.type isa DataType ? kf.type : nothing)
+        WasmBuilder.var"end"(b)
+        return nothing
+    end
     local struct_ = info.struct_
     local struct_type = WasmBuilder.IR.RefType_def(struct_; nullable = false)
     local field_index = translator.field_index[field]
