@@ -634,6 +634,8 @@ end
     libjulia === :jl_types_equal && return generate_static_intrinsic(self, Val(:types_equal), node)
     libjulia === :jl_type_unionall && return generate_static_intrinsic(self, Val(:type_unionall), node)
     libjulia === :jl_type_hash && return generate_static_intrinsic(self, Val(:type_hash), node)
+    libjulia === :jl_is_const && return generate_static_intrinsic(self, Val(:module_binding_query), node, first(libjulia_ports(:jl_is_const)))
+    libjulia === :jl_is_binding_deprecated && return generate_static_intrinsic(self, Val(:module_binding_query), node, first(libjulia_ports(:jl_is_binding_deprecated)))
     libjulia === :jl_alloc_genericmemory && return generate_static_intrinsic(self, Val(:alloc_genericmemory), node)
     libjulia === :jl_get_tls_world_age || return nothing
     local at = "$(julia_text(self.code_gen.enclosing_member))"
@@ -709,6 +711,68 @@ end
     generate_static_intrinsic(self, Val(:fatal), Unquarantined("julia/src/task.c:727 jl_no_exc_handler: $(e.c.val)"),
         "$at (at run time, $(generate_static_intrinsic(self, Val(:statement_location), node)))")
     return translator(self).top_type[]
+end
+
+# jl_is_const and jl_is_binding_deprecated (julia/src/module.c:1800, :1853), foreign calls of a libjulia symbol, which
+# Julia's codegen emits as calls of its runtime's function (julia/src/ccall.cpp:1419 emit_ccall): here the call of the
+# port (src/julia/runtime/bindings.jl, in the closed world where a statement reaches it, src/julia/subset.jl
+# reached_runtime_ports), its operands the declaration's two, as dart calls a static target. A declaration other than
+# Base's (a Cint of two Any arguments, base/runtime_internals.jl:181, :421; C's convention) rejects, located
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:module_binding_query}, node::NirForeignCall, port::Function)::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local at = "$(julia_text(self.code_gen.enclosing_member))"
+    local rt, argtypes, cc = node.args[2], node.args[3], node.args[5]
+    rt isa NirConst && rt.c.val === Cint && argtypes isa NirConst && argtypes.c.val == Core.svec(Any, Any) ||
+        reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: $(nameof(port)) declared other than a Cint of two Any arguments (base/runtime_internals.jl:181, :421)"), at)
+    local conv = cc isa NirConst ? (cc.c.val isa Tuple ? cc.c.val[1] : cc.c.val) : nothing
+    conv === :ccall || conv === :cdecl ||
+        reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: $(nameof(port)) called by the convention $(repr(conv)), not C's"), at)
+    local ops = nir_foreign_operands(node)
+    (dart_type_of(self, ops[1]) <: Module && dart_type_of(self, ops[2]) <: Symbol) ||
+        reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: $(nameof(port)) of a $(dart_type_of(self, ops[1])) and a $(dart_type_of(self, ops[2])), not a Module and a Symbol (julia/src/module.c's jl_module_t and jl_sym_t)"), at)
+    local target = nir_runtime_member(t.component, port, at)
+    local inputs = signature_for_direct_call(t, target).inputs
+    for (op, w) in zip(ops, inputs)
+        translate_expression(self.code_gen, op, w)
+    end
+    return output_or_void(t, call(self.code_gen, target))
+end
+
+# isdefinedglobal(m, s), Julia's builtin of a module and a name run time knows (julia/src/builtins.c:1353
+# jl_f_isdefinedglobal, jl_boundp(m, s, 1)): the call of its port over the module binding table
+# (src/julia/runtime/bindings.jl jl_f_isdefinedglobal), as Julia's codegen calls the builtin's C function
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:isdefinedglobal}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local target = nir_runtime_member(t.component, first(libjulia_ports(Core.isdefinedglobal)), "$(julia_text(self.code_gen.enclosing_member)): Julia's isdefinedglobal")
+    local inputs = signature_for_direct_call(t, target).inputs
+    for (op, w) in zip(args, inputs)
+        translate_expression(self.code_gen, op, w)
+    end
+    return output_or_void(t, call(self.code_gen, target))
+end
+
+# module_binding_answers(m, s) (src/julia/runtime/bindings.jl): a call of the module binding table's one function, its
+# answers for the pair, or -1 for a pair outside the table, which ends the program at the fatal arm, located (D9: never
+# "no binding", which native Julia, answering from the whole module, may contradict)
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, ::Val{:module_binding_answers}, args::Vector{NirValue})::WasmBuilder.IR.ValueType
+    local t = translator(self)
+    local b = self.code_gen.b[]
+    local at = "$(julia_text(self.code_gen.enclosing_member)): the module binding table"
+    local table = module_binding_table(t, at)
+    local inputs = table.type.inputs
+    translate_expression(self.code_gen, args[1], inputs[1])
+    translate_expression(self.code_gen, args[2], inputs[2])
+    WasmBuilder.call(b, table)
+    local answers = WasmBuilder.add_local(b, WasmBuilder.IR.NumType_i32)
+    WasmBuilder.local_tee(b, answers)
+    WasmBuilder.i32_const(b, -1)
+    WasmBuilder.i32_eq(b)
+    WasmBuilder.if_(b)
+    generate_static_intrinsic(self, Val(:fatal),
+        Unquarantined("src/julia/runtime/bindings.jl module_binding_answers: a (module, name) pair outside the module binding table, a Module or a Symbol the program made at run time, whose binding the module does not hold"), at)
+    WasmBuilder.var"end"(b)
+    WasmBuilder.local_get(b, answers)
+    return WasmBuilder.IR.NumType_i32
 end
 
 # jl_genericmemory_owner, one of emit_ccall's special functions (julia/src/ccall.cpp:1872): codegen's reader of a
@@ -883,6 +947,8 @@ end
             return generate_static_intrinsic(self, Val(:type_hash_gap))
         target.def.name === :image_object_id && target.def in methods(image_object_id) &&
             return generate_static_intrinsic(self, Val(:image_object_id), node.args[2:end])
+        target.def.name === :module_binding_answers && target.def in methods(module_binding_answers) &&
+            return generate_static_intrinsic(self, Val(:module_binding_answers), node.args[2:end])
         target.def.name === :jl_typetagis && target.def in methods(jl_typetagis) &&
             return generate_static_intrinsic(self, Val(:typetagis), target, node.args[2:end])
         target.def.name === :jl_is_tuple_type && target.def in methods(jl_is_tuple_type) &&
@@ -922,6 +988,10 @@ end
      f === Core.memoryrefreplace! || f === Core.memoryrefsetonce! || f === Core.memoryrefmodify!) &&
         return generate_static_intrinsic(self, Val(:memory), f, args, nothing)
     f === Core.isdefined && length(args) in (2, 3) && return generate_static_intrinsic(self, Val(:isdefined), f, args)
+    # isdefinedglobal(m, s) of a module and a name run time knows: jl_f_isdefinedglobal's port over the module binding
+    # table (src/julia/runtime/bindings.jl)
+    f === Core.isdefinedglobal && length(args) == 2 && dart_type_of(self, args[1]) <: Module && dart_type_of(self, args[2]) <: Symbol &&
+        return generate_static_intrinsic(self, Val(:isdefinedglobal), f, args)
     # a splat, f(xs...): jl_f__apply_iterate (builtins.c:661); into Julia's tuple builtin, a tuple whose length
     # only run time knows
     f === Core._apply_iterate && length(args) >= 2 && return generate_static_intrinsic(self, Val(:apply_iterate), f, args)

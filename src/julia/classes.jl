@@ -1829,7 +1829,9 @@ a compile's constants emit in part (_array_live_ref: each original Memory's live
 or whole, so one Memory is never both (_live_memory's rule, which dart has no counterpart of); and the image's ids
 (src/julia/runtime/hashing.jl image_slot!): whether the program reads an object's identity slot, decided once, each id
 the compiling process gave a constant whose identity it reads, IMAGE_IDS's entries in order, and whether the table was
-made, after which no constant joins it. Held by the compile's one
+made, after which no constant joins it; and the module binding table (src/julia/runtime/bindings.jl
+module_binding_answers): its function, defined at the first call, and whether its body was made, after which no Module
+or Symbol constant is made. Held by the compile's one
 _ConstantAccessor (Constants._constantAccessor, late: one a compile), the class whose static dart declares, and read
 through it as dart reads a static through its class, so the Translator's fields stay exactly dart's. Julia differs:
 dart2wasm compiles one program a process, so a static is that program's; Julia compiles many a process (a test file,
@@ -1843,8 +1845,10 @@ keeps an inference session's results in its NativeInterpreter (inf_cache), never
     reads_identity::Base.RefValue{Union{Nothing,Bool}}
     image_ids::Vector{Int64}
     image_ids_made::Base.RefValue{Bool}
+    binding_table::Base.RefValue{Any}
+    binding_table_made::Base.RefValue{Bool}
     CompileStatics() = new(Ref(0), IdDict{GenericMemory,Tuple{GenericMemory,UnitRange{Int}}}(), Base.IdSet{GenericMemory}(),
-                           Ref{Union{Nothing,Bool}}(nothing), Int64[], Ref(false))
+                           Ref{Union{Nothing,Bool}}(nothing), Int64[], Ref(false), Ref{Any}(nothing), Ref(false))
 end
 
 """

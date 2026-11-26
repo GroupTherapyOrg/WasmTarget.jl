@@ -22,7 +22,7 @@ end
 
 A module binding as the program's world holds it, Julia's answers there: `ref`, the binding; `world`, the world it
 was read at, the ClosedWorld's (check_subset's, compile's `world`); `defined` (isdefinedglobal), `constant`
-(jl_is_const), `value` (getglobal; `nothing` when it has no value) and `type`, its declared type
+(jl_is_const), `deprecated` (jl_is_binding_deprecated), `value` (getglobal; `nothing` when it has no value) and `type`, its declared type
 (`Core.get_binding_type`, `Any` when untyped), each run at that world (_binding_at). Read once, where
 build_nir meets the binding in an operand or a statement of the closed world, and held by that node and by the
 NirWorld's table (nir_binding): no reader of a binding's fact takes a world, so no reader can read one at another
@@ -43,6 +43,7 @@ program's world; a Kernel StaticGet names its Field, whose declaration the compi
     const world::UInt
     const defined::Bool
     const constant::Bool
+    const deprecated::Bool
     const value::Any
     const type::Any
 end
@@ -778,16 +779,19 @@ treats as a constant (`Core.Compiler.isconstType`). The one source every receive
 @quarantine "Julia's codegen passes no value for a singleton type or a constant Type{X}, isconstType" Core.Compiler.isconstType nir_carries_data(@nospecialize(T))::Bool =
     !(Base.issingletontype(T) || Core.Compiler.isconstType(T))
 
-# a binding's facts at `world`, Julia's answers there by its builtins and jl_is_const alone (isdefinedglobal,
-# getglobal, get_binding_type), run in that world: the one reader of a binding's facts (NirBinding)
+# a binding's facts at `world`, Julia's answers there by its builtins, jl_is_const and jl_is_binding_deprecated alone
+# (isdefinedglobal, getglobal, get_binding_type), run in that world: the one reader of a binding's facts (NirBinding)
 @quarantine pin"precedent(julia: base/essentials.jl:1257 _resolve_in_world)" "a binding read at the program's world, as Base.@world reads one, by Julia's builtins and jl_is_const (base/runtime_internals.jl:421 isconst)" Base.invoke_in_world function _binding_at(world::UInt, ref::GlobalRef)::NirBinding
     local defined = Base.invoke_in_world(world, isdefinedglobal, ref.mod, ref.name)::Bool
     return NirBinding(ref, world, defined, Base.invoke_in_world(world, _binding_is_const, ref.mod, ref.name)::Bool,
+                      Base.invoke_in_world(world, _binding_is_deprecated, ref.mod, ref.name)::Bool,
                       defined ? Base.invoke_in_world(world, getglobal, ref.mod, ref.name) : nothing,
                       Base.invoke_in_world(world, Core.get_binding_type, ref.mod, ref.name))
 end
 @quarantine pin"precedent(julia: base/runtime_internals.jl:421 isconst)" "Base.isconst(::Module, ::Symbol) is this ccall (base/runtime_internals.jl:421), called here so no generic dispatch runs in the program's world" Base.Cint _binding_is_const(m::Module, s::Symbol)::Bool =
     ccall(:jl_is_const, Cint, (Any, Any), m, s) != 0
+@quarantine pin"precedent(julia: base/runtime_internals.jl:181 isdeprecated)" "Base.isdeprecated(::Module, ::Symbol) is this ccall (base/runtime_internals.jl:181), called here so no generic dispatch runs in the program's world" Base.Cint _binding_is_deprecated(m::Module, s::Symbol)::Bool =
+    ccall(:jl_is_binding_deprecated, Cint, (Any, Any), m, s) != 0
 
 """
     nir_binding!(bindings, ref) -> NirBinding

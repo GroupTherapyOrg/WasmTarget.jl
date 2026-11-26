@@ -783,6 +783,10 @@ end
                 visit_instance_constant(tv, ic)
             end
             t == info.type || reject!(Internal("dart2wasm/lib/constants.dart:808 ConstantCreator.ensureConstant: the constant $(info.constant) is created as $(info.type), its type $t"), "ConstantCreator.ensureConstant")
+            # the module binding table's pairs are the Module and Symbol constants made before its body (src/julia/runtime/bindings.jl
+            # _make_module_binding_table); one made after it would be a pair the table does not hold
+            constant isa NirConst && constant.c.val isa Union{Module,Symbol} && self.constants._constant_accessor[].statics.binding_table_made[] &&
+                reject!(Internal("src/constants.jl ensureConstant: the $(typeof(constant.c.val)) constant $(constant.c.val) made after the module binding table's body"), "dart2wasm/lib/constants.dart:793 ConstantCreator.ensureConstant")
             self.constants.constant_info[key] = info
         end
     end

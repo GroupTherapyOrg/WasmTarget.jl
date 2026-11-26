@@ -160,18 +160,22 @@ base/operators.jl:295) lowers to the port jl_types_equal, which the types_equal 
 operands; `jl_type_hash` (Base's hash of a type, base/hashing.jl:32) to the port jl_type_hash. A builtin is keyed
 by itself: Julia's codegen emits a call of the builtin Core.finalizer as its runtime's jl_f_finalizer
 (julia/src/builtins.c:2078), whose port is src/julia/runtime/rtutils.jl jl_gc_add_finalizer_, which the finalizer
-arm calls.
+arm calls. A module's binding queries, `jl_is_const` and `jl_is_binding_deprecated` (julia/src/module.c:1800,
+:1853), lower to their ports in src/julia/runtime/bindings.jl, and the builtin Core.isdefinedglobal (julia/src/builtins.c:1353
+jl_f_isdefinedglobal) to its port jl_f_isdefinedglobal, each reading the module binding table.
 """
 @quarantine pin"julia/src/ccall.cpp:1419 emit_ccall" "Julia's emit_ccall keys a libjulia function's lowering by its name (its is_libjulia_func, :1464); a WasmTarget module's port for one is the runtime function its code generator calls for it" Core.Symbol function libjulia_ports(name::Core.Symbol)::Tuple{Vararg{Function}}
     name === :jl_type_unionall && return (jl_type_unionall, jl_egal_unionall)
     name === :jl_types_equal && return (jl_types_equal,)
     name === :jl_type_hash && return (jl_type_hash,)
+    name === :jl_is_const && return (jl_is_const,)
+    name === :jl_is_binding_deprecated && return (jl_is_binding_deprecated,)
     return ()
 end
-# the table's entries for builtins, each keyed by the builtin itself (libjulia_ports' docstring), as a list so a call
-# naming one by its GlobalRef in Core is matched to its key by the key's own name, never by a lookup
+# the table's entries for builtins, each keyed by the builtin itself (libjulia_ports' docstring); a call naming one by
+# a GlobalRef of any module is keyed by the builtin its binding holds at the program's world (reached_runtime_ports)
 @quarantine pin"julia/src/builtins.c:2078 jl_f_finalizer" "Julia's codegen calls a builtin's runtime function (builtins.c's JL_CALLABLEs); a WasmTarget module's port for one is the runtime function its code generator calls for it" Core.Builtin builtin_ports()::Tuple{Vararg{Pair{<:Core.Builtin,<:Tuple{Vararg{Function}}}}} =
-    (Core.finalizer => (jl_gc_add_finalizer_,),)
+    (Core.finalizer => (jl_gc_add_finalizer_,), Core.isdefinedglobal => (jl_f_isdefinedglobal,))
 @quarantine pin"julia/src/builtins.c:2078 jl_f_finalizer" "a builtin's ports are its entry of the table, builtin_ports" Core.Builtin function libjulia_ports(f::Core.Builtin)::Tuple{Vararg{Function}}
     for (b, ports) in builtin_ports()
         b === f && return ports
@@ -181,20 +185,21 @@ end
 
 # The runtime ports a closed world's foreign calls reach: each foreign call's libjulia_ports, in the order the closed
 # world first meets them, each queued as a runtime root is (_runtime_roots), its one method's specialization
-@quarantine pin"julia/src/ccall.cpp:1419 emit_ccall" "Julia's codegen calls its runtime's function for a foreign call of a libjulia symbol; a WasmTarget module holds the port where a statement reaches it, as dart compiles a runtime member its program reaches" Core.CodeInfo function reached_runtime_ports(codeinfos::Vector{Any})::Vector{Function}
+@quarantine pin"julia/src/ccall.cpp:1419 emit_ccall" "Julia's codegen calls its runtime's function for a foreign call of a libjulia symbol; a WasmTarget module holds the port where a statement reaches it, as dart compiles a runtime member its program reaches" Core.CodeInfo function reached_runtime_ports(codeinfos::Vector{Any}, world::UInt)::Vector{Function}
     local out = Function[]
     for x in codeinfos
         x isa Core.CodeInfo || continue
         for st in x.code
-            # a call of a builtin (Core's, named directly or by its GlobalRef), keyed by the builtin; a foreign call by its name
+            # a call of a builtin, named directly or by a GlobalRef of any module whose binding at the program's world
+            # holds it (Base.isdefinedglobal is Core's builtin), keyed by the builtin; a foreign call by its name. The
+            # binding is read by _binding_at, the one reader of a binding's facts (src/julia/nir.jl)
             local key = nothing
             if Meta.isexpr(st, :call)
                 local f = st.args[1]
                 f isa Core.Builtin && (key = f)
-                if f isa GlobalRef && f.mod === Core
-                    for (b, _) in builtin_ports()
-                        nameof(b) === f.name && (key = b)
-                    end
+                if f isa GlobalRef
+                    local fb = _binding_at(world, f)
+                    fb.defined && fb.value isa Core.Builtin && (key = fb.value)
                 end
             elseif Meta.isexpr(st, :foreigncall)
                 local name = st.args[1]
@@ -415,7 +420,7 @@ formal(dev/formal/NirHandoff.tla): every reached ccallable's record queued and j
     isempty(ccallables) || ((codeinfos, notes, parents) = _infer_verified(Any[roots; entry; ccallables], world, at))
     # the runtime ports the program's foreign calls reach (reached_runtime_ports), queued after the entry as its
     # ccallables are, so the closed world holds a port where, and only where, the program reaches it
-    local reached = reached_runtime_ports(codeinfos)
+    local reached = reached_runtime_ports(codeinfos, world)
     local ports = Any[something(_entry_specialization(only(methods(f)).sig, world)) for f in reached]
     isempty(ports) || ((codeinfos, notes, parents) = _infer_verified(Any[roots; entry; ccallables; ports], world, at))
     _check_export_names(entry, codeinfos, at)
