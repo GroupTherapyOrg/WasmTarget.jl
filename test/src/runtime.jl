@@ -113,7 +113,8 @@ isint(x::Int) = maybe(x) isa Int
 # Core.AddrSpace{Core}, its register's literal, boxed by its class in the type value's parameters)
 @noinline maybe_memory(x::Int)::Union{Nothing,Memory{Int64}} = x > 0 ? Memory{Int64}(undef, x) : nothing
 memory_length(x::Int) = length(typeassert(maybe_memory(x), Memory{Int64}))
-# a user class whose type value has no constant only by a parameter value (Float16(1))
+# a user class whose type value holds a parameter value of a primitive held in an integer register (Float16(1),
+# its soft-promoted half's bits)
 struct Tagged{V}; x::Int; end
 @noinline maybe_tagged(x::Int)::Union{Nothing,Tagged{Float16(1)}} = x > 0 ? Tagged{Float16(1)}(x) : nothing
 tagged_x(x::Int) = typeassert(maybe_tagged(x), Tagged{Float16(1)}).x
@@ -126,10 +127,7 @@ tagged_x(x::Int) = typeassert(maybe_tagged(x), Tagged{Float16(1)}).x
     # constant is its register's literal (src/julia/classes.jl register_constant_class): the as check compiles,
     # its type value a constant, and answers as native, the length or the TypeError of its null case (below)
     @test (try; memory_length(-1); nothing; catch e; e; end) == TypeError(:typeassert, "", Memory{Int64}, nothing)
-    local te = try; W.compile(tagged_x, (Int,)); nothing; catch x; x; end
-    @test te isa W.RejectionError && te.rejection isa W.Unquarantined &&
-          te.rejection.row == "src/translator.jl translateStorageType: the primitive class Float16, with no wasm representation"
-    for (f, args) in ((unwrapped, [(3,), (-1,)]), (isint, [(3,), (-1,)]), (memory_length, [(3,), (-1,)]))
+    for (f, args) in ((unwrapped, [(3,), (-1,)]), (isint, [(3,), (-1,)]), (memory_length, [(3,), (-1,)]), (tagged_x, [(3,), (-1,)]))
         local bytes = W.compile(f, (Int,))
         for r in Main.WTChild.run_cases([Main.WTChild.RunCase("$(nameof(f))$(a)", bytes, a, Main.WTChild.native_answer(f, a)) for a in args])
             @test r.ok || (@info r.label r.why; false)

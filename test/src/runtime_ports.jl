@@ -18,6 +18,8 @@ end
     @test WasmTarget.libjulia_ports(:jl_type_hash) === (WasmTarget.jl_type_hash,)
     @test WasmTarget.libjulia_ports(Core.finalizer) === (WasmTarget.jl_gc_add_finalizer_,)
     @test WasmTarget.libjulia_ports(Core.tuple) === ()
+    @test WasmTarget.libjulia_ports(:julia__gnu_h2f_ieee) === (WasmTarget.julia_half_to_float,)
+    @test WasmTarget.libjulia_ports(:julia__gnu_f2h_ieee) === (WasmTarget.julia_float_to_half,)
     @test WasmTarget.libjulia_ports(:jl_get_tls_world_age) === ()
     local w = Base.get_world_counter()
     local cw = WasmTarget.check_subset(PortCases.with_unionall, (Int64,), "runtime_ports", w)

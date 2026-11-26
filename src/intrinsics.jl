@@ -1008,6 +1008,10 @@ end
     (any(a -> managed_pointer(dart_type_of(self, a)), args) ||
      pointer_to isa DataType && pointer_to <: Type && length(pointer_to.parameters) == 1 && managed_pointer(pointer_to.parameters[1])) &&
         return generate_static_intrinsic(self, Val(:pointer), f, args)
+    # an operation on a Float16, an operand's or a conversion's result: LLVM's soft-promoted half
+    local half_result = length(args) == 2 ? dart_type_of(self, args[1]) : nothing
+    (any(a -> dart_type_of(self, a) === Float16, args) || half_result === Type{Float16}) &&
+        return generate_static_intrinsic(self, Val(:half), f, args)
     # an operation on a 128-bit integer, an operand's or a conversion's result: its two i64 halves
     local converted = length(args) == 2 ? dart_type_of(self, args[1]) : nothing
     (any(a -> type_expand_integer(dart_type_of(self, a)), args) ||
@@ -4455,6 +4459,194 @@ end
     WasmBuilder.local_set(b, m)
     return generate_static_intrinsic(self, Val(:element_address), M,
         () -> WasmBuilder.local_get(b, m), () -> WasmBuilder.i64_const(b, 0), false, at)
+end
+
+# Julia's intrinsics on a Float16, as Julia's codegen and LLVM's WebAssembly backend answer them. Julia
+# hands LLVM its `half` operations (julia/src/llvm-demote-float16.cpp have_fp16: true off PPC), and wasm
+# has no f16: LLVM's type legalizer soft-promotes it (TargetLoweringBase.cpp TypeSoftPromoteHalf), the
+# value its 16 bits in an i16 promoted to the i32 (src/julia/classes.jl type_promote_integer: an
+# any-extended register, read zero-extended), each operation done in f32 on the operands extended
+# (FP16_TO_FP) and its result truncated back (FP_TO_FP16), each extension and truncation the libcall
+# LegalizeDAG expands it to (CodeGen/SelectionDAG/LegalizeDAG.cpp:5184 FP16_TO_FP: __extendhfsf2,
+# :5208 FP_TO_FP16: __truncsfhf2 from f32, __truncdfhf2 from f64), and Julia binds each of those names to
+# its own runtime's (julia/src/jitlayers.cpp:1951 jl_crt, julia/src/aotcompile.cpp:1531 injectCRTAlias):
+# half_to_float and float_to_half (julia/src/runtime_intrinsics.c), ported in src/julia/runtime/rtutils.jl as
+# julia_half_to_float and julia_float_to_half; an f64's truncation is LLVM's round-inexact-to-odd to f32, then
+# float_to_half (the truncate helper below says why not double_to_half).
+# By node (CodeGen/SelectionDAG/LegalizeFloatTypes.cpp):
+#   fpext to Float32 (:3260 SoftPromoteHalfOp_FP_EXTEND): the extension; to Float64 the extension then
+#     f32's FP_EXTEND (LegalizeDAG.cpp:4013, two steps that round nothing)
+#   fptrunc from Float32 or Float64 (:2962 SoftPromoteHalfRes_FP_ROUND): the truncation from that type
+#   bitcast to or from a 16-bit integer (:2800 SoftPromoteHalfRes_BITCAST, :3231 SoftPromoteHalfOp_BITCAST):
+#     the bits, put in the integer's form
+#   sitofp, uitofp from an integer of at most 64 bits (:3041 SoftPromoteHalfRes_XINT_TO_FP): the
+#     conversion to f32, then its truncation; an integer below 2^24 in magnitude is exact in f32 and any
+#     other rounds to an f32 at least 2^24, past Float16's largest finite, so the result is native's
+#   fptosi, fptoui to an integer of at most 64 bits (:3278 SoftPromoteHalfOp_Op0WithStrict): the
+#     extension, then f32's conversion, as the f32 arm emits it (saturating, a narrow result put in its form)
+#   add_float, sub_float, mul_float, div_float, min_float, max_float and their fast forms (:3115
+#     SoftPromoteHalfRes_BinOp; min_float and max_float reject, below), sqrt_llvm, sqrt_llvm_fast, floor_llvm, ceil_llvm, trunc_llvm, rint_llvm
+#     (:3078 SoftPromoteHalfRes_UnaryOp): each operand extended, f32's operation (the binary and unary
+#     maps' f32 entries), the result truncated; f32 holds 2 × 11 + 2 bits, so the f32 result rounded
+#     again to half is the half operation's correctly rounded result; add_float, sub_float, mul_float and
+#     div_float, whose operands LLVM extends by compiler-rt's __extendhfsf2 (below), reject, located
+#   eq_float, ne_float, lt_float, le_float (:3381 SoftPromoteHalfOp_SETCC): both extended, f32's compare
+#   fpiseq (julia/src/intrinsics.cpp:1639: fcmp uno of each, and'ed, or'ed with the bits' icmp eq): the
+#     unordered compares on the extensions (SETCC), the bits compared zero-extended
+#   neg_float (:3102 SoftPromoteHalfRes_FNEG): the bits xor 0x8000; abs_float (:3093
+#     SoftPromoteHalfRes_FABS): the bits and 0x7fff; copysign_float (:2819 SoftPromoteHalfRes_FCOPYSIGN):
+#     the first's bits and 0x7fff, or'ed with the second's and 0x8000
+# Any other intrinsic on a Float16 (rem_float, whose f32 FREM is a libcall not ported; fma_float and
+# muladd_float, whose f16 FMA LLVM widens to f64, :2867 SoftPromoteHalfRes_FMAD, not ported; an
+# integer intrinsic on its bits; a conversion from or to a 128-bit integer) rejects at its statement,
+# located: never an f32 operation on the i32 that holds the bits
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @nospecializeinfer function generate_static_intrinsic(self::Intrinsifier, ::Val{:half}, @nospecialize(f::Core.Builtin), args::Vector{NirValue})::Union{WasmBuilder.IR.ValueType,Nothing}
+    local code_gen = self.code_gen
+    local t = translator(self)
+    local b = code_gen.b[]
+    local i32, i64, f32, f64 = WasmBuilder.IR.NumType_i32, WasmBuilder.IR.NumType_i64, WasmBuilder.IR.NumType_f32, WasmBuilder.IR.NumType_f64
+    local I = Core.Intrinsics
+    local H = Float16
+    local at = "$(julia_text(code_gen.enclosing_member)): Julia's $f on $(join((dart_type_of(self, a) for a in args), ", "))"
+    local gap() = reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: Julia's $f on a Float16, LLVM's soft-promoted half (CodeGen/SelectionDAG/LegalizeFloatTypes.cpp SoftPromoteHalfResult and SoftPromoteHalfOperand), not ported"), at)
+    local half(a::NirValue) = dart_type_of(self, a) === H
+    # GetSoftPromotedHalf: the operand's 16 bits, zero-extended in its i32 (the view a UInt16 is passed in)
+    local bits(a::NirValue) = (translate_expression(code_gen, a, i32); generate_static_intrinsic(Val(:extended_view), b, H))
+    # FP16_TO_FP to f32: __extendhfsf2, Julia's half_to_float, which quiets a NaN as a conversion does
+    local extend(a::NirValue) = (bits(a); call(code_gen, nir_runtime_member(t.component, first(libjulia_ports(:julia__gnu_h2f_ieee)), at)))
+    # add_float, sub_float, mul_float, div_float and their fast forms: their operands' extension is compiler-rt's
+    # own __extendhfsf2, which keeps a signalling NaN signalling, so the f32 operation picks among NaN operands as the
+    # native half operation does (measured on the native host: Julia's quieting half_to_float answers 3069 of the
+    # 65536 × 26 sampled additions differently, compiler-rt's none); compiler-rt/lib/builtins/extendhfsf2.c is no
+    # file of the LLVM pin's checkout (dev/fetch_llvm.sh), so the four reject, located, until it is
+    local arithmetic = (I.add_float, I.sub_float, I.mul_float, I.div_float, I.add_float_fast, I.sub_float_fast, I.mul_float_fast, I.div_float_fast)
+    # FP_TO_FP16 of the f32 on the stack: __truncsfhf2, Julia's float_to_half; of an f64, first rounded to an f32
+    # inexact-to-odd (TargetLowering.cpp:13491 TargetLowering::expandRoundInexactToOdd, LLVM's own two-step narrowing:
+    # the f32 kept where exact, odd or NaN, else moved one ulp outward to the odd neighbour), then float_to_half: an
+    # f32's 24 bits hold 11 + 2, so the half is the double's correctly rounded one, as the native host's fcvt gives.
+    # Julia binds __truncdfhf2 to double_to_half (runtime_intrinsics.c:190), which misrounds a double whose float
+    # lands on a subnormal half's tie with its sticky bits shifted out, and compiler-rt's correctly rounded
+    # __truncdfhf2 (fp_trunc_impl.inc) is no file of the LLVM pin's checkout
+    local truncate(w::WasmBuilder.IR.NumType) = begin
+        if w == f64
+            local wide = add_local(code_gen, f64)
+            local narrow_as_wide = add_local(code_gen, f64)
+            local narrow_bits = add_local(code_gen, i32)
+            WasmBuilder.local_tee(b, wide)
+            WasmBuilder.f32_demote_f64(b)                                    # Narrow
+            WasmBuilder.i32_reinterpret_f32(b)
+            WasmBuilder.local_tee(b, narrow_bits)                            # NarrowBits
+            WasmBuilder.f32_reinterpret_i32(b)
+            WasmBuilder.f64_promote_f32(b)
+            WasmBuilder.local_set(b, narrow_as_wide)                         # NarrowAsWide
+            # select(KeepNarrow, NarrowBits, Adjusted): wasm's select takes its first operand where the condition is nonzero
+            WasmBuilder.local_get(b, narrow_bits)
+            # Adjusted: NarrowBits + (NarrowIsRd ? 1 : -1), NarrowIsRd |Op| > |NarrowAsWide|
+            WasmBuilder.local_get(b, narrow_bits)
+            WasmBuilder.i32_const(b, 1)
+            WasmBuilder.i32_const(b, -1)
+            WasmBuilder.local_get(b, wide); WasmBuilder.f64_abs(b)
+            WasmBuilder.local_get(b, narrow_as_wide); WasmBuilder.f64_abs(b)
+            WasmBuilder.f64_gt(b)
+            WasmBuilder.select(b, i32)
+            WasmBuilder.i32_add(b)
+            # KeepNarrow: Op SETUEQ NarrowAsWide (neither less nor greater: unordered or equal), or AlreadyOdd (NarrowBits & 1)
+            WasmBuilder.local_get(b, wide); WasmBuilder.local_get(b, narrow_as_wide); WasmBuilder.f64_lt(b)
+            WasmBuilder.local_get(b, wide); WasmBuilder.local_get(b, narrow_as_wide); WasmBuilder.f64_gt(b)
+            WasmBuilder.i32_or(b); WasmBuilder.i32_eqz(b)
+            WasmBuilder.local_get(b, narrow_bits); WasmBuilder.i32_const(b, 1); WasmBuilder.i32_and(b)
+            WasmBuilder.i32_or(b)
+            WasmBuilder.select(b, i32)
+            WasmBuilder.f32_reinterpret_i32(b)
+        end
+        call(code_gen, nir_runtime_member(t.component, first(libjulia_ports(:julia__gnu_f2h_ieee)), at))
+    end
+    # an integer of at most 64 bits, as the f32 arm converts one: a Base.BitInteger but the 128-bit ones, or a Bool
+    local small_int(T::Type) = T isa DataType && (T === Bool || T <: Base.BitInteger && sizeof(T) <= 8)
+    local type_operand = length(args) == 2 ? dart_type_of(self, args[1]) : nothing
+    if type_operand isa DataType && type_operand <: Type && length(type_operand.parameters) == 1 && type_operand.parameters[1] isa Type
+        local to = type_operand.parameters[1]
+        local x = args[2]
+        local from = dart_type_of(self, x)
+        if f === I.fpext && from === H && (to === Float32 || to === Float64)
+            extend(x)
+            to === Float64 && WasmBuilder.f64_promote_f32(b)
+            return to === Float64 ? f64 : f32
+        elseif f === I.fptrunc && to === H && (from === Float32 || from === Float64)
+            local w = from === Float64 ? f64 : f32
+            translate_expression(code_gen, x, w)
+            truncate(w)
+            return i32
+        elseif f === I.bitcast && to === H && (from === H || from === Int16 || from === UInt16)
+            translate_expression(code_gen, x, i32)
+            return i32
+        elseif f === I.bitcast && from === H && (to === Int16 || to === UInt16)
+            bits(x)
+            generate_static_intrinsic(Val(:put_form), b, to)
+            return i32
+        elseif (f === I.sitofp || f === I.uitofp) && to === H && small_int(from)
+            local s = f === I.sitofp
+            local w = translate_type(t, from)
+            translate_expression(code_gen, x, w)
+            generate_static_intrinsic(Val(:narrow), from) && (s ? generate_static_intrinsic(Val(:signed_view), b, from) : generate_static_intrinsic(Val(:unsigned_view), b, from))
+            (w == i64 ? (s ? WasmBuilder.f32_convert_i64_s : WasmBuilder.f32_convert_i64_u) : (s ? WasmBuilder.f32_convert_i32_s : WasmBuilder.f32_convert_i32_u))(b)
+            truncate(f32)
+            return i32
+        elseif (f === I.fptosi || f === I.fptoui) && from === H && small_int(to) && to !== Bool
+            local s = f === I.fptosi
+            local r = generate_static_intrinsic(Val(:narrow), to) ? generate_static_intrinsic(Val(:register), to) : translate_type(t, to)
+            extend(x)
+            (r == i64 ? (s ? WasmBuilder.i64_trunc_sat_f32_s : WasmBuilder.i64_trunc_sat_f32_u) : (s ? WasmBuilder.i32_trunc_sat_f32_s : WasmBuilder.i32_trunc_sat_f32_u))(b)
+            generate_static_intrinsic(Val(:narrow), to) && generate_static_intrinsic(Val(:put_form), b, to)
+            return r
+        end
+        gap()
+    end
+    all(half, args) || gap()
+    if length(args) == 2 && f === I.copysign_float
+        bits(args[1]); WasmBuilder.i32_const(b, 0x7fff % Int); WasmBuilder.i32_and(b)
+        bits(args[2]); WasmBuilder.i32_const(b, 0x8000 % Int); WasmBuilder.i32_and(b)
+        WasmBuilder.i32_or(b)
+        return i32
+    elseif length(args) == 2 && f === I.fpiseq
+        local x = add_local(code_gen, f32)
+        local y = add_local(code_gen, f32)
+        extend(args[1]); WasmBuilder.local_set(b, x)
+        extend(args[2]); WasmBuilder.local_set(b, y)
+        WasmBuilder.local_get(b, x); WasmBuilder.local_get(b, x); WasmBuilder.f32_ne(b)
+        WasmBuilder.local_get(b, y); WasmBuilder.local_get(b, y); WasmBuilder.f32_ne(b)
+        WasmBuilder.i32_and(b)
+        bits(args[1]); bits(args[2]); WasmBuilder.i32_eq(b)
+        WasmBuilder.i32_or(b)
+        return i32
+    elseif length(args) == 2
+        local code = get(Intrinsifier__binary_operator_map[][f32][f32], f, nothing)
+        code === nothing && gap()
+        # min_float and max_float (llvm.minimum and llvm.maximum): wasm's f32.min and f32.max answer the canonical NaN
+        # where a NaN operand's payload propagates natively (measured on the native host: 220 of 3804 sampled pairs
+        # with a NaN differ), so the two reject, located; the f32 and f64 maps. own entries answer the same canonical NaN
+        (f === I.min_float || f === I.max_float || f === I.min_float_fast || f === I.max_float_fast) &&
+            reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: Julia's $f on a Float16, whose f32 operation wasm answers with the canonical NaN where Julia's native propagates an operand's payload"), at)
+        f in arithmetic && reject!(Unquarantined("src/intrinsics.jl generateStaticIntrinsic: Julia's $f on a Float16, whose operands LLVM extends by compiler-rt's __extendhfsf2 (a signalling NaN kept signalling), not ported: compiler-rt/lib/builtins/extendhfsf2.c is no file of the LLVM pin's checkout"), at)
+        extend(args[1])
+        extend(args[2])
+        code(code_gen)
+        Intrinsifier_is_comparison(f) && return i32
+        truncate(f32)
+        return i32
+    elseif length(args) == 1 && (f === I.neg_float || f === I.abs_float)
+        bits(args[1])
+        f === I.neg_float ? (WasmBuilder.i32_const(b, 0x8000 % Int); WasmBuilder.i32_xor(b)) : (WasmBuilder.i32_const(b, 0x7fff % Int); WasmBuilder.i32_and(b))
+        return i32
+    elseif length(args) == 1
+        local code = get(Intrinsifier__unary_operator_map[][f32], f, nothing)
+        code === nothing && gap()
+        extend(args[1])
+        code(code_gen)
+        truncate(f32)
+        return i32
+    end
+    gap()
 end
 
 # Julia's intrinsics on a 128-bit integer (Int128, UInt128), whose value is its class's struct of two

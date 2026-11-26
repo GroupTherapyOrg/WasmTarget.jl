@@ -118,16 +118,16 @@ end
     end
     # a primitive class with no builtin type is the integer register LLVM's wasm target promotes Julia's
     # LLVM type to (bitstype_to_llvm, then TypePromoteInteger): an 8-bit Core.AddrSpace an i32, a 24-bit
-    # primitive type an i32, a 40-bit one an i64; a Ptr is none, a managed pointer, its class's struct
-    # (src/julia/classes.jl managed_pointer)
+    # primitive type an i32, a 40-bit one an i64, a Float16 the i32 of its soft-promoted half's i16
+    # (TypeSoftPromoteHalf); a Ptr is none, a managed pointer, its class's struct (src/julia/classes.jl managed_pointer)
     @test W.type_promote_integer(Ptr{Nothing}) === nothing && W.primitive_value_type(t, Ptr{UInt8}) === nothing
     for (T, w) in ((Core.AddrSpace{Core}, IR.NumType_i32),
-                   (TypeCases.P24, IR.NumType_i32), (TypeCases.P40, IR.NumType_i64))
+                   (TypeCases.P24, IR.NumType_i32), (TypeCases.P40, IR.NumType_i64), (Float16, IR.NumType_i32))
         @test D.translate_storage_type(t, T) == w && D.translate_type(t, T) == w
     end
-    # one LLVM holds in no integer register rejects, located: the soft-promoted half floats, an integer
+    # one LLVM holds in no integer register rejects, located: BFloat16, whose conversions are not ported, an integer
     # wider than i64 that is no i128 (an i96, an i256)
-    for T in (Float16, Core.BFloat16, TypeCases.P96, TypeCases.P256)
+    for T in (Core.BFloat16, TypeCases.P96, TypeCases.P256)
         local e = try; D.translate_type(t, T); nothing; catch x; x; end
         @test e isa W.RejectionError && e.rejection isa W.Unquarantined
     end
@@ -137,21 +137,21 @@ end
     # Unquarantined, by visitInstanceConstant's row; a class of no class info Internal (this table is
     # not yet collected; a class it holds is made by every compiled constant, code_generator_intrinsics.jl)
     @test W.constant_unmade(t, Int64) === nothing
-    local pu = W.constant_unmade(t, Float16)
-    @test pu isa W.Unquarantined && occursin("visitInstanceConstant: a constant of the primitive type Float16, with no wasm representation", pu.row)
+    local pu = W.constant_unmade(t, Core.BFloat16)
+    @test pu isa W.Unquarantined && occursin("visitInstanceConstant: a constant of the primitive type Core.BFloat16, with no wasm representation", pu.row)
     # a primitive held in an integer register has a constant, its box its class's: none in this table, so
     # Internal, never the Unquarantined of a primitive with no wasm representation
-    for T in (Ptr{Nothing}, Core.AddrSpace{Core}, TypeCases.P24, TypeCases.P40)
+    for T in (Ptr{Nothing}, Core.AddrSpace{Core}, TypeCases.P24, TypeCases.P40, Float16)
         local r = W.constant_unmade(t, T)
         @test r isa W.Internal && occursin("the class $T of the constant has no class info", r.site)
     end
     # the register's literals, dart's wasm value classes' instance constants: a primitive with no builtin
-    # type held in an integer register; a builtin type's (its own constant kind), the half floats, a 128-bit
-    # integer, a managed pointer, a primitive wider than i64 and a struct are not
-    for T in (Core.AddrSpace{Core}, TypeCases.P24, TypeCases.P40)
+    # type held in an integer register, a Float16 its soft-promoted half's bits; a builtin type's (its own
+    # constant kind), BFloat16, a 128-bit integer, a managed pointer, a primitive wider than i64 and a struct are not
+    for T in (Core.AddrSpace{Core}, TypeCases.P24, TypeCases.P40, Float16)
         @test W.register_constant_class(t, T)
     end
-    for T in (Int8, Int64, Char, Bool, Float32, Float64, W.WasmI32, Float16, Int128, Ptr{Nothing}, TypeCases.P256, TypeCases.Circle, Any)
+    for T in (Int8, Int64, Char, Bool, Float32, Float64, W.WasmI32, Core.BFloat16, Int128, Ptr{Nothing}, TypeCases.P256, TypeCases.Circle, Any)
         @test !W.register_constant_class(t, T)
     end
     local pi = W.constant_unmade(t, Core.TypeofVararg)

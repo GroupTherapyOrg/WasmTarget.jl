@@ -170,6 +170,10 @@ jl_f_isdefinedglobal) to its port jl_f_isdefinedglobal, each reading the module 
     name === :jl_type_hash && return (jl_type_hash,)
     name === :jl_is_const && return (jl_is_const,)
     name === :jl_is_binding_deprecated && return (jl_is_binding_deprecated,)
+    # Julia's runtime exports of half_to_float and float_to_half (julia/src/runtime_intrinsics.c:286 julia__gnu_h2f_ieee,
+    # :292 julia__gnu_f2h_ieee), the libcalls a soft-promoted half's conversions make (half_ports)
+    name === :julia__gnu_h2f_ieee && return (julia_half_to_float,)
+    name === :julia__gnu_f2h_ieee && return (julia_float_to_half,)
     return ()
 end
 # the table's entries for builtins, each keyed by the builtin itself (libjulia_ports' docstring); a call naming one by
@@ -211,8 +215,35 @@ end
                 p in out || push!(out, p)
             end
         end
+        # an intrinsic on a Float16, an operand's or its result's: the half routines its soft-promoted lowering calls
+        _half_intrinsic(x) && foreach(p -> p in out || push!(out, p), half_ports())
     end
     return out
+end
+
+# The routines a soft-promoted half's lowering calls (src/intrinsics.jl Val(:half)): Julia's half_to_float and
+# float_to_half (src/julia/runtime/runtime_intrinsics.jl), the libcalls __extendhfsf2 and __truncsfhf2 LLVM's wasm
+# target makes, their entries of the one table (libjulia_ports), linked where a statement references them as a static link pulls an archive member (a function: the
+# ports load after this file)
+@quarantine pin"julia/src/ccall.cpp:1419 emit_ccall" "a WasmTarget module holds a runtime port where a statement of its program reaches it, as Julia's codegen calls its runtime's function where it emits the call; a soft-promoted half's libcalls are reached by an intrinsic on a Float16" Core.Function half_ports()::Vector{Function} = Function[p for k in (:julia__gnu_h2f_ieee, :julia__gnu_f2h_ieee) for p in libjulia_ports(k)]
+
+# whether a statement of `x` is an intrinsic call with a Float16 operand or result, read from Julia's inferred types:
+# an SSA value's ssavaluetypes, an argument's slottypes, a literal's own type
+@quarantine pin"julia/src/ccall.cpp:1419 emit_ccall" "a soft-promoted half's libcall is reached where Julia's inferred code holds an intrinsic on a Float16, its types the CodeInfo's" Core.CodeInfo function _half_intrinsic(x::Core.CodeInfo)::Bool
+    local types = x.ssavaluetypes
+    types isa Vector{Any} || return false
+    local slots = x.slottypes isa Vector{Any} ? x.slottypes : Any[]
+    local half(t::Any) = Core.Compiler.widenconst(t) === Float16
+    local operand_type(a::Any) = a isa Core.SSAValue ? types[a.id] : a isa Core.Argument ? get(slots, a.n, Any) :
+        a isa Core.SlotNumber ? get(slots, a.id, Any) : a isa QuoteNode ? typeof(a.value) : a isa GlobalRef ? Any : typeof(a)
+    for (i, st) in enumerate(x.code)
+        Meta.isexpr(st, :call) || continue
+        local f = st.args[1]
+        f isa GlobalRef && isdefined(f.mod, f.name) && isconst(f.mod, f.name) && (f = getglobal(f.mod, f.name))
+        f isa Core.IntrinsicFunction || continue
+        (half(types[i]) || any(a -> half(operand_type(a)), st.args[2:end])) && return true
+    end
+    return false
 end
 
 # A member's export name, or nothing: a @ccallable method's C name, the one Base.@ccallable records

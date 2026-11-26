@@ -40,6 +40,7 @@ include("julia/runtime/hashing.jl")
 include("julia/runtime/jltypes.jl")
 include("julia/runtime/iddict.jl")
 include("julia/runtime/bindings.jl")
+include("julia/runtime/runtime_intrinsics.jl")
 include("julia/packages.jl")
 include("julia/serializable.jl")
 

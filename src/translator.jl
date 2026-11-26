@@ -971,9 +971,9 @@ its members, their nearest common superclass; a type as a value (`Type{X}`) is i
 (`typeof(X)`), as the closed world's walk meets it, and a type as a value of a type Julia left open
 (`Type`, `Type{T}`) the open `Type{T}` every kind is under (dart's `_Type`, translateType(typeType)).
 A class is a primitive one's builtin type (`unbox`; nullable, its own class, the box), a primitive one
-with none its promoted integer register (`Ptr`, `Core.AddrSpace`, a `primitive type` of its own width:
-type_promote_integer), or the class's representation. A `UnionAll` other than `Type`, a primitive class
-with no wasm representation (`Float16`, an integer wider than i64 but an i128: type_expand_integer) and a class
+with none its promoted integer register (`Ptr`, `Core.AddrSpace`, a `primitive type` of its own width,
+`Float16`'s soft-promoted half: type_promote_integer), or the class's representation. A `UnionAll` other than `Type`, a primitive class
+with no wasm representation (`BFloat16`, an integer wider than i64 but an i128: type_expand_integer) and a class
 collect gave no info reject, located.
 
 The `typejoin` of a Union is its REPRESENTATION only: a value keeps its exact class, an `Int64` in a

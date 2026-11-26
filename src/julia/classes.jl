@@ -986,14 +986,18 @@ The integer register that holds a value of the primitive class `T`, one with no 
 primitive class its LLVM type (julia/src/cgutils.cpp:668 bitstype_to_llvm): `Float16` and `BFloat16`
 their float types, a `Ptr` the pointer of address space 0, an `LLVMPtr` the pointer of its own, and any
 other the integer of its size in bits (`jl_datatype_size` × 8: `Core.AddrSpace` an i8, a `primitive type
-P 40` an i40). LLVM's type legalizer holds an integer narrower than a legal one in the next legal one,
+P 40` an i40). Julia hands LLVM its `half` on wasm (julia/src/llvm-demote-float16.cpp:52 have_fp16, false on
+PPC alone), and wasm has no f16: LLVM's type legalizer soft-promotes it (llvm/lib/CodeGen/TargetLoweringBase.cpp:1820,
+TypeSoftPromoteHalf, useFPRegsForHalfType false on wasm), its value its 16 bits in the register of an i16, the
+i32: `Float16` is held as a 16-bit integer is, its operations the intrinsifier's soft-promoted half (src/intrinsics.jl
+Val(:half)). LLVM's type legalizer holds an integer narrower than a legal one in the next legal one,
 TypePromoteInteger (llvm/lib/CodeGen/TargetLoweringBase.cpp:1754 for a simple type; :1421-1435 getTypeConversion's extended-scalar block
 rounds an extended one, an i24 or an i40, up to its power of two first), wasm's legal integers being i32
 and i64 (llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp:63-64); a pointer of address space 0 is the
 integer of the data layout's pointer width, the 64 bits native Julia's `sizeof(Ptr{T})` answers on this
 host. A 128-bit integer (i128) is TypeExpandInteger's (type_expand_integer); a wider integer, or one
-whose width is no power of two, is not yet ported and rejects; the half floats are
-LLVM's soft-promoted halves and an `LLVMPtr` a pointer of another address space: each `nothing`,
+whose width is no power of two, is not yet ported and rejects; `BFloat16` (soft-promoted as
+`half` is, its conversions not ported) and an `LLVMPtr` a pointer of another address space: each `nothing`,
 rejected, located, where it is translated.
 
 The register's bits above the class's own are LLVM's promoted value's, undefined: an operation that reads
@@ -1001,7 +1005,7 @@ them is the promoted operation's (LegalizeIntegerTypes.cpp PromoteIntOp), which 
 apart; one not ported rejects there, located."""
 @quarantine pin"julia/src/cgutils.cpp:668 bitstype_to_llvm" "Julia's codegen gives a primitive class with no wasm builtin type its LLVM integer type, which LLVM's wasm type legalizer promotes to the next legal register (llvm/lib/CodeGen/TargetLoweringBase.cpp:1726 TargetLoweringBase::computeRegisterProperties, its TypePromoteInteger loop at :1754); dart's builtin types are a closed set of its wasm classes" Base.isprimitivetype function type_promote_integer(@nospecialize(T::Any))::Union{Type{UInt32},Type{UInt64},Nothing}
     T isa DataType && isprimitivetype(T) || return nothing
-    (T === Float16 || T === Core.BFloat16 || T <: Core.LLVMPtr) && return nothing
+    (T === Core.BFloat16 || T <: Core.LLVMPtr) && return nothing
     # a Ptr is a managed pointer, its class's struct of a base and an offset (managed_pointer)
     managed_pointer(T) && return nothing
     local bits = 8 * sizeof(T)
@@ -1427,8 +1431,10 @@ end
 
 The element type of the wasm array a `Memory{T}` holds its elements in, by Julia's layout of `T`
 (`Base.allocatedinline`, `sizeof`): a primitive element is stored unboxed, dart:_wasm's storage
-class of its size (src/julia/wasm_array.jl), a float as WasmF32 or WasmF64 and any other as WasmI8,
-WasmI16, WasmI32 or WasmI64 (a 16-bit float, which dart:_wasm has no storage class for, rejected, located); every other element is stored boxed, `Union{T,Nothing}`, a nullable
+class of its size (src/julia/wasm_array.jl), a float as WasmF32 or WasmF64, a `Float16` as WasmI16 (LLVM's
+soft-promoted half loads and stores its i16, CodeGen/SelectionDAG/LegalizeFloatTypes.cpp:2996
+SoftPromoteHalfRes_LOAD and :3401 SoftPromoteHalfOp_STORE, read zero-extended as an unsigned element is) and any
+other as WasmI8, WasmI16, WasmI32 or WasmI64 (another 16-bit float, `BFloat16`, rejected, located); every other element is stored boxed, `Union{T,Nothing}`, a nullable
 reference to its class (the top type for `Any`), null an element no write has set (#undef).
 
 Reshaped: `T` — an element type Julia stores inline as a union of bits types (`Union{Nothing,Int}`,
@@ -1442,6 +1448,7 @@ is stored boxed, its answers the same, as is an inline struct of bits, whose cla
         local n = sizeof(T)
         T <: AbstractFloat && n == 4 && return WasmF32
         T <: AbstractFloat && n == 8 && return WasmF64
+        T === Float16 && return WasmI16
         !(T <: AbstractFloat) && n == 1 && return WasmI8
         !(T <: AbstractFloat) && n == 2 && return WasmI16
         !(T <: AbstractFloat) && n == 4 && return WasmI32
