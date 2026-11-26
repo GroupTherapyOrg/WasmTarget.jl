@@ -58,26 +58,24 @@ let t = D.Translator(WasmTarget.build_nir(W.check_subset(is_int, (Base.RefValue{
     TRANSLATOR[] = t
 end
 
-@testset "code_generator.dart: MacroAssembler's closure accessors type as dart documents them" begin
+@testset "code_generator.dart: MacroAssembler's closure accessors read a #ClosureBase the layouter refuses, located" begin
     local t = TRANSLATOR[]
     local layouter = t.closure_layouter[]
-    local closure = IR.RefType(layouter.closure_base_struct[]; nullable = false)
-    # each accessor's documented signature `[ref _Closure] -> [output]`: the builder, which refuses
-    # invalid wasm at the emitting instruction (D10), takes its result as the function's output
+    # the accessors read #ClosureBase by FieldIndex.closureContext, closureVtable and closureRuntimeType (2, 3, 4),
+    # dart's layout below _Closure's context; Julia's Function declares no context, so the struct laid out below
+    # Any's two-field header holds vtable at 2 and functionType at 3, refused where it is made, never read wrong
+    local e = rejection(() -> layouter.closure_base_struct[])
+    @test e !== nothing && e.rejection isa W.Internal &&
+          occursin("#ClosureBase field $(D.FieldIndex_closure_vtable()) expected = vtable, actual = functionType", e.rejection.site)
+    # each accessor reaches the refusal before it emits an instruction
     local mb = D.main_module(t)
-    for (emit, output) in ((D.emit_instantiation_closure_check, IR.NumType_i32),
-                           (D.emit_get_instantiated_closure, layouter.instantiation_context_base_struct[].fields[D.FieldIndex_instantiation_context_inner() + 1].type),
-                           (D.emit_tear_off_check, IR.NumType_i32),
-                           (D.emit_get_tear_off_receiver, t.top_type_non_nullable[]),
-                           (D.emit_get_closure_vtable, layouter.closure_base_struct[].fields[D.FieldIndex_closure_vtable() + 1].type))
-        local fb = B.define(mb.functions[], B.define_function(mb.types[], IR.ValueType[closure], IR.ValueType[B.unpacked(output)]), string(emit))
-        local b = B.body(fb)
-        B.local_get(b, B.locals(fb)[1])
-        emit(b, t)
-        @test B.var"end"(b) === nothing
+    for emit in (D.emit_instantiation_closure_check, D.emit_get_instantiated_closure, D.emit_tear_off_check,
+                 D.emit_get_tear_off_receiver, D.emit_get_closure_vtable)
+        local fb = B.define(mb.functions[], B.define_function(mb.types[], IR.ValueType[t.top_type[]], IR.ValueType[]), string(emit))
+        local r = rejection(() -> emit(B.body(fb), t))
+        @test r !== nothing && r.rejection isa W.Internal && occursin("ClosureLayouter.closureBaseStruct", r.rejection.site)
     end
 end
-
 
 @testset "code_generator.dart: an invocation stub rejects, Internal: Julia has no noSuchMethod" begin
     local t = TRANSLATOR[]

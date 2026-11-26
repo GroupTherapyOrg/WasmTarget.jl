@@ -160,11 +160,23 @@ metadata is Julia's inference, which the NIR holds, and the NIR has no constant 
                 () -> WasmBuilder.define_function(types_builder(self.translator),
                     WasmBuilder.IR.ValueType[ref(self.instantiation_context_base_struct[])],
                     WasmBuilder.IR.ValueType[WasmBuilder.IR.NumType_i64])),   # hash
-            Late{WasmBuilder.IR.StructType}("dart2wasm/lib/closures.dart:345 ClosureLayouter.closureBaseStruct",
-                () -> _define_struct(self, "#ClosureBase"; named_fields = [
+            Late{WasmBuilder.IR.StructType}("dart2wasm/lib/closures.dart:345 ClosureLayouter.closureBaseStruct", function ()
+                local closure_base = _define_struct(self, "#ClosureBase"; named_fields = [
                         "vtable" => fixed(ref(self._vtable_base_struct_uninitialized[])),
                         "functionType" => fixed(self.function_type_type[])],
-                    super_type = self.translator.closure_info[].struct_)),
+                    super_type = self.translator.closure_info[].struct_)
+                # the fields codegen reads by FieldIndex.closureVtable and closureRuntimeType, each after
+                # _Closure's context at FieldIndex.closureContext (the layout closures.dart:350 states, which
+                # dart's FieldIndex.validate checks of _Closure.context): refused, located, where the
+                # struct laid out here holds another
+                local at = "dart2wasm/lib/closures.dart:345 ClosureLayouter.closureBaseStruct"
+                for (index, name) in (FieldIndex_closure_vtable() => "vtable", FieldIndex_closure_runtime_type() => "functionType")
+                    local actual = get(closure_base.field_names, index, nothing)
+                    actual == name ||
+                        reject!(Internal("$at: #ClosureBase field $index expected = $name, actual = $(something(actual, "none")); its superclass $(self.translator.closure_info[].cls) holds no context at FieldIndex.closureContext = $(FieldIndex_closure_context())"), at)
+                end
+                return closure_base
+            end),
             Late{WasmBuilder.IR.RefType}("dart2wasm/lib/closures.dart:379 ClosureLayouter.functionTypeType",
                 function ()
                     local info = get(self.translator.class_info, DataType, nothing)

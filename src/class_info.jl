@@ -204,11 +204,77 @@ end
 
 @parity "dart2wasm/lib/class_info.dart:56 FieldIndex.ffiPointerAddress" FieldIndex_ffi_pointer_address()::Int = 3
 
-# dart's assert-time check of its runtime classes' field indices (_Closure, _Type, Record and the
-# others the FieldIndex constants name); a Julia program declares none of those classes, its classes
-# laid out from Julia's own fields (ClassInfoCollector.collect)
-@parity "dart2wasm/lib/class_info.dart:58 FieldIndex.validate" FieldIndex_validate(translator::Translator)::Union{} =
-    reject!(Internal("dart2wasm/lib/class_info.dart:58 FieldIndex.validate: the field indices of dart's runtime classes, which a Julia program declares none of (the Kernel table's Class row)"), "FieldIndex.validate")
+"""
+dart's assert-time check that each field the compiler reads or writes by a FieldIndex constant was laid
+out at that index: for a class and a field name, the class's field of that name
+(`class_instance_fields`, the Kernel's `cls.fields`) has the index ClassInfoCollector._generateFields
+recorded for it in `translator.field_index`, refused, located, otherwise (Internal, dart's
+AssertionError being a compiler bug). Run at the end of ClassInfoCollector.collect, as dart runs it
+(class_info.dart:773).
+
+The constants WasmTarget reads and their classes: `boxValue` of every primitive class (dart's boxed
+bool, int and double; Julia's every class convertType boxes, its fields read from that index by
+convertType's unboxing and the constant instantiator, a 128-bit integer's two halves from it on), and
+`recordFieldBase` of every record class of a fixed arity (dart's record classes, whose fields
+_generateRecordFields places and RecordShape.getPositionalIndex reads; Julia's TupleRecord{N}). Beyond
+dart's checks, `objectFieldBase`: the object header, Any's struct, holds exactly that many fields,
+whose own fields forEachClassFieldIndex and the constant instantiator read from it on. `classId` and
+`identityHash` are checked where they are laid out, by _addField's expectedIndex, as dart's are.
+
+dart's other rows name runtime classes a Julia program has none of, whose constants WasmTarget never
+reads: _AsyncSuspendState, _SuspendState and _SyncStarIterator (tasks are outside Julia's verified
+subset), _ListBase and _HashFieldBase (Julia's arrays and dicts are Base's own classes), _Type,
+_InterfaceType, _FunctionType and _RecordType (a Julia type value is a kind, laid out by its own
+fields, src/julia/classes.jl `_kind_instance_fields`), and Pointer (no FFI). dart's `_Closure.context`
+check has no class to read: Julia's `Function`, the translator's closureInfo, is abstract and
+declares no field.
+"""
+@parity "dart2wasm/lib/class_info.dart:58 FieldIndex.validate" function FieldIndex_validate(translator::Translator)::Nothing
+    local at = "dart2wasm/lib/class_info.dart:58 FieldIndex.validate"
+    function check(cls::DataType, name::String, expected_index::Int)::Nothing
+        local field::Union{ClassField,Nothing} = nothing
+        for cls_field in class_instance_fields(cls, at)
+            if cls_field.name == name
+                field = cls_field
+                break
+            end
+        end
+        field === nothing && reject!(Internal("$at: $cls doesn't have field $name"), "FieldIndex.validate")
+        local actual_index = get(translator.field_index, field, nothing)
+        actual_index === nothing && reject!(Internal("$at: $cls field $name doesn't have an index assigned"), "FieldIndex.validate")
+        actual_index == expected_index ||
+            reject!(Internal("$at: $cls field $name expected index = $expected_index, actual index = $actual_index"), "FieldIndex.validate")
+        return nothing
+    end
+
+    local header = length(translator.object_info[].struct_.fields)
+    header == FieldIndex_object_field_base() ||
+        reject!(Internal("$at: Any's struct, the object header, has $header fields, FieldIndex.objectFieldBase = $(FieldIndex_object_field_base())"), "FieldIndex.validate")
+
+    for info in translator.classes_supers_first[]
+        local cls = info.cls
+        cls === nothing && continue
+        if isprimitivetype(cls)
+            # the box's fields from boxValue on, in order, as the constant instantiator pushes them
+            for (k, field) in enumerate(class_instance_fields(cls, at))
+                check(cls, field.name, FieldIndex_box_value() + k - 1)
+            end
+        end
+        local arity = tuple_record_arity(cls)
+        arity === nothing && continue
+        @exhaustive arity::RecordArity begin
+            # each positional field at RecordShape.getPositionalIndex, recordFieldBase on
+            (f::FixedArity) => begin
+                for k in 1:f.n
+                    check(cls, "\$" * string(k), FieldIndex_record_field_base() + k - 1)
+                end
+            end
+            # the array class holds its elements in one array field, read by no FieldIndex constant
+            RunTimeArity => nothing
+        end
+    end
+    return nothing
+end
 
 @parity "dart2wasm/lib/class_info.dart:193 initialIdentityHash" initial_identity_hash()::Int = 0
 
@@ -448,8 +514,8 @@ end
 Create the class info and Wasm struct of every class of the closed world.
 
 Julia's program has no counterpart of dart's runtime classes `_Closure`, `_Type` and `Record`,
-which dart creates first, nor record classes; and dart's assert-time FieldIndex.validate checks
-the fields of those runtime classes, which a Julia program does not declare.
+which dart creates first, nor record classes. dart's assert-time FieldIndex.validate runs last, on
+the field indices of the classes WasmTarget reads by a FieldIndex constant (its docstring).
 """
 @parity "dart2wasm/lib/class_info.dart:666 ClassInfoCollector.collect" function Base.collect(self::ClassInfoCollector)::Nothing
     local translator = self.translator
@@ -512,6 +578,9 @@ the fields of those runtime classes, which a Julia program does not declare.
     for info in translator.classes_supers_first[]
         _calculate_cyclicness(info, translator)
     end
+
+    # Validate that all internally used fields have the expected indices.
+    FieldIndex_validate(translator)
     return nothing
 end
 
