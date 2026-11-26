@@ -2,7 +2,8 @@
 # The llvm-project sources the stackifier's anchors cite, at the commit pinned in
 # dev/PARITY_MASTER.md (the second oracle: LLVM's WebAssembly backend, where dart2wasm has no
 # counterpart, D42): a sparse checkout of llvm/lib/Target/WebAssembly and the loop and dominator
-# headers it rests on, and APFloat and APInt (strtod's conversion), at the one path WasmTarget reads, ~/.cache/wasmtarget/llvm-project.
+# headers it rests on, APFloat and APInt (strtod's conversion), and the IRBuilder folds and middle-end passes that
+# delete a checked division's dead raise (src/intrinsics.jl, Val(:checked_division)), at the one path WasmTarget reads, ~/.cache/wasmtarget/llvm-project.
 #   bash dev/fetch_llvm.sh
 # A directory that is already a checkout at the pinned commit takes the sparse list as it stands.
 set -euo pipefail
@@ -33,6 +34,9 @@ printf '%s\n' llvm/lib/Target/WebAssembly/ \
   llvm/unittests/Target/WebAssembly/WebAssemblyExceptionInfoTest.cpp \
   llvm/lib/Support/APFloat.cpp llvm/include/llvm/ADT/APFloat.h \
   llvm/lib/Support/APInt.cpp llvm/include/llvm/ADT/APInt.h llvm/include/llvm/ADT/StringExtras.h \
+  llvm/include/llvm/IR/IRBuilder.h llvm/include/llvm/IR/ConstantFolder.h \
+  llvm/lib/Transforms/InstCombine/InstCombineAndOrXor.cpp llvm/lib/Analysis/InstructionSimplify.cpp \
+  llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp llvm/lib/Transforms/Utils/Local.cpp \
   > .git/info/sparse-checkout
 # a checkout already at the pin takes the sparse list as it stands now, a file a port added included
 if [ "$(git rev-parse HEAD 2>/dev/null)" = "$pin" ]; then
