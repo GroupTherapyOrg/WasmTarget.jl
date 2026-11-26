@@ -2727,10 +2727,31 @@ function reaches_negative(thunk::AbstractString, defs::AbstractDict{String,Strin
     return false
 end
 
+# L126: the ratchets whose description declares a floor or its sites legitimate or reclassified, a terminal state
+# other than 0 (dev/CHARTER.md rule 2), one fault each
+function ratchet_floor_faults(metrics)::Vector{String}
+    return String["$(first(p)) declares a floor or legitimate sites: its only terminal state is 0, a site that belongs moving to an exact allowlist" for p in metrics if occursin(r"floor|legitimate|reclassif"i, first(last(p)))]
+end
+
+# L126's negative test: planted ratchet descriptions each answer as stated
+function ratchet_floor_negatives_missed()::Vector{String}
+    local row(id, d) = id => (d, () -> 0)
+    local cases = [("a description ending at 0", [row("R1_x", "counts the sites. Terminal state 0")], 0),
+                   ("a floor", [row("R1_x", "holds at a floor of 3")], 1),
+                   ("legitimate sites", [row("R1_x", "the remaining sites are legitimate")], 1),
+                   ("reclassified sites, any case", [row("R1_x", "sites Reclassified as fine")], 1),
+                   ("two rows, one fault", [row("R1_x", "Terminal state 0"), row("R2_y", "a FLOOR")], 1)]
+    local out = String[]
+    for (what, metrics, want) in cases
+        length(ratchet_floor_faults(metrics)) == want || push!(out, "negative missed: $what")
+    end
+    return out
+end
+
 # the locks that owe their always-run negative, exactly; R45 counts them, so the list only shrinks: a
 # lock leaves it in the commit that gives it its negative, and a lock added after it never joins it
 const NEGATIVE_OWED = Set{String}(split("""
-    L125 L126 L129 L130 L153 L162
+    L125 L129 L130 L153 L162
 """))
 
 # the faults of the lock table against NEGATIVE_OWED: a lock outside it with no always-run negative,
@@ -4963,8 +4984,12 @@ const LOCKS = [
             length(v)
         end),
     # ── the NIR boundary (frontend/nir.jl) is codegen's one reader of Julia's typed IR ──
-    "L126_ratchets_terminate_at_zero" => ("dev/CHARTER.md rule 2: a ratchet's only terminal state is 0. No ratchet description may declare a floor or its sites legitimate/reclassified — a site that belongs moves into an exact per-site allowlist with its anchor, a reviewable diff",
-        () -> count(p -> occursin(r"floor|legitimate|reclassif"i, first(last(p))), METRICS)),
+    "L126_ratchets_terminate_at_zero" => ("dev/CHARTER.md rule 2: a ratchet's only terminal state is 0. No ratchet description may declare a floor or its sites legitimate/reclassified — a site that belongs moves into an exact per-site allowlist with its anchor, a reviewable diff. Behavior, run here: planted descriptions answer as stated",
+        () -> begin
+            local v = vcat(ratchet_floor_faults(METRICS), ratchet_floor_negatives_missed())
+            foreach(x -> println("    ✗ ", x), v)
+            length(v)
+        end),
     "L202_constructions_have_precedents" => ("every closed sum or construction in src carries its precedent, as every definition carries its parity anchor (R32): each @enum, each `@closed` sum and each definition a STRICT_KINDS construction names has `precedent(<ecosystem>: <mechanism>[, <anchor>])` on its line, in the docstring directly above it or in the comment lines above that (Rust's sealed enums and exhaustive match, dart's enums and sealed classes, wasm's types); an abstract type is an open hierarchy, neither a closed sum nor a construction, and carries its parity(...) alone; one with no precedent anywhere is an invention and waits for Dale (2026-10-21). Behavior, run here: eight planted definitions answer as stated (dev/CHARTER.md C0)",
         () -> begin
             local v = vcat(precedent_missing_in_src(), precedent_negatives_missed())
