@@ -936,8 +936,9 @@ end
             (i::NirInvoke) => nir_carries_data(dart_type_of(self, i.args[1])) ? visit_instance_invocation(self, i, expected_type) :
                 # a call of Base's == with two operands: Kernel's EqualsCall
                 dart_type_of(self, i.args[1]) === typeof(==) && length(i.args) == 3 ? visit_equals_call(self, i, expected_type) :
-                # a call of Base.rethrow with none: Kernel's Rethrow
-                dart_type_of(self, i.args[1]) === typeof(rethrow) && length(i.args) == 1 ? visit_rethrow(self, i, expected_type) :
+                # a call of Base.rethrow with none, Kernel's Rethrow, or with the exception that replaces
+                # the caught one (jl_rethrow_other)
+                dart_type_of(self, i.args[1]) === typeof(rethrow) && length(i.args) <= 2 ? visit_rethrow(self, i, expected_type) :
                 visit_static_invocation(self, i, expected_type)
             (n::NirNew) => visit_constructor_invocation(self, n, expected_type)
             (g::NirGlobalRead) => visit_static_get(self, g, expected_type)
@@ -2466,14 +2467,28 @@ end
 end
 
 # Julia's rethrow(), an invoke of Base.rethrow() (translateExpression routes it here; its body, the
-# foreign call jl_rethrow, julia/src/julia.h:2437, rethrows the top of the task's exception stack): the
-# exception and stack trace its catch stashed thrown again under the exception tag; Julia's runtime
-# raises an ErrorException where the stack is empty
+# foreign call jl_rethrow, julia/src/task.c:801, rethrows the top of the task's exception stack): the
+# exception and stack trace its catch stashed thrown again under the exception tag. rethrow(e), an
+# invoke of Base.rethrow(::Any) (its body the foreign call jl_rethrow_other, julia/src/task.c:810),
+# first overwrites the exception on the top of the stack with e (:819), the catch's stashed exception,
+# which the_exception and a later rethrow() of the same catch read, and then rethrows it with the stack
+# trace the top's throw captured (throw_internal pushes no entry). Julia's runtime raises an
+# ErrorException where the stack is empty (:805, :816)
 @parity "dart2wasm/lib/code_generator.dart:2966 AstCodeGenerator.visitRethrow" function visit_rethrow(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
-    isempty(self.try_block_locals) && reject!(Unquarantined("src/julia/runtime/rtutils.jl: rethrow() outside a catch block, which Julia's runtime raises as ErrorException (julia/src/julia.h:2437 jl_rethrow)"), "$(julia_text(self.enclosing_member))")
+    isempty(self.try_block_locals) && reject!(Unquarantined(length(node.args) == 1 ?
+        "src/julia/runtime/rtutils.jl: rethrow() outside a catch block, which Julia's runtime raises as ErrorException (julia/src/julia.h:2437 jl_rethrow)" :
+        "src/julia/runtime/rtutils.jl: rethrow(exc) outside a catch block, which Julia's runtime raises as ErrorException (julia/src/julia.h:2438 jl_rethrow_other)"), "$(julia_text(self.enclosing_member))")
     local b = self.b[]
     local exception_locals = self.try_block_locals[end]
     local tag = get_dart_exception_tag(self.translator, b.module_builder)
+    if length(node.args) == 2
+        # jl_rethrow_other's write of the top (`jl_excstack_raw(excstack)[excstack->top-1].jlvalue = e`):
+        # the top at a statement of a catch region is the exception its catch stashed
+        # (compute_trycatch's exception stack, NirHandlers.exception_at), so e is stored in that local
+        translate_expression(self, node.args[2], self.translator.top_type_non_nullable[])
+        convert_type(self.translator, b, self.translator.top_type_non_nullable[], exception_locals.exception_local.type)
+        WasmBuilder.local_set(b, exception_locals.exception_local)
+    end
     WasmBuilder.local_get(b, exception_locals.exception_local)
     convert_type(self.translator, b, exception_locals.exception_local.type, tag.type.inputs[1])
     WasmBuilder.local_get(b, exception_locals.stack_trace_local)
