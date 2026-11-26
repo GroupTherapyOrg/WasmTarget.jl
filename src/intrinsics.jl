@@ -1152,13 +1152,10 @@ end
         end
         # jl_genericmemory_to_string (julia/src/genericmemory.c:189): the Memory left of length 0 (:198, on every
         # branch, so every later access fails its bounds check as natively); where the String takes all of the Memory
-        # and a String owns its data, that String (:203-207); else a String over the Memory's array where it takes all
-        # of it, or over a copy of its first n bytes.
+        # and a String owns its data, that String (:203-207); else a String over a copy of its first n bytes
+        # (jl_pchar_to_string, :209, :213), a self-owned Memory's too: a pointer taken from the Memory before still
+        # reaches its bytes (src/julia/classes.jl managed_pointer), so sharing them would be seen.
         # Where Julia differs, forced and unobservable in values:
-        # - a self-owned Memory's bytes Julia copies (jl_pchar_to_string, :209, :213); the module shares its array
-        #   when the String takes all of it. With the length 0 the Memory reaches no byte again, so the sharing is
-        #   unobservable, and no second wrap reaches those bytes through it, which keeps dataids exact
-        #   (dev/formal/ObjectIdentity.tla DataIdsExact).
         # - the owner is returned only when the String takes the whole array; Julia also returns it when the take
         #   stays in its size class (:204), truncating the String in place (`*(size_t*)o = len`), which a WasmGC
         #   array, its length fixed, cannot do, so the module copies there.
@@ -1188,14 +1185,8 @@ end
         owner_of()
         WasmBuilder.ref_as_non_null(b)
         WasmBuilder.else_(b)
+        # every memory no String owns: its first n bytes copied (jl_pchar_to_string, :209, :213)
         generate_static_intrinsic(self, Val(:new_struct), info, Dict{String,ClassField}(sdata.name => sdata), Dict{String,Function}(sdata.name => () -> begin
-            WasmBuilder.local_get(b, k)
-            WasmBuilder.local_get(b, p)
-            WasmBuilder.array_len(b)
-            WasmBuilder.i32_eq(b)
-            WasmBuilder.if_(b, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[data_ref])
-            WasmBuilder.local_get(b, p)
-            WasmBuilder.else_(b)
             WasmBuilder.local_get(b, k)
             WasmBuilder.array_new_default(b, array_type)
             WasmBuilder.local_tee(b, q)
@@ -1205,7 +1196,6 @@ end
             WasmBuilder.local_get(b, k)
             WasmBuilder.array_copy(b, array_type, array_type)
             WasmBuilder.local_get(b, q)
-            WasmBuilder.var"end"(b)
         end))
         WasmBuilder.var"end"(b)
         return info.non_nullable_type
