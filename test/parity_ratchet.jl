@@ -2952,7 +2952,7 @@ const REACH_ALLOWED = Set([
     # a wall bound on the keeper's runner (test/src/runner.jl, the judge builder's file: spec v17 Y5 rewrites it)
     "test/src/runner.jl: the clock (time)"])
 _reach_name(x) = x isa Symbol ? String(x) : x isa GlobalRef ? String(x.name) : x isa Expr && x.head === :. && length(x.args) == 2 && x.args[2] isa QuoteNode ?
-    _reach_name(x.args[1]) * "." * String(x.args[2].value) : x isa Expr && x.head === :macrocall ? String(x.args[1]) : string(x)
+    _reach_name(x.args[1]) * "." * String(x.args[2].value) : x isa Expr && x.head === :macrocall ? _reach_name(x.args[1]) : string(x)
 function _reach_walk(visit, x, own::Set{String})
     x isa QuoteNode && return _reach_walk(visit, x.value, own)
     x isa Expr || (visit(x, own); return)
@@ -3108,7 +3108,9 @@ end
 # its negative: each planted break named, in src and in a test file
 function reach_negatives_missed()::Vector{String}
     local out = String[]
-    local clean_t = "using Test\nmodule M end\n@testset \"x\" begin @test 1 == 1 end\nCore.eval(@__MODULE__, :(y = 1))\nCore.eval(M, :(z = 1))\n"
+    # a qualified macro's name is an Expr (GC.@preserve), read by its parts: 2026-11-26 e09e27e7's
+    # `local back = GC.@preserve v ...` crashed the check (String(::Expr)) and dropped the landing
+    local clean_t = "using Test\nmodule M end\n@testset \"x\" begin @test 1 == 1 end\nCore.eval(@__MODULE__, :(y = 1))\nCore.eval(M, :(z = 1))\nlocal b = GC.@preserve M f(M)\n"
     isempty(reach_faults("test/src/x.jl", clean_t, true)) || push!(out, "the reach checks read a clean test file as a fault")
     isempty(reach_faults("src/x.jl", "f(x) = x + 1\n", false)) || push!(out, "the reach checks read clean src as a fault")
     for (what, path, text, test) in (
