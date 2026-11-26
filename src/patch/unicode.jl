@@ -10305,7 +10305,9 @@ end
 # leaves undefined (flisp's malloc padding or beyond), which the port reads as zeros. A walk that passes the
 # NUL interns the name itself whatever those bytes are (strncpy stops at the NUL), so the zeros change only
 # a decode that depends on them, a three- or four-byte lead at the name's end ("+\xe3" decodes 0xe3, NUL, 0
-# as U+0F80, a suffix, as Julia answers); dev/formal/StripWalk.tla models the walk (PortIsZeroGarbage)
+# as U+0F80, a suffix, as the port's zeros give, and as libjulia answers where those bytes are zero, as on
+# macOS; on linux x86_64 libjulia reads bytes C never wrote, so its answer there is not fixed);
+# dev/formal/StripWalk.tla models the walk (PortIsZeroGarbage)
 @quarantine pin"julia/src/support/utf8.c:269 u8_nextchar" "the next character of a symbol's name, read from its bytes and the NUL after them as libjulia's UTF-8 support reads it; a wasm module has no libjulia to call; Julia differs: the bytes past that NUL, undefined in C, read as zeros" Base.codeunit function u8_nextchar(s::String, i::Int)::Tuple{UInt32,Int}
     local n = ncodeunits(s)
     local byte(k::Int) = k >= n ? 0x00 : codeunit(s, k + 1)
