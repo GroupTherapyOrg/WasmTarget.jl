@@ -41,7 +41,7 @@ end
     @test !any(v -> v isa W.NirConst && v.c.val isa Union{Core.CodeInstance, Core.MethodInstance}, W.nir_operands(st))
     local classes = W.closed_world_classes(world, "invoke_modify_target")
     @test !any(c -> c <: GenericMemory && eltype(c) === UInt128, classes)
-    @test !any(c -> c <: Base.RefValue && c.parameters[1] isa Type && nameof(c.parameters[1]) === :MersenneTwister, classes)
+    @test !any(c -> c <: Base.RefValue && c.parameters[1] isa DataType && nameof(c.parameters[1]) === :MersenneTwister, classes)
     # the modify itself, as native
     local cases = [Main.WTChild.compiled_case("$(nameof(f))($n)", W.compile, f, (Int64(n),)) for f in (im_atom, im_pair, im_retry) for n in (1, 3)]
     for r in Main.WTChild.run_cases(cases)
