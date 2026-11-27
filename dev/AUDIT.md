@@ -10137,6 +10137,10 @@ Resolution: Fix-first: A118E2 at test/src/unicode.jl:141. Read julia-parser.scm 
   - still open: A117S5, A117S6, A116E2, A116S1, A116S3, A115E1 and A115S3's README half.
 - To the lead: A118S7, about 82edf250's evidence line.
 
+Follow-up, A116E3 (2026-11-26): resolved by 920eea80, as audit #118 reported. The C size testset asserts one
+_recordRuntimeType function per record class: `grep -n 'C size: one _recordRuntimeType' test/src/tuple_record_lookup.jl`
+prints line 168, and its member name WasmTarget.TupleRecord{2}._recordRuntimeType is at :178.
+
 ## 2026-11-26 — audited through 659d3dce (06b7626b..659d3dce: the femtolisp parser's operator tables pinned at their own defines and Base.is_syntactic_operator ported (57ad7ccf, f11d49e0, f7c64a0d); objectid's spent-counter change reverted to win back a G2 case (a88e4147); the data-owner arm narrowed to Julia's owners (03fb2692, resolves A117E2); a torn power reading becomes the power rule's wait (659d3dce))
 
 Area: builder. No commit in the range touches wasm_builder's mirror or the emitting typestate: `git diff --stat 06b7626b..659d3dce -- src/builder* src/wasm_builder* src/serialize*` covers no file, and the src files changed are src/intrinsics.jl, src/julia/packages.jl, src/julia/runtime/hashing.jl, src/patch/runtime_internals.jl, src/runtime/common/object_patch.jl, src/julia/parity.jl and src/patch/unicode.jl. a88e4147's src/intrinsics.jl hunk only removes the Val(:statement_location) arm that 4cc1f6d1 added for the fatal form, so after the revert Val(:statement_location) takes a NirCall alone. `git diff 4cc1f6d1 4cc1f6d1~1 | git patch-id --stable` and `git show a88e41477 | git patch-id --stable` both print a8a57fa2…, so it is an exact revert. Nothing reaches D10's refusal at the emitting line.
