@@ -10097,6 +10097,10 @@ Resolution: Fix-first: A117E1 at src/julia/classes.jl:1115. Keep ClassField.muta
   - still open: A116E2 (test/parity_ratchet.jl:1708), A116S1, A116S3, A115E1 and A115S3's README half.
 - To the lead: A117S8 and A117S9, which are about commit messages and the audit lag.
 
+Follow-up, A116E1 (2026-11-26): resolved by e30bd2ca, as audit #117 reported. RecordMember's docstring stands directly
+above its @closed line and carries its precedent: `grep -n 'precedent(rust: enum' src/julia/kernel.jl` prints line 101,
+above RecordMember's @quarantine at :106.
+
 ## 2026-11-15 — audited through 06b7626b (f79d16f8..06b7626b: f79d16f8..06b7626b: the C size cases of tuple_record_lookup assert one _recordRuntimeType per record class (A116E3); a String constant keyed by the object the IR holds (StringObject); the ObjectIdDispatch model for 4b (D11); Base._isoperator as jl_is_operator's port over julia-parser.scm's operator lists, with the StripWalk model; climb: a hand fix of a G2 entry measured as a move before it lands, and the parked-red stall note leads with its command)
 
 Area: builder. Nothing under src/wasm_builder changed: `git diff --stat f79d16f8..06b7626b -- src/wasm_builder` prints nothing. 43f5f67a changes only which key a String constant is stored under. Its global is still built through the typed builder: test/src/constants_values.jl keeps its assertions on the initializer's code units, the eager/lazy split and the passive data segment, and now looks the info up by StringObject. 1c063f41's strip makes its result with Base._string_n and wasm_string_copy!, existing typed helpers, and writes no raw bytes. The builder's refusal at the emitting line (D10) is not touched. No builder finding.
