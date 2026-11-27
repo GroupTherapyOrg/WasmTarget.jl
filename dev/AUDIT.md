@@ -10054,6 +10054,13 @@ Follow-up, A113E1 (2026-11-26): resolved by 36f9cddc, as audit #116 reported. Re
 precedent and how Julia differs: `grep -n 'precedent(rust: enum' src/julia/classes.jl` prints line 36, directly above
 RecordArity's @quarantine at :40.
 
+Follow-up, A115E2 (audit 116's entry) (2026-11-26): resolved by e49812ea, as builder B's evidence reports. typeof of a tuple record is its
+record class's one generated _recordRuntimeType: `git grep -n 'Val(:tuple_type_lookup)\|Val(:field_typeof)\|
+_generate_record_runtime_type\b' origin/wt2 -- src` (origin b7c71cbd) prints only src/record_class_generator.jl:113 (its
+@parity record_class_generator.dart:653 _generateRecordRuntimeType), src/intrinsics.jl:1957 (to_typeof's record arm
+calling it) and src/code_generator.jl:3109; src/intrinsics.jl holds no tuple_type_lookup or field_typeof arm (field_typeof
+is a local of src/record_class_generator.jl:165).
+
 ## 2026-11-15 — audited through f79d16f8 (66006f1f..f79d16f8: TupleNestedBox and TypeParamValues models (D11); ClassIdNumbering.covered_arities, the one answer for which arities records cover; dataids of a Memory via a byte Memory's data owner and a second identity-hash-field arm; the spent identity counter made fatal and objectid claimed :total; a taken byte Memory left at length 0; the walk meets held classes' parameter values (Memory{Any}'s type value); RecordMember's precedent (A116E1))
 
 Area: builder. Nothing under src/wasm_builder changed: `git diff --stat 66006f1f..f79d16f8 -- src/wasm_builder` prints nothing. All new emission goes through the typed builder. ca5b8b71's jl_genericmemory_owner lowering (src/intrinsics.jl, Val(:genericmemory_owner)) reads `data#owner`, then ref.is_null/if [top]: the Memory converted to the top type on the null arm, the owner's nullable String converted on the other. Its asserts mirror emit_ccall's (ccall.cpp:1872; cgutils.cpp:3371 declares `emit_genericmemoryowner`). The String wrap now builds the Memory struct with `data#owner` set from a tee'd local. The take tests `k == array.len && owner non-null` with i32.and before the if. 4cc1f6d1's Val(:identity_serials_spent) reuses the one Val(:fatal) form and returns the top type after the trap. 1f1de9cd's `struct.set` of `length` to i64 0 validates only because the field is now declared mutable (src/class_info.jl:425 passes `field.mutable` into FieldType). So the builder's refusal at the emitting line held (D10). The flag it relied on is the one A117E1 finds overloaded. No builder finding.
