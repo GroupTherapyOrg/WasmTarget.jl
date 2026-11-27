@@ -9775,6 +9775,11 @@ The other findings go here:
 - A106S3, A106S4 and A106S5 go to the lead, in judge and driver files.
 - A104*, A103E1, A103S1, A103S2 and A103S3, A105S3 and the older open findings stay on their routes.
 
+Follow-up, A106E2 (2026-11-26): resolved by 8a82b813, the lead's note on 03ae9374 above ("Follow-up, A106E2, the lead's
+note on 03ae9374"), which names each src change of 03ae9374 with its clause (C2, C3, C6) and says the 91 rewritten
+probe hashes are a stale baseline re-recorded, not a semantic change: the fix the finding asks for, since a landed
+commit's body cannot be rewritten (D23). `git log --oneline -S'Follow-up, A106E2' -- dev/AUDIT.md` prints 8a82b813.
+
 ## 2026-11-13 — audited through 9d9986d4 (4945cf3b..9d9986d4: a Dict constant's unfilled isbits-union slots emitted as Julia's zeroed allocation reads them (4db36907); the trim verifier's world given its case (1d32443f, A105E1); the climb runs on battery under a Low Power Mode and charge-floor rule (249b327c, spec battery1); enqueue refuses src bundled with harness paths (b3f4abeb); audit findings routed by a declared `about` (9d9986d4); the lead's note on 03ae9374's src (8a82b813, Fixes: A106E2))
 
 Area: builder. No commit in the range touches the builder. `git diff --stat 4945cf3b..9d9986d4 -- src test` lists only src/julia/classes.jl, src/julia/subset.jl, test/src/constants.jl and test/src/subset.jl. No wasm_builder, serializer or lowering file changes, and no @parity anchor is added or moved. No finding in this area.
