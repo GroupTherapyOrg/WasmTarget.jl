@@ -1,0 +1,32 @@
+# Each call of test/fixtures/runner_calls.tsv, in order: its name and the exact raw wire it must produce
+# (test/verdict.jl's grammar, a `ret` line's ms left out), written by hand from test/fixtures/runner.wat.
+i32 typemin	ret i32 80000000
+i32 all ones	ret i32 ffffffff
+i64 typemin	ret i64 8000000000000000
+i64 typemax	ret i64 7fffffffffffffff
+i64 past 2^53	ret i64 0020000000000001
+f32 signaling NaN through	ret f32 7f800001
+f32 quiet NaN payload through	ret f32 ffc00001
+f32 -0.0 through	ret f32 80000000
+f64 signaling NaN through	ret f64 7ff0000000000001
+f64 quiet NaN payload through	ret f64 fff8000000000123
+f64 -0.0 through	ret f64 8000000000000000
+f32 signaling NaN made in wasm	ret f32 ffa00000
+f64 signaling NaN made in wasm	ret f64 7ff4000000000001
+f32 signaling NaN argument read in wasm	ret i32 7f800001
+f64 signaling NaN argument read in wasm	ret i64 7ff0000000000001
+a nested aggregate's own module	ret ref -
+a nested aggregate's i64 leaf	ret i64 0000000000000007
+a nested aggregate's -0.0 leaf	ret f64 8000000000000000
+a nested aggregate's null field	ret i32 00000001
+an empty String's ncodeunits	ret i64 0000000000000000
+a non-ASCII String's ncodeunits	ret i64 0000000000000002
+a non-ASCII String's first codeunit	ret i32 000000c3
+a non-ASCII String's second codeunit	ret i32 000000a9
+no value	ret void -
+a null reference	ret null -
+a non-null reference	ret ref -
+a wasm exception under the module's tag	exc [object WebAssembly.Exception]
+a trap	err trap: unreachable
+a fresh instance, first call	ret i32 00000001
+a fresh instance, second call	ret i32 00000001

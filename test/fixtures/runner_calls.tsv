@@ -1,0 +1,34 @@
+# The runner's fixtures (spec v16 X1), the judge's (G5): the run's first input, ahead of every measurement's calls,
+# in the compile records' grammar (`module <label> <key> <base64>`, `call <label> <j> <entry> <args...>`); the module is
+# test/fixtures/runner.wat assembled, each call's exact raw wire in test/fixtures/runner_raw.tsv, in order.
+module	fixtures	-	AGFzbQEAAAABYxNfAn4AfABfAmQAAGMAAGAAAGABfwF/YAF+AX5gAX0BfWABfAF8YAABfWAAAXxgAX0Bf2ABfAF+YAF+AWQBYAF+AWMBYAJ+fgF+YAJ+fgF8YAJ+fgF/YAF+AX9gAAFuYAABfwMWFQMEBQYHCAkKCwwNDg8EEAIREQMSEg0DAQACBgYBfwFBAAsHpAEVA2V4YwQAA2kzMgAAA2k2NAABA2YzMgACA2Y2NAADBnNuYW4zMgAEBnNuYW42NAAFBmJpdHMzMgAGBmJpdHM2NAAHBG5lc3QACQhuZXN0X2k2NAAKCG5lc3RfZjY0AAsJbmVzdF9udWxsAAwDbmN1AA0CY3UADgR2b2lkAA8EbnVsbAAQA3JlZgARBnRocm93cwASBXRyYXBzABMFY291bnQAFAq+ARUEACAACwQAIAALBAAgAAsEACAACwgAQwAAoH+MCw4AQoGAgICAgID6/wC/CwUAIAC8CwUAIAC9CxUAIABEAAAAAAAAAID7AADQAPsAAQsGACAAEAgLDgAgABAI+wIBAPsCAAALDgAgABAI+wIBAPsCAAELCwAgABAI+wIBAdELCgBCAEICIABQGwsOAEHDAUGpASAAQgFRGwsCAAsEANBuCwYAQQH7HAsEAAgACwMAAAsLACMAQQFqJAAjAAsAKwRuYW1lAQcBCARtYWtlBA0CAARwYWlyAQRuZXN0BwQBAAFuCwYBAANleGM=
+call	fixtures	0	i32	i32:80000000
+call	fixtures	0	i32	i32:ffffffff
+call	fixtures	0	i64	i64:8000000000000000
+call	fixtures	0	i64	i64:7fffffffffffffff
+call	fixtures	0	i64	i64:0020000000000001
+call	fixtures	0	f32	f32:7f800001
+call	fixtures	0	f32	f32:ffc00001
+call	fixtures	0	f32	f32:80000000
+call	fixtures	0	f64	f64:7ff0000000000001
+call	fixtures	0	f64	f64:fff8000000000123
+call	fixtures	0	f64	f64:8000000000000000
+call	fixtures	0	snan32
+call	fixtures	0	snan64
+call	fixtures	0	bits32	f32:7f800001
+call	fixtures	0	bits64	f64:7ff0000000000001
+call	fixtures	0	nest	i64:0000000000000007
+call	fixtures	0	nest_i64	i64:0000000000000007	i64:0000000000000001
+call	fixtures	0	nest_f64	i64:0000000000000007	i64:0000000000000001
+call	fixtures	0	nest_null	i64:0000000000000007	i64:0000000000000001
+call	fixtures	0	ncu	i64:0000000000000000
+call	fixtures	0	ncu	i64:0000000000000001
+call	fixtures	0	cu	i64:0000000000000001
+call	fixtures	0	cu	i64:0000000000000002
+call	fixtures	0	void
+call	fixtures	0	null
+call	fixtures	0	ref
+call	fixtures	0	throws	i32:00000001
+call	fixtures	0	traps
+call	fixtures	0	count
+call	fixtures	0	count

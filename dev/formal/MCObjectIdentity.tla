@@ -1,0 +1,20 @@
+------------------------- MODULE MCObjectIdentity -----------------------------
+(* A mutable value's identity (src/julia/runtime/hashing.jl object_serial and  *)
+(* jl_object_id's identity arm, over dart's identity-hash slot) over two cells *)
+(* made at run time, a String, two Memories each made by memorynew or by      *)
+(* wrapping the String, and two constant Memories of equal contents reached by *)
+(* three paths (P1 and P2 name K1, P3 names K2), written and read through them,*)
+(* with three serials, fewer than the five objects that can ask for one, so    *)
+(* the spent counter is reached.                                               *)
+(* Claims: AgreesWithEgal, Unique, DataIdsExact, NoWrap, WriteSeenSameConstant,*)
+(* WriteUnseenDistinctConstants, ConstantDataAgrees. Broken:                   *)
+(* MCObjectIdentityRandomIdsBroken.cfg (Unique),                               *)
+(* MCObjectIdentityMemHeaderIdsBroken.cfg (DataIdsExact),                      *)
+(* MCObjectIdentityLazyConstsBroken.cfg (AgreesWithEgal),                      *)
+(* MCObjectIdentityWrapsBroken.cfg (NoWrap),                                   *)
+(* MCObjectIdentityConstByValueBroken.cfg (DataIdsExact),                      *)
+(* MCObjectIdentityConstByValueStorageBroken.cfg                               *)
+(* (WriteUnseenDistinctConstants) and                                          *)
+(* MCObjectIdentityConstPerPathBroken.cfg (WriteSeenSameConstant).             *)
+EXTENDS ObjectIdentity
+=============================================================================

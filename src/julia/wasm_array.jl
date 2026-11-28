@@ -1,0 +1,648 @@
+# dart:_wasm's array literal (dev/MARCH.md 1.C): dart2wasm builds its runtime type tables as constants
+# of dart:_wasm's `WasmArray<T>` and `ImmutableWasmArray<T>` classes (constants.dart makeArrayOf,
+# makeTypeArray), which Kernel canonicalizes structurally. Julia's runtime has no such class, and a
+# `Memory` is compared by identity, so the literal is a value of its own, immutable, compared by
+# Julia's egal field by field: two literals of the same element type, mutability, owner and entries
+# are one constant, as two equal Kernel InstanceConstants are.
+#
+# Julia differs where the array is the storage of a mutable Julia object (a Memory's `data` and its
+# set flags, src/constants.jl visitInstanceConstant): such a literal names its owner (ConstantOwner,
+# below), so it is keyed by that object's identity, never its contents. A runtime table of dart's (no
+# Julia object's storage) has no owner and keeps dart's canonicalization by value.
+
+"""
+    ConstantOwner(object, storage)
+
+Which Julia object a constant stands for: the one key of a mutable Julia object's storage among the
+program's constants (src/constants.jl make_array_of's `owner`). `object` is the mutable object,
+compared by `===` (its identity, never its contents), and `storage` names which of its storages the
+constant is (a Memory's `"data"` or `"data#isSet"`). Two owners are one exactly when they name one
+object and one storage, so two distinct objects of equal contents are two constants, a write through
+one never read through the other, and one object reached by any number of paths (two bindings, two
+structs' fields, a Vector holding it twice) is one constant (dev/formal/ObjectIdentity.tla:
+WriteSeenSameConstant, WriteUnseenDistinctConstants, ConstantDataAgrees; its ConstByValue variant is
+the key by contents this replaces). An immutable object has no identity apart from its value, so it
+owns nothing: refused, Internal.
+
+precedent(julia: src/staticdata.c:1105 jl_queue_for_serialization_, which enqueues each object once,
+keyed by its address in serialization_order, an object => id table, at :1133: Julia's image writer
+serializes each object once by its identity and never merges two of equal contents). dart keys its constants by value (constants.dart:154
+constantInfo; Kernel's InstanceConstant ==, kernel lib/src/ast/constants.dart:739), every dart
+constant being deeply immutable: Julia's differs for exactly the constants that are, or are owned by,
+a mutable object.
+"""
+@quarantine pin"precedent(julia: src/staticdata.c:1105 jl_queue_for_serialization_)" "a mutable Julia object's identity is the object, never its contents; dart keys its constants, all immutable, by value" Base.ismutable struct ConstantOwner{T}
+    object::T
+    storage::String
+    ConstantOwner(object::T, storage::String) where {T} = ismutable(object) ? new{T}(object, storage) :
+        reject!(Internal("src/julia/wasm_array.jl ConstantOwner: a $T is immutable, so it has no identity to own a constant's storage by"), "ConstantOwner")
+end
+
+"""
+    StringObject(s)
+
+A String constant's key among the program's constants (src/constants.jl ensureConstant): the String
+object the program's IR holds, compared by its address, never by its contents, which `===` compares.
+Natively a String is an object with an address, and its data id is that address
+(julia/base/abstractarray.jl:1591, a byte Memory over it). Julia shares equal literals as one object:
+compressed IR roots each String literal in the global roots by content (julia/src/ircode.c:175
+jl_encode_as_indexed_root calls jl_as_global_root), so two equal literals, in one method or two, are
+one object in the IR and natively. A const binding's String is its own object: the IR holds the binding
+(a NirGlobal), whose value no rooting merged with a literal of equal contents. Keyed by the object, the
+module's constants share exactly where Julia's objects are one. Natively (code_typed and the NIR of one
+program): the literals of two methods and both of one method are one address, and a const binding of
+equal contents another.
+
+precedent(julia: src/staticdata.c:2987 jl_as_global_root, Julia's own table of rooted objects, a String
+among them, which hands back the one object it holds). dart keys its constants by value (constants.dart:154
+constantInfo); Julia's differs because a String's identity is observable (dataids).
+
+A mutable struct, its field const: Julia's Dict tries `===` before `isequal` (julia/base/dict.jl:249, ht_keyindex), and
+`===` on an immutable key compares the String by its contents, so two objects of equal contents whose slots met in a
+probe (their 7-bit hash tags equal, at addresses that vary by run) were one key. A mutable key's `===` is its own
+identity, so the Dict always asks `==`, the object's address.
+"""
+@quarantine pin"julia/src/staticdata.c:2987 jl_as_global_root" "Julia's literal Strings are objects, rooted once by contents in compressed IR, and a const binding's String is its own object; dart keys its constants by value, so a String constant is keyed by the object the IR holds" Core.String mutable struct StringObject
+    const s::String
+end
+@quarantine pin"julia/src/staticdata.c:2987 jl_as_global_root" "two String constants are one exactly when the IR holds one object, told by its address" Base.pointer_from_objref Base.:(==)(a::StringObject, b::StringObject) =
+    pointer_from_objref(a.s) == pointer_from_objref(b.s)
+@quarantine pin"julia/src/staticdata.c:2987 jl_as_global_root" "a String constant's hash is its object's address, as its equality" Base.pointer_from_objref Base.hash(k::StringObject, h::UInt) =
+    hash(UInt(pointer_from_objref(k.s)), h)
+
+"""
+    HeldStrings(constant)
+
+An immutable constant's key among the program's constants (src/constants.jl ensureConstant), its value not a String:
+the value compared by Julia's `===`, except that each String it holds is compared by its object, as a String constant
+is keyed (StringObject). `===` recurses through an immutable's fields and a SimpleVector's elements and compares a
+String by its contents (julia/src/builtins.c:243 jl_egal__bitstag: compare_fields, compare_svec and the jl_string_tag
+arm), so two immutables holding equal Strings that are two objects are egal. Keyed by `===` alone they were one
+constant, whose sub-constants are the first one's Strings: a use of the second that builds it from its own fields (a
+tuple boxed into its record, src/constants.jl ConstantInstantiator.instantiate) met a String constant no info's
+children held, created inside its parent's eager initializer, the re-entry dart2wasm/lib/constants.dart:2196 asserts
+against. Keyed by its Strings' objects too, the key is congruent with its fields' keys: two values one key exactly
+when their fields are, so a constant's children are every equal value's, and two such immutables are two constants,
+each holding its own Strings, as natively each holds its own objects (their data ids differ) while `===` on them still
+answers by contents (src/intrinsics.jl Val(:string_egal)). dev/formal/ConstantKeys.tla models the key (Same). A mutable
+struct, as StringObject is: its `===` is its identity, so Julia's Dict, which tries `===` before `isequal`
+(julia/base/dict.jl:249, ht_keyindex), never takes two keys of egal values with two String objects for one.
+"""
+@quarantine pin"julia/src/builtins.c:243 jl_egal__bitstag" "Julia's === compares a String held in an immutable by its contents, while its object is observable (dataids); a String constant is keyed by its object (StringObject), so an immutable holding Strings is keyed by them too, or one key holds two values whose Strings are different constants" Base.ismutable mutable struct HeldStrings
+    const constant::NirConst
+    HeldStrings(constant::NirConst) = ismutable(constant.c.val) || constant.c.val isa String ?
+        reject!(Internal("src/julia/wasm_array.jl HeldStrings: a $(typeof(constant.c.val)) is keyed by its identity or its object, never through its fields"), "HeldStrings") : new(constant)
+end
+@quarantine pin"julia/src/builtins.c:243 jl_egal__bitstag" "two immutable constants are one exactly when they are egal and each String they hold, at each position, is one object" Core.:(===) Base.:(==)(a::HeldStrings, b::HeldStrings) =
+    a.constant.c.val === b.constant.c.val && _same_objects(a.constant.c.val, b.constant.c.val)
+@quarantine pin"julia/src/builtins.c:243 jl_egal__bitstag" "the key's hash is the literal's, which agrees with === (a String hashed by its contents), so values of one key hash alike" Base.hash Base.hash(k::HeldStrings, h::UInt) =
+    hash(k.constant, h)
+# jl_egal's recursion (compare_fields, compare_svec) with a String compared by its object: one box is itself (jl_egal's
+# `a == b`, which keeps a shared value linear), a mutable value and a Symbol or type by `===`, an immutable by its type
+# and each field, an #undef field only against an #undef one
+@quarantine pin"julia/src/builtins.c:243 jl_egal__bitstag" "jl_egal's walk, a String compared by its object where jl_egal compares its contents" Base.ismutable function _same_objects(@nospecialize(a), @nospecialize(b))::Bool
+    ccall(:jl_value_ptr, Ptr{Cvoid}, (Any,), a) == ccall(:jl_value_ptr, Ptr{Cvoid}, (Any,), b) && return true
+    a isa String && return b isa String && pointer_from_objref(a) == pointer_from_objref(b)
+    b isa String && return false
+    if a isa Core.SimpleVector
+        b isa Core.SimpleVector && length(a) == length(b) || return false
+        for i in eachindex(a)
+            local da, db = isassigned(a, i), isassigned(b, i)
+            da == db || return false
+            da && !_same_objects(a[i], b[i]) && return false
+        end
+        return true
+    end
+    (ismutable(a) || isbits(a) || a isa Union{Symbol,Type}) && return a === b
+    typeof(a) === typeof(b) || return false
+    for i in 1:nfields(a)
+        local da, db = isdefined(a, i), isdefined(b, i)
+        da == db || return false
+        da && !_same_objects(getfield(a, i), getfield(b, i)) && return false
+    end
+    return true
+end
+
+"""
+    WasmArrayLiteral(element_type, mutable, owner, entries)
+
+The value of a constant `WasmArray<element_type>` (`mutable`) or `ImmutableWasmArray<element_type>`:
+its `entries`, each a constant (the NIR's literal, `NirConst`), in order; `owner`, where the array is a
+mutable Julia object's storage, the ConstantOwner that keys it by the object's identity, else `nothing`
+(a runtime table of dart's, canonicalized by value). A constant holding it is
+the NIR's literal of it, `NirConst(Core.Const(WasmArrayLiteral(...)))`, which ConstantCreator
+recognizes as dart's wasm array class.
+"""
+@quarantine pin"pkg/dart2wasm/lib/constants.dart:251 Constants.makeArrayOf" "dart2wasm's runtime type tables are constants of dart:_wasm's WasmArray, the InstanceConstant makeArrayOf builds (pkg/dart2wasm/lib/constants.dart:251 Constants.makeArrayOf), a class Julia's runtime has no counterpart of" Core.Tuple struct WasmArrayLiteral
+    element_type::Type
+    mutable::Bool
+    # ahead of the entries, so NirConst's bounded hash (src/julia/nir.jl _bounded_hash) reaches it whatever their count
+    owner::Union{Nothing,ConstantOwner}
+    entries::Tuple{Vararg{NirConst}}
+end
+
+"""
+    WasmArray{T}
+    ImmutableWasmArray{T}
+
+dart:_wasm's array classes as types (sdk/lib/_wasm/wasm_types.dart:731 `class WasmArray<T>` and
+:814 `class ImmutableWasmArray<T>`): the type of a field that holds a wasm array of `T`, which
+dart's translateStorageType (translator.dart:1085, :1094) translates to a reference to
+`arrayTypeForDartType(T, mutable: …)`. dart's runtime type objects hold their type arguments in
+one (sdk/lib/_internal/wasm/common/type.dart:277, `final WasmArray<_Type> typeArguments;`), and a
+Julia object whose data lies outside its fields does too (src/julia/classes.jl, a
+`Core.SimpleVector`'s elements). A mutable one is also a value Julia code holds, as dart's runtime
+does (js_string.dart's `WasmArray<WasmI16>(length)`, written element by element and passed to a host
+import): Julia's inference must see it flow through a body, so `WasmArray{T}` is inhabited, a
+primitive type of a pointer's width whose bits Julia never reads, made and used only through
+dart:_wasm's operations below (wasm_array_new, wasm_array_write!, wasm_array_length), which the
+code generator lowers to wasm's array instructions. No Julia value has the immutable one, a struct of
+one field of type `Union{}`, uninhabited.
+
+precedent(dart: dart:_wasm's WasmArray and ImmutableWasmArray; rust: `[T]`, a type only behind a
+reference). Julia's differs: its runtime has no wasm array, so the type names the representation and
+no Julia operation reads it.
+"""
+@quarantine unpinned "dart:_wasm's WasmArray is a class of dart's runtime; Julia's runtime has no wasm array, so a value's type names it" Core.Any primitive type WasmArray{T} <: Any 64 end
+@quarantine unpinned "dart:_wasm's ImmutableWasmArray is a class of dart's runtime; Julia's runtime has no wasm array, so a field's type names it" Core.Union struct ImmutableWasmArray{T}
+    _never::Union{}
+    ImmutableWasmArray{T}(args...) where {T} = reject!(Internal("src/julia/wasm_array.jl: ImmutableWasmArray has no Julia value; a field of its type holds the wasm array itself"), "ImmutableWasmArray")
+end
+
+"""
+    WasmI8
+
+dart:_wasm's 8-bit wasm integer (sdk/lib/_wasm/wasm_types.dart, `class WasmI8`), the element type of a
+packed i8 wasm array: a wasm type, never boxed, so translateStorageType gives its builtin type, the
+packed i8, even where it boxes a Julia primitive class (dart's `!boxClasses.contains(cls)`). A
+String's code units are a `WasmArray` of it (src/julia/classes.jl `_string_instance_fields`). No
+Julia value has the type: a struct of one field of type `Union{}`, uninhabited.
+
+precedent(dart: dart:_wasm's WasmI8, a storage type of packed arrays only; rust: `u8` in a `[u8]`).
+Julia's differs: its UInt8 is a class of its own, boxed where it flows into `Any`, so the packed
+storage type is named apart from it.
+"""
+@quarantine unpinned "dart:_wasm's WasmI8 is a storage type of dart's runtime; Julia's UInt8 is a boxable class, so a field's element type names the packed i8" Core.Union struct WasmI8
+    _never::Union{}
+    WasmI8(args...) = reject!(Internal("src/julia/wasm_array.jl: WasmI8 has no Julia value; it names a packed array's element type"), "WasmI8")
+end
+
+"""
+    WasmI32
+
+dart:_wasm's 32-bit wasm integer (sdk/lib/_wasm/wasm_types.dart, `class WasmI32`), the element type of a wasm array
+of the i32s, stored unboxed: a wasm type, never boxed, so translateStorageType gives its builtin type,
+the i32, even where it boxes a Julia primitive class. A `Memory` of Int32 and UInt32 holds its elements in a
+`WasmArray` of it (src/julia/classes.jl `_memory_element_storage`). No Julia value has the type.
+
+precedent(dart: dart:_wasm's WasmI32, a storage type of wasm arrays; rust: a primitive in a slice).
+Julia's differs: its Int32 and UInt32 are classes of their own, boxed where they flow into `Any`, so the unboxed
+storage type is named apart from them.
+"""
+@quarantine unpinned "dart:_wasm's WasmI32 is a storage type of dart's runtime; Julia's Int32 and UInt32 are boxable classes, so an array's element type names the unboxed i32" Core.Union struct WasmI32
+    _never::Union{}
+    WasmI32(args...) = reject!(Internal("src/julia/wasm_array.jl: WasmI32 has no Julia value; it names an array's element type"), "WasmI32")
+end
+
+"""
+    WasmI64
+
+dart:_wasm's 64-bit wasm integer (sdk/lib/_wasm/wasm_types.dart, `class WasmI64`), the element type of a wasm array
+of the i64s, stored unboxed: a wasm type, never boxed, so translateStorageType gives its builtin type,
+the i64, even where it boxes a Julia primitive class. A `Memory` of Int64 and UInt64 holds its elements in a
+`WasmArray` of it (src/julia/classes.jl `_memory_element_storage`). No Julia value has the type.
+
+precedent(dart: dart:_wasm's WasmI64, a storage type of wasm arrays; rust: a primitive in a slice).
+Julia's differs: its Int64 and UInt64 are classes of their own, boxed where they flow into `Any`, so the unboxed
+storage type is named apart from them.
+"""
+@quarantine unpinned "dart:_wasm's WasmI64 is a storage type of dart's runtime; Julia's Int64 and UInt64 are boxable classes, so an array's element type names the unboxed i64" Core.Union struct WasmI64
+    _never::Union{}
+    WasmI64(args...) = reject!(Internal("src/julia/wasm_array.jl: WasmI64 has no Julia value; it names an array's element type"), "WasmI64")
+end
+
+"""
+    WasmF32
+
+dart:_wasm's 32-bit wasm float (sdk/lib/_wasm/wasm_types.dart, `class WasmF32`), the element type of a wasm array
+of the f32s, stored unboxed: a wasm type, never boxed, so translateStorageType gives its builtin type,
+the f32, even where it boxes a Julia primitive class. A `Memory` of Float32 holds its elements in a
+`WasmArray` of it (src/julia/classes.jl `_memory_element_storage`). No Julia value has the type.
+
+precedent(dart: dart:_wasm's WasmF32, a storage type of wasm arrays; rust: a primitive in a slice).
+Julia's differs: its Float32 are classes of their own, boxed where they flow into `Any`, so the unboxed
+storage type is named apart from them.
+"""
+@quarantine unpinned "dart:_wasm's WasmF32 is a storage type of dart's runtime; Julia's Float32 are boxable classes, so an array's element type names the unboxed f32" Core.Union struct WasmF32
+    _never::Union{}
+    WasmF32(args...) = reject!(Internal("src/julia/wasm_array.jl: WasmF32 has no Julia value; it names an array's element type"), "WasmF32")
+end
+
+"""
+    WasmF64
+
+dart:_wasm's 64-bit wasm float (sdk/lib/_wasm/wasm_types.dart, `class WasmF64`), the element type of a wasm array
+of the f64s, stored unboxed: a wasm type, never boxed, so translateStorageType gives its builtin type,
+the f64, even where it boxes a Julia primitive class. A `Memory` of Float64 holds its elements in a
+`WasmArray` of it (src/julia/classes.jl `_memory_element_storage`). No Julia value has the type.
+
+precedent(dart: dart:_wasm's WasmF64, a storage type of wasm arrays; rust: a primitive in a slice).
+Julia's differs: its Float64 are classes of their own, boxed where they flow into `Any`, so the unboxed
+storage type is named apart from them.
+"""
+@quarantine unpinned "dart:_wasm's WasmF64 is a storage type of dart's runtime; Julia's Float64 are boxable classes, so an array's element type names the unboxed f64" Core.Union struct WasmF64
+    _never::Union{}
+    WasmF64(args...) = reject!(Internal("src/julia/wasm_array.jl: WasmF64 has no Julia value; it names an array's element type"), "WasmF64")
+end
+
+"""
+    WasmI16
+
+dart:_wasm's 16-bit wasm integer (sdk/lib/_wasm/wasm_types.dart, `class WasmI16`), the element type of
+a packed i16 wasm array, a JS string's UTF-16 code units (js_string.dart's `WasmArray<WasmI16>`): a
+wasm type, never boxed, so translateStorageType gives its builtin type, the packed i16. An element is
+written as a `UInt16`. No Julia value has the type: a struct of one field of type `Union{}`,
+uninhabited.
+
+precedent(dart: dart:_wasm's WasmI16, a storage type of packed arrays only; rust: `u16` in a
+`[u16]`). Julia's differs: its UInt16 is a class of its own, boxed where it flows into `Any`, so the
+packed storage type is named apart from it.
+"""
+@quarantine pin"sdk/lib/_wasm/wasm_types.dart:151 WasmI16" "dart:_wasm's WasmI16 (sdk/lib/_wasm/wasm_types.dart:151 WasmI16) is a storage type of dart's runtime; Julia's UInt16 is a boxable class, so an array's element type names the packed i16" Core.Union struct WasmI16
+    _never::Union{}
+    WasmI16(args...) = reject!(Internal("src/julia/wasm_array.jl: WasmI16 has no Julia value; it names a packed array's element type"), "WasmI16")
+end
+
+# dart:_wasm's storage classes this file defines, each never boxed (translateStorageType)
+@quarantine unpinned "dart:_wasm's storage classes are the wasm types translateStorageType never boxes" Core.Tuple const WASM_STORAGE_TYPES::Tuple{Vararg{DataType}} = (WasmI8, WasmI16, WasmI32, WasmI64, WasmF32, WasmF64)
+
+# a dart:_wasm operation's native body: no wasm array exists natively, so the body raises, loud, and
+# its value is hidden from inference (compilerbarrier) so Julia never folds a wasm array's operation;
+# inlined, so it lies in the operation's body, which the closed world never collects. It has no dart
+# counterpart: dart declares such an operation `external`, with no body at all, which Julia cannot
+# write, so it rests on Julia's own barrier, Core.compilerbarrier, whose builtin it cites (A72S2)
+@quarantine pin"julia/src/builtins.c:2065 jl_f_compilerbarrier" "no dart counterpart (dart's external member has no body); a native body that raises, its value hidden from inference by Julia's compilerbarrier builtin (julia/src/builtins.c:2065 jl_f_compilerbarrier)" Base.compilerbarrier @inline function _wasm_only(::Type{R})::R where {R}
+    local r = Base.compilerbarrier(:type, nothing)
+    r === nothing && error("src/julia/wasm_array.jl: an operation only a compiled module holds (a wasm array's, an object header's identity hash field, an image object's id), run natively")
+    return r::R
+end
+
+"""
+    wasm_array_new(WasmArray{T}, n) -> WasmArray{T}
+
+A new mutable wasm array of `n` elements of `T`, each the default: dart's `WasmArray<T>(length)`
+constructor (sdk/lib/_wasm/wasm_types.dart), `array.new_default`. Never inlined, so the code
+generator meets the call and lowers it (src/intrinsics.jl).
+"""
+@quarantine pin"sdk/lib/_wasm/wasm_types.dart:737 WasmArray" "dart:_wasm's WasmArray constructor (sdk/lib/_wasm/wasm_types.dart:737 WasmArray) is one wasm instruction; no wasm array exists natively" Core.Int @noinline wasm_array_new(::Type{WasmArray{T}}, n::Int) where {T} =
+    _wasm_only(WasmArray{T})
+
+"""
+    wasm_array_write!(a, i, v) -> Nothing
+
+Writes `v` at offset `i` (from 0) of `a`, unchecked: dart's `WasmArray<T>.write`, `array.set`, a packed
+element truncated as wasm's array.set truncates.
+"""
+@quarantine pin"sdk/lib/_wasm/wasm_types.dart:748 WasmArrayExt.[]=" "dart:_wasm's WasmArray write (sdk/lib/_wasm/wasm_types.dart:748 WasmArrayExt.[]=) is one wasm instruction; no wasm array exists natively" Core.Int @noinline wasm_array_write!(a::WasmArray{T}, i::Int, v::Union{UInt16,Int32,Int64,Float64}) where {T} =
+    (_wasm_only(Int); nothing)
+
+"""
+    wasm_array_length(a) -> Int
+
+The number of elements of `a`: dart's `WasmArrayRef.length`, `array.len`.
+"""
+@quarantine pin"sdk/lib/_wasm/wasm_types.dart:142 WasmArrayRef.length" "dart:_wasm's WasmArray length (sdk/lib/_wasm/wasm_types.dart:142 WasmArrayRef.length) is one wasm instruction; no wasm array exists natively" Core.Int @noinline wasm_array_length(a::WasmArray) =
+    _wasm_only(Int)
+
+"""
+    wasm_array_read(a, i) -> Int32
+
+The element at offset `i` (from 0) of an i32 array, unchecked by Julia (wasm's bounds trap): dart's
+`WasmArrayExt<WasmI32>.[]`, `array.get`, a WasmI32, whose Julia value is an Int32.
+"""
+@quarantine pin"sdk/lib/_wasm/wasm_types.dart:746 WasmArrayExt.[]" "dart:_wasm's WasmArray read (sdk/lib/_wasm/wasm_types.dart:746 WasmArrayExt.[]) is one wasm instruction; no wasm array exists natively" Core.Int32 @noinline wasm_array_read(a::WasmArray{WasmI32}, i::Int) =
+    _wasm_only(Core.Int32)
+
+"""
+    wasm_array_read_unsigned(a, i) -> Int
+
+The element at offset `i` (from 0) of a packed i16 array, zero-extended: dart's
+`I16ArrayExt.readUnsigned`, `array.get_u`, an int.
+"""
+@quarantine pin"sdk/lib/_wasm/wasm_types.dart:775 I16ArrayExt.readUnsigned" "dart:_wasm's packed read (sdk/lib/_wasm/wasm_types.dart:775 I16ArrayExt.readUnsigned) is one wasm instruction; no wasm array exists natively" Core.Int @noinline wasm_array_read_unsigned(a::WasmArray{WasmI16}, i::Int) =
+    _wasm_only(Int)
+
+"""
+    WasmExternRef
+
+dart:_wasm's host reference (sdk/lib/_wasm/wasm_types.dart:59, `class WasmExternRef extends
+_WasmBase`), wasm's `externref`: a value the host made and the module only holds and passes back, the
+type of a host import's argument or result (src/julia/runtime/rtutils.jl nir_foreign_import), never
+boxed, nullable as `Union{Nothing,WasmExternRef}` (dart's `WasmExternRef?`). Julia's inference must
+see its values flow through a body, so the type is inhabited, a primitive type of a pointer's width,
+whose bits Julia never reads: only a host import makes one.
+
+precedent(dart: dart:_wasm's WasmExternRef; rust: wasm-bindgen's `JsValue`, an index into the host's
+table). Julia's differs: its runtime has no host reference, so the type names the representation and
+no Julia operation reads it.
+"""
+@quarantine pin"sdk/lib/_wasm/wasm_types.dart:59 WasmExternRef" "dart:_wasm's WasmExternRef (sdk/lib/_wasm/wasm_types.dart:59 WasmExternRef) is a class of dart's runtime; Julia's runtime has no host reference, so a value's type names it" Core.Any primitive type WasmExternRef <: Any 64 end
+
+"""
+    WasmEqRef
+
+dart:_wasm's `eqref` (sdk/lib/_wasm/wasm_types.dart:118, `class WasmEqRef extends WasmAnyRef`): a
+reference wasm compares by identity (`ref.eq`), the abstract supertype of every struct and array. A
+field's type names it where the field holds a reference of no one class: a managed pointer's base, the
+data array it points into (src/julia/classes.jl _pointer_instance_fields), nullable as
+`Union{Nothing,WasmEqRef}` where it may hold none. Julia's runtime has no such reference; no Julia
+operation reads it.
+"""
+@quarantine pin"sdk/lib/_wasm/wasm_types.dart:118 WasmEqRef" "dart:_wasm's WasmEqRef (sdk/lib/_wasm/wasm_types.dart:118 WasmEqRef) is a class of dart's runtime, wasm's eqref; Julia's runtime has no reference compared by identity alone, so a field's type names it" Core.Any primitive type WasmEqRef <: Any 64 end
+
+# ---- a String's data, read and written as dart:_wasm reads and writes a WasmArray --------------------
+# A String is its class's struct, the header and then `_data`, a wasm array of its UTF-8 code units
+# (src/julia/classes.jl _string_instance_fields). dart's string patches read and write their data
+# through dart:_wasm's WasmArray operations (sdk/lib/_wasm/wasm_types.dart: `length`,
+# `readUnsigned`, the `WasmArray<WasmI8>(length)` constructor, `copy`), each one wasm instruction. These
+# are those operations on a String's data: the code generator lowers each call to its instruction, so
+# each stays a call (`@noinline`, as dart's are `external` members the intrinsifier meets at the call), and
+# natively each computes Julia's own answer on a Julia String, so an overlay written with them answers
+# as native Julia does wherever Julia evaluates it at compile time. Offsets count from 0, as a wasm
+# array's do.
+
+"""
+    wasm_string_length(s) -> Int
+
+The number of code units in `s`'s data: dart's `WasmArray.length`, `struct.get _data; array.len`
+(zero-extended). Natively Julia's `Core.sizeof(s)`, a String's byte length (jl_string_len).
+"""
+@quarantine unpinned "a String's byte length is its wasm data array's length, Julia's Core.sizeof natively" Core.sizeof @noinline wasm_string_length(s::String)::Int = Core.sizeof(s)
+
+"""
+    wasm_string_codeunit(s, i) -> UInt8
+
+The code unit at offset `i` (from 0) of `s`'s data, unchecked: dart's `WasmArray<WasmI8>.readUnsigned`,
+`struct.get _data; array.get_u`. Natively Julia's byte of the String (jl_string_data), its `i + 1`th.
+"""
+@quarantine unpinned "a String's byte at an offset is its wasm data array's element, Julia's byte natively" Base.unsafe_load @noinline function wasm_string_codeunit(s::String, i::Int)::UInt8
+    return GC.@preserve s unsafe_load(pointer(s), i + 1)
+end
+
+"""
+    wasm_string_write!(s, i, v) -> Nothing
+
+Stores the code unit `v` at offset `i` (from 0) of `s`'s data, a fresh String's (wasm_string_alloc),
+unchecked: dart's `I8ArrayExt.write`, `struct.get _data; array.set`. Natively Julia's store of the
+byte through the String's pointer, its `i + 1`th, as Base's `__unsafe_string!` fills a fresh String.
+"""
+@quarantine pin"sdk/lib/_wasm/wasm_types.dart:768 I8ArrayExt.write" "a String's byte stored at an offset is its wasm data array's element set (sdk/lib/_wasm/wasm_types.dart:768 I8ArrayExt.write), Julia's unsafe_store! natively" Base.unsafe_store! @noinline function wasm_string_write!(s::String, i::Int, v::UInt8)::Nothing
+    GC.@preserve s unsafe_store!(pointer(s), v, i + 1)
+    return nothing
+end
+
+"""
+    wasm_string_alloc(n) -> String
+
+A new String of `n` code units, each 0, to be filled before it is read: dart's
+`WasmArray<WasmI8>(length)`, `array.new_default` wrapped in the String's struct. Natively Julia's
+jl_alloc_string, called as `Base._string_n` calls it, a fresh String whose bytes its caller writes;
+never through `_string_n` itself, which src/patch/string.jl's overlay maps back here, so the closed
+world would infer the pair as a loop that never returns.
+"""
+@quarantine unpinned "a new String of n bytes is a new wasm data array in its struct, Julia's jl_alloc_string natively" Base.Csize_t @noinline wasm_string_alloc(n::Int)::String =
+    ccall(:jl_alloc_string, Ref{String}, (Csize_t,), n)
+
+"""
+    wasm_string_copy!(dst, dst_offset, src, src_offset, n) -> Nothing
+
+Copies `n` code units of `src`'s data from `src_offset` into `dst`'s from `dst_offset`, both from 0, a
+fresh String's (wasm_string_alloc): dart's `WasmArray.copy`, `array.copy`. Natively Julia's
+`unsafe_copyto!` of the bytes, as Base's `_string` fills a fresh String.
+"""
+@quarantine unpinned "copying bytes into a fresh String is a wasm array.copy, Julia's unsafe_copyto! natively" Base.unsafe_copyto! @noinline function wasm_string_copy!(dst::String, dst_offset::Int, src::String, src_offset::Int, n::Int)::Nothing
+    GC.@preserve dst src unsafe_copyto!(pointer(dst) + dst_offset, pointer(src) + src_offset, n)
+    return nothing
+end
+
+"""
+    wasm_string_memory(s) -> Memory{UInt8}
+
+A byte Memory over `s`'s data, sharing it: Julia's jl_string_to_genericmemory (genericmemory.c:104),
+which makes a Memory whose `ptr` is the String's bytes and whose owner is the String; over
+WasmTarget's layout a Memory{UInt8} struct whose data array is the String's own and whose length is
+that array's; an empty String's is Memory{UInt8}'s one empty instance (genericmemory.c:106-107), the
+object memorynew of no element gives. Natively Julia's own call of it, as `unsafe_wrap(Memory{UInt8},
+s)` makes it.
+"""
+@quarantine pin"julia/src/genericmemory.c:104 jl_string_to_genericmemory" "julia/src/genericmemory.c:104 jl_string_to_genericmemory makes a byte Memory sharing a String's bytes; WasmGC shares the data array" Core.Memory @noinline wasm_string_memory(s::String)::Memory{UInt8} =
+    ccall(:jl_string_to_genericmemory, Ref{Memory{UInt8}}, (Any,), s)
+
+"""
+    wasm_symbol_name(s) -> String
+
+The name of `s`, a String: dart's `Symbol.getName` (sdk/lib/internal/symbol.dart:35), which reads the
+symbol's `_name`, over WasmTarget's layout `struct.get` of the Symbol class's `_name`
+(src/julia/classes.jl _symbol_instance_fields). Natively Julia's `String(::Symbol)` body
+(julia/base/strings/string.jl:118), its bytes at jl_symbol_name's pointer copied into a String,
+written out: src/patch/string.jl's overlay of `String(::Symbol)` maps back here, so a call of it would
+be a cycle the closed world infers as never returning.
+
+Reshaped: the String returned is the symbol's own name, shared as dart's getName shares it, where
+Julia's copies it into a fresh String; only a write through `unsafe_wrap` of it, which Julia leaves
+undefined, tells the two apart. dart's getName is a static method whose body is the InstanceGet; here
+the code generator lowers the call (src/intrinsics.jl, its string-data arm), because Julia's body is a
+foreigncall no host supplies. Under minify a symbol constant's `_name` is its ordinal
+(src/symbols.jl get_mangled_symbol_name), so the read rejects there, located.
+"""
+@quarantine pin"sdk/lib/internal/symbol.dart:35 Symbol.getName" "dart's getName reads the symbol's _name (sdk/lib/internal/symbol.dart:35 Symbol.getName); Julia's name lies at jl_symbol_name's pointer, WasmTarget's in the Symbol class's _name field" Base.String @noinline wasm_symbol_name(s::Symbol)::String =
+    GC.@preserve s unsafe_string(Base.unsafe_convert(Ptr{UInt8}, s))
+
+"""
+    wasm_symbol_new(name, hash) -> Symbol
+
+A new Symbol of `name` and `hash`, no children: the object julia/src/symbol.c:35 mk_symbol allocates,
+its `left` and `right` NULL (:42-43), its precomputed `hash` (:44) and its name (:45-46), over
+WasmTarget's layout one `struct.new` of the Symbol class (src/julia/classes.jl _symbol_instance_fields),
+`name` the symbol's own String (mk_symbol's caller passes a copy, as Julia's memcpy copies the bytes).
+The code generator lowers the call (src/intrinsics.jl, its symbol-data arm); natively no Symbol is made
+but Julia's own symbol table's, so the body raises.
+"""
+@quarantine pin"julia/src/symbol.c:35 mk_symbol" "Julia's mk_symbol allocates a jl_sym_t of the name, no children and its hash; WasmTarget's is a struct.new of the Symbol class's fields" Core.Symbol @noinline wasm_symbol_new(name::String, hash::UInt64)::Symbol =
+    _wasm_only(Symbol)
+
+"""
+    wasm_symbol_hash(s) -> UInt64
+
+`s`'s precomputed hash, the `hash` field of julia.h:147 jl_sym_t that mk_symbol stores
+(julia/src/symbol.c:44, hash_symbol of its name), over WasmTarget's layout a `struct.get` of the
+Symbol class's `hash` (src/intrinsics.jl, its symbol-data arm). Natively the value mk_symbol stored,
+hash_symbol of the name (src/julia/runtime/hashing.jl), which is Julia's own `objectid` of the symbol.
+"""
+@quarantine pin"julia/src/julia.h:147 jl_sym_t" "Julia reads a Symbol's precomputed hash from its jl_sym_t (julia/src/builtins.c:491 jl_object_id_, julia/src/symbol.c:57 symtab_lookup); WasmTarget's is a struct.get of the Symbol class's hash field" Core.Symbol @noinline wasm_symbol_hash(s::Symbol)::UInt64 =
+    hash_symbol(String(s))
+
+"""
+    wasm_symbol_child(s, right) -> Union{Nothing,Symbol}
+
+The symbol table's child of `s`, `right` or `left` as `right` says (julia.h:147 jl_sym_t, read by
+julia/src/symbol.c:51 symtab_lookup), `nothing` for NULL, over WasmTarget's layout a `struct.get` of the
+Symbol class's `right` or `left` (src/intrinsics.jl, its symbol-data arm, which tests `right`).
+Natively the children are Julia's own table's, which WasmTarget never reads, so the body raises.
+"""
+@quarantine pin"julia/src/julia.h:147 jl_sym_t" "Julia's symbol table reads a node's left or right child (julia/src/symbol.c:51 symtab_lookup); WasmTarget's is a struct.get of the Symbol class's field" Core.Symbol @noinline wasm_symbol_child(s::Symbol, right::Bool)::Union{Nothing,Symbol} =
+    _wasm_only(Union{Nothing,Symbol})
+
+"""
+    wasm_symbol_set_child!(s, right, v) -> Nothing
+
+Hangs `v` below `s` in the symbol table, as `right` or `left` child: the store through the slot
+julia/src/symbol.c:51 symtab_lookup found (`jl_atomic_store_release(slot, node)`, :96), over WasmTarget's
+layout a `struct.set` of the Symbol class's `right` or `left` (src/intrinsics.jl, its symbol-data arm,
+which tests `right`). Natively the body raises.
+"""
+@quarantine pin"julia/src/symbol.c:78 _jl_symbol" "Julia's _jl_symbol stores a new symbol through the slot symtab_lookup found, a node's left or right child; WasmTarget's is a struct.set of the Symbol class's field" Core.Symbol @noinline wasm_symbol_set_child!(s::Symbol, right::Bool, v::Symbol)::Nothing =
+    (_wasm_only(Int); nothing)
+
+"""
+    wasm_memory_string(m, n) -> String
+
+A String of the first `n` bytes of `m` (`0 < n <= length(m)`): Julia's jl_genericmemory_to_string
+(genericmemory.c:189), which returns the String owning `m`'s bytes where there is one, else a copy
+(jl_pchar_to_string); over WasmTarget's layout the owning String where a String owns `m`'s bytes and `n` is
+their length, else a String over a copy of its first `n` bytes (array.copy), a self-owned memory's too, as
+Julia copies it. `m` is left of length 0, as Julia leaves it (:198). Natively Julia's own call of
+it, as `unsafe_takestring(m)` makes it.
+"""
+@quarantine pin"julia/src/genericmemory.c:189 jl_genericmemory_to_string" "julia/src/genericmemory.c:189 jl_genericmemory_to_string takes a byte Memory as a String, its own bytes or a copy; WasmGC wraps or copies the data array" Core.Memory @noinline wasm_memory_string(m::Memory{UInt8}, n::Int)::String =
+    ccall(:jl_genericmemory_to_string, Ref{String}, (Any, Int), m, n)
+
+"""
+    wasm_memory_copy!(dest, src, n) -> Nothing
+
+Copies `n` elements of `src`'s memory from its reference's offset into `dest`'s memory from its own,
+unchecked, the two ranges possibly overlapping: Julia's runtime copy of a memory's elements
+(genericmemory.c jl_genericmemory_copyto, which copies forwards or backwards as the ranges overlap),
+over WasmTarget's layout one `array.copy` of the memories' data arrays (dart's `WasmArray.copy`,
+memmove's semantics) and, for elements admitting nothing, one of their set flags. Never inlined, so the
+code generator meets the call and lowers it (src/intrinsics.jl); natively Base's copy.
+"""
+@quarantine pin"julia/src/genericmemory.c:223 jl_genericmemory_copyto" "julia/src/genericmemory.c:223 jl_genericmemory_copyto copies a memory's elements, overlapping ranges included; WasmGC copies the data arrays (array.copy)" Base.memmove @noinline function wasm_memory_copy!(dest::MemoryRef{T}, src::MemoryRef{T}, n::Int)::Nothing where {T}
+    # Base's copy written out (base/genericmemory.jl:120-130): its method is the overlay's own in
+    # WasmTarget's table (src/patch/genericmemory.jl), a call of which would be a cycle with no way out
+    if isbitstype(T)
+        GC.@preserve dest src Base.memmove(Base.unsafe_convert(Ptr{Cvoid}, dest), Base.unsafe_convert(Ptr{Cvoid}, src), Base.aligned_sizeof(T) * n)
+    else
+        ccall(:jl_genericmemory_copyto, Cvoid, (Any, Ptr{Cvoid}, Any, Ptr{Cvoid}, Int), dest.mem, dest.ptr_or_offset, src.mem, src.ptr_or_offset, n)
+    end
+    return nothing
+end
+
+"""
+    wasm_memory_unset!(ref) -> Nothing
+
+Leaves the element `ref` names #undef: Julia's runtime stores NULL in a boxed element or in each pointer
+of an inline one (base/genericmemory.jl _unsetindex!, atomic_pointerset of C_NULL), and leaves an
+element of bits, or of an isbits union, as it is. Over WasmTarget's layout one `array.set` of the null
+into the memory's data array at the reference's offset (classes.jl holds_reference: an element that can
+be #undef) and, for elements admitting nothing, one of 0 into their set flags. Never inlined, so the code
+generator meets the call and lowers it (src/intrinsics.jl); natively Base's.
+"""
+@quarantine pin"julia/base/genericmemory.jl:78 _unsetindex!" "julia/base/genericmemory.jl:78 _unsetindex! stores an element's #undef, C_NULL, through a pointer; WasmGC stores the data array's null (array.set)" Core.Intrinsics.atomic_pointerset @noinline function wasm_memory_unset!(ref::MemoryRef{T})::Nothing where {T}
+    # Base's store written out (base/genericmemory.jl:88-99): its method is the overlay's own
+    # (src/patch/genericmemory.jl), a call of which would be a cycle with no way out, Union{}
+    holds_reference(T) || return nothing
+    GC.@preserve ref begin
+        local p = Ptr{Ptr{Cvoid}}(Base.unsafe_convert(Ptr{Cvoid}, ref))
+        if !Base.allocatedinline(T)
+            Core.Intrinsics.atomic_pointerset(p, C_NULL, :monotonic)
+        else
+            for j in 1:sizeof(Ptr{Cvoid}):Base.aligned_sizeof(T)
+                Core.Intrinsics.atomic_pointerset(p + j - 1, C_NULL, :monotonic)
+            end
+        end
+    end
+    return nothing
+end
+
+"""
+    wasm_memory_fill!(ref, x, n) -> Nothing
+
+Stores the byte `x` into the `n` elements of a byte memory from the reference `ref`: Julia's memset
+through a reference's address, of a Memory{UInt8} or Memory{Int8} (base/genericmemory.jl:204 fill!,
+from the memory's address for its length) and of an Array of them (base/array.jl:430 fill!, from its
+reference's address, `unsafe_convert(Ptr{Cvoid}, a.ref)`, for the Array's length). Over WasmTarget's
+layout one `array.fill` of the memory's data array from the reference's offset, its element index (dart's
+`WasmArrayExt.fill`). Never inlined, so the code generator meets the call and lowers it
+(src/intrinsics.jl); natively Base's memset written out (each fill! is the overlay's own method in
+WasmTarget's table, src/patch/genericmemory.jl).
+"""
+@quarantine pin"julia/base/genericmemory.jl:204 fill!" "julia/base/genericmemory.jl:204 fill! memsets a byte memory's elements through its address, and julia/base/array.jl:430 fill! a byte Array's through its reference's; WasmGC fills the data array from the reference's offset (array.fill)" Base.memset @noinline function wasm_memory_fill!(ref::Union{MemoryRef{UInt8},MemoryRef{Int8}}, x::Union{UInt8,Int8}, n::Int)::Nothing
+    GC.@preserve ref Base.memset(Base.unsafe_convert(Ptr{Cvoid}, ref), x, n % UInt)
+    return nothing
+end
+
+"""
+    wasm_memory_overlaps(dest, doffs, src, soffs, n) -> Bool
+
+Whether `dest`'s element `doffs` lies among the `n` elements of `src` from `soffs`: Base's test of
+whether two memories of different element types alias, by their elements' addresses
+(base/genericmemory.jl:148 unsafe_copyto!: `pointer(dest, doffs)` against `pointer(src, soffs)` and
+`pointer(src, soffs + n - 1)`), which picks the direction its element-wise copy walks. A wasm array has
+no addresses: two memories' elements share storage only when their data arrays are one array, the
+identity dart's byte buffers compare (sdk/lib/_internal/wasm/common/typed_data.dart:1243
+`identical(_data, other._data)`) and the test dart's own copy between typed lists makes to choose how
+it copies (typed_data.dart:1940 _TypedIntListMixin.setRange, `destBuffer == fromBuffer` at :1969), and
+then one element storage, so an element's offset is its index.
+Over WasmTarget's layout `ref.eq` of the two data arrays and `soffs <= doffs <= soffs + n - 1`. Never
+inlined, so the code generator meets the call and lowers it (src/intrinsics.jl); natively Base's test.
+"""
+@quarantine pin"julia/base/genericmemory.jl:148 unsafe_copyto!" "Base's fallback copy between memories of different element types tests whether they alias by their elements' addresses (pointer(dest, doffs) against pointer(src, soffs) and pointer(src, soffs + n - 1)); a wasm array has no addresses, so two memories alias when their data arrays are one, the identity dart's byte buffers compare, and then by their offsets" Base.pointer @noinline function wasm_memory_overlaps(dest::Memory, doffs::Int, src::Memory, soffs::Int, n::Int)::Bool
+    GC.@preserve dest src begin
+        local destp = Ptr{Cvoid}(pointer(dest, doffs))
+        local srcp = Ptr{Cvoid}(pointer(src, soffs))
+        local endp = Ptr{Cvoid}(pointer(src, soffs + n - 1))
+        return !(destp < srcp || destp > endp)
+    end
+end
+
+# ---- a managed pointer's parts (src/julia/classes.jl managed_pointer) ------------------------------------
+# A Ptr is its class's struct of a base, the data array it points into or none, and a byte offset. Base's
+# comparisons of two pointers (julia/base/pointer.jl:310-312) read their integer addresses; these read the
+# parts the address stands for, each lowered by the code generator to its instruction (src/intrinsics.jl's
+# pointer_query arm), so each stays a call (`@noinline`), and natively each answers over Julia's one address
+# space, where no pointer has a base: the overlays written with them (src/patch/pointer.jl) answer as Base.
+
+"""
+    wasm_pointer_based(p) -> Bool
+
+Whether the pointer `p` points into a data array (its base is one), not an integer address. Julia's late
+GC lowering asks the same of a pointer at compile time: FindBaseValue walks a derived pointer back to the
+object it came from, and gives one not derived from a tracked object the null base
+(julia/src/llvm-late-gc-lowering.cpp:108 FindBaseValue, :155-158). Natively never: Julia's pointers are
+addresses; the answer is hidden from inference (Julia's compilerbarrier builtin,
+julia/src/builtins.c:2065 jl_f_compilerbarrier), so Julia folds no call of it.
+"""
+@quarantine pin"precedent(julia: src/llvm-late-gc-lowering.cpp:108 FindBaseValue)" "whether a pointer has an object as its base, the question Julia's late GC lowering answers at compile time by walking a derived pointer back to its base, null for one not derived from a tracked object; WasmTarget answers it at run time from the pointer's base field; natively a Ptr is an address of no base" Core.Ptr @noinline wasm_pointer_based(p::Ptr)::Bool = Base.compilerbarrier(:const, false)
+
+"""
+    wasm_pointer_same_base(x, y) -> Bool
+
+Whether the pointers `x` and `y` share their base: one data array (`ref.eq`), or both none. dart compares
+two byte buffers so: equal only when their data arrays are one object, `identical(_data, other._data)`
+(sdk/lib/_internal/wasm/common/typed_data.dart:1243 _I8ByteBuffer.==). Julia's differs: its pointers are
+integers of one address space, so natively always; two base-less pointers, of which dart has none, share
+their none.
+"""
+@quarantine pin"sdk/lib/_internal/wasm/common/typed_data.dart:1243 _I8ByteBuffer.==" "two pointers share their base when their data arrays are one object, compared by identity, as dart's two byte buffers are equal only when their data arrays are identical; Julia differs: natively every Ptr is an integer of one address space, and two base-less pointers share their none" Core.Ptr @noinline wasm_pointer_same_base(x::Ptr, y::Ptr)::Bool = Base.compilerbarrier(:const, true)
+
+"""
+    wasm_pointer_offset(p) -> UInt
+
+The pointer `p`'s byte offset from its base's first element, or its integer address where it has no base,
+as dart's byte view holds the index of its first byte in its buffer's data array
+(sdk/lib/_internal/wasm/common/typed_data.dart:93 ByteDataBase.offsetInBytes) and reads at
+`offsetInBytes + byteOffset` (:515). Julia's differs: natively its address, `UInt(p)`
+(julia/base/boot.jl:968 UInt), its offset in the one address space.
+"""
+@quarantine pin"precedent(dart: sdk/lib/_internal/wasm/common/typed_data.dart:93 ByteDataBase.offsetInBytes)" "a pointer's byte offset from its base's first element, as dart's byte view holds its offsetInBytes into its buffer's data array; Julia differs: natively a Ptr's address is its offset in the one address space, UInt of it" Core.Ptr @noinline wasm_pointer_offset(p::Ptr)::UInt = UInt(p)
